@@ -24,7 +24,7 @@ use_fspl: True
 use_transmittance_loss: True
 
 # Data augmentation parameters
-augment_val: True
+augment_val: False
 aug_p: 0.5
 walls_aug_p: 0.99
 transmittance_range: [ 2, 18 ]

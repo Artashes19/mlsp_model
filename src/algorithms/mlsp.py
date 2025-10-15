@@ -69,16 +69,28 @@ class MLSP(AlgorithmBase):
     def pred(self, batch):
         inputs, targets, masks, sample = batch
 
-        # Use original dimensions for computing scale and resizing back
-        old_h, old_w = sample["orig_H"], sample["orig_W"]
-        # Match icassp2025 logic: derive normalized dims from IMG_TARGET_SIZE and original H/W
-        scale_factor = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
-        norm_h, norm_w = int(old_h * scale_factor), int(old_w * scale_factor)
+        # Use pixel_size for exact reverse scaling (no floating point errors)
+        original_pixel_size = 0.25  # Known constant
+        current_pixel_size = sample["pixel_size"]
+        reverse_scale_factor = original_pixel_size / current_pixel_size
+
+        # Get exact original dimensions
+        current_h, current_w = 640, 640  # Normalized size
+        old_h = int(current_h * reverse_scale_factor)
+        old_w = int(current_w * reverse_scale_factor)
+
+        # Calculate pre-padding dimensions
+        scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
+        resized_w = int(old_w * scale_factor_forward)
 
         pred = self.network(inputs.cuda(self._gpu).unsqueeze(0)).squeeze(0)
-        pred = pred[torch.where(masks == 1)].reshape((norm_h, norm_w))
-        pred = resize_db(pred.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-        pred = pred.detach().cpu().numpy()
+
+        # Cut prediction to remove padding (640x640 → 640xresized_w)
+        pred_cut = pred[:, :resized_w]
+
+        # Resize prediction back to exact original dimensions
+        pred_final = resize_db(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+        pred = pred_final.detach().cpu().numpy()
 
         return {
             "pred": pred
@@ -156,32 +168,58 @@ class MLSP(AlgorithmBase):
             mses = []
             for i in range(targets.shape[0]):
                 input_i = inputs[i]
-                mask_i = masks[i]
                 targets_i = targets[i]
                 pred_i = preds[i]
                 sample_i = {k: sample[k][i] for k in sample.keys()}
-                # Use original dimensions for computing scale and resizing back
-                old_h, old_w = sample_i["orig_H"], sample_i["orig_W"]
-                # Match icassp2025 logic for evaluation reshape dims
-                scale_factor = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
-                norm_h, norm_w = int(old_h * scale_factor), int(old_w * scale_factor)
+
+                # Use pixel_size for exact reverse scaling (no floating point errors)
+                original_pixel_size = 0.25  # Known constant
+                current_pixel_size = sample_i["pixel_size"]
+                reverse_scale_factor = original_pixel_size / current_pixel_size
+
+                # Get exact original dimensions
+                current_h, current_w = 640, 640  # Normalized size
+                old_h = int(current_h * reverse_scale_factor)
+                old_w = int(current_w * reverse_scale_factor)
+
+                # Calculate pre-padding dimensions (before padding to 640x640)
+                scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
+                resized_w = int(old_w * scale_factor_forward)
+
                 try:
-                    pred_i = pred_i.squeeze(0)[torch.where(mask_i == 1)].reshape((norm_h, norm_w))
-                    pred_i = resize_db(pred_i.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-                    targets_i = targets_i.squeeze(0)[torch.where(mask_i == 1)].reshape((norm_h, norm_w))
-                    targets_i = resize_db(targets_i.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-                    sparse_mask = (input_i[-1] == 0).unsqueeze(0)
-                    sparse_mask = resize_nearest(sparse_mask, new_size=(old_h, old_w)).squeeze(0)
-                    sample_se = se(pred_i, targets_i, sparse_mask)
-                    sample_mse = sample_se / sparse_mask.sum()
-                    mses.append(sample_mse)
+                    # Cut prediction to remove padding (640x640 → 640xresized_w)
+                    pred_cut = pred_i.squeeze(0)[:, :resized_w]
+
+                    # Resize prediction back to exact original dimensions
+                    pred_final = resize_db(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+
+                    # Target is also in normalized 640x640 space - apply same processing
+                    target_normalized = targets_i.squeeze(0)  # [640, 640]
+                    target_cut = target_normalized[:, :resized_w]
+                    target_final = resize_db(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+
+                    # Create sparse mask for evaluation (resize sparse channel to original dims)
+                    sparse_channel = (input_i[-1] == 0).unsqueeze(0)  # [1, 640, 640]
+                    sparse_cut = sparse_channel.squeeze(0)[:, :resized_w]  # Cut padding
+                    sparse_mask = resize_nearest(sparse_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+
+                    # Calculate MSE only on valid (non-sparse) pixels
+                    valid_pixels = sparse_mask == 0  # 0 means keep (not sparse), 1 means sparse (ignore)
+                    if valid_pixels.sum() > 0:
+                        mse = torch.mean((pred_final[valid_pixels] - target_final[valid_pixels]) ** 2)
+                        mses.append(mse)
+                    else:
+                        # Fallback to all pixels if no valid pixels (edge case)
+                        mse = torch.mean((pred_final - target_final) ** 2)
+                        mses.append(mse)
+
                 except Exception as ex:
-                    log.error(ex)
+                    log.error(f"Error in validation sample {i}: {ex}")
                     continue
-            
+
             return {
-                "loss": torch.mean(torch.Tensor(mses)),
-                "mse": torch.mean(torch.Tensor(mses)),
+                "loss": torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")]),
+                "mse": torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")]),
             }
     
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
