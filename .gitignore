@@ -55,3 +55,6 @@ cache/
 
 # Hydra working directory (if using Hydra)
 .multirun/
+
+# Aim
+.aim/
