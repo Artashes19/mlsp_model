@@ -1,7 +1,7 @@
 # Generated files from running python run.py
 aim_repo/
 checkpoints/
-outputs/
+runs/
 
 # Python cache files
 __pycache__/
