@@ -16,10 +16,14 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 hydra.core.global_hydra.GlobalHydra.instance().clear()
 
+# Ensure local src package is importable even if Hydra changes CWD
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 
 @hydra.main(config_path="configs", config_name="train", version_base="1.2")
 def main(config: DictConfig) -> None:
-    from src import utils, train
+    from src import utils
+    from src.train import train
     
     warnings.filterwarnings("ignore", ".*beta state*")
     

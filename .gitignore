@@ -1,0 +1,57 @@
+# Generated files from running python run.py
+aim_repo/
+checkpoints/
+outputs/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Model artifacts
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.model
+*.pt
+*.pth
+*.ckpt
+
+# Data splits and caches (if any are generated)
+*_split.pkl
+*_cache/
+cache/
+
+# Hydra working directory (if using Hydra)
+.multirun/
