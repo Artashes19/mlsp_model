@@ -70,7 +70,7 @@ class MLSP(AlgorithmBase):
         inputs, targets, masks, sample = batch
 
         # Use original dimensions for computing scale and resizing back
-        old_h, old_w = sample.get("orig_H", sample["H"]), sample.get("orig_W", sample["W"])
+        old_h, old_w = sample["orig_H"], sample["orig_W"]
         # Match icassp2025 logic: derive normalized dims from IMG_TARGET_SIZE and original H/W
         scale_factor = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
         norm_h, norm_w = int(old_h * scale_factor), int(old_w * scale_factor)
@@ -161,15 +161,15 @@ class MLSP(AlgorithmBase):
                 pred_i = preds[i]
                 sample_i = {k: sample[k][i] for k in sample.keys()}
                 # Use original dimensions for computing scale and resizing back
-                old_h, old_w = sample_i.get("orig_H", sample_i["H"]), sample_i.get("orig_W", sample_i["W"])
+                old_h, old_w = sample_i["orig_H"], sample_i["orig_W"]
                 # Match icassp2025 logic for evaluation reshape dims
                 scale_factor = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
                 norm_h, norm_w = int(old_h * scale_factor), int(old_w * scale_factor)
                 try:
-                    pred_i = pred_i.squeeze(0)[torch.where(mask_i == 1)].reshape((norm_h, norm_w)).unsqueeze(0)
-                    pred_i = resize_db(pred_i, new_size=(old_h, old_w)).squeeze(0)
-                    targets_i = targets_i.squeeze(0)[torch.where(mask_i == 1)].reshape((norm_h, norm_w)).unsqueeze(0)
-                    targets_i = resize_db(targets_i, new_size=(old_h, old_w)).squeeze(0)
+                    pred_i = pred_i.squeeze(0)[torch.where(mask_i == 1)].reshape((norm_h, norm_w))
+                    pred_i = resize_db(pred_i.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+                    targets_i = targets_i.squeeze(0)[torch.where(mask_i == 1)].reshape((norm_h, norm_w))
+                    targets_i = resize_db(targets_i.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
                     sparse_mask = (input_i[-1] == 0).unsqueeze(0)
                     sparse_mask = resize_nearest(sparse_mask, new_size=(old_h, old_w)).squeeze(0)
                     sample_se = se(pred_i, targets_i, sparse_mask)

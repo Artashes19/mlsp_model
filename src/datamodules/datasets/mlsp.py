@@ -180,5 +180,7 @@ class PathlossDataset(Dataset):
         sample_dict = sample.asdict()
         sample_dict['orig_H'] = orig_h
         sample_dict['orig_W'] = orig_w
-        # Don't reset dimensions - keep them as normalized for consistency with inference.py logic
+        # Reset dimensions back to original for consistency with inference.py logic
+        sample.H = orig_h
+        sample.W = orig_w
         return input_tensor, output_tensor, mask, sample_dict
