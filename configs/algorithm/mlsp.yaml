@@ -1,0 +1,21 @@
+_target_: src.algorithms.MLSP
+
+name: mlsp
+
+out_norm: 160
+fixed_scale: False
+use_sip2net: False
+sip2net_params:
+  mse_weight: 0.02
+  alpha1: 500.0
+  alpha2: 1.0
+  alpha3: 0.0
+
+compiled:
+  _target_: src.utils.CompileParams
+  fullgraph: False
+  dynamic: null
+  backend: inductor
+  mode: null
+  options: null
+  disable: True
