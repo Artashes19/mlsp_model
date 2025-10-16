@@ -2,6 +2,7 @@
 aim_repo/
 checkpoints/
 runs/
+ngrok*
 
 # Python cache files
 __pycache__/
