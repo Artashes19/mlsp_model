@@ -17,6 +17,12 @@ val_buildings: [ 1, 2, 3 ]
 kaggle_task1_path: ""
 kaggle_task2_path: ""
 kaggle_freqs_mhz: [ 868, 2400 ]
+
+# ICASSP train data validation
+icassp_train_path: "/auto/home/xoren/icassp2025/data/train"
+
+# Validation dataloader names for AIM logging (in order)
+validation_names: ["kaggle_task1", "kaggle_task2", "synthetic_val", "icassp_val"]
 sparsity_range: [ 0.0002, 0.005 ] # This means 0 with 25% probability and random from [0, 0.005] with 75% probability
 reps_per_epoch: 1
 mlsp_task_idx: 1

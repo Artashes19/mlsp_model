@@ -100,7 +100,7 @@ class MLSP(AlgorithmBase):
     def _step(self, batch, split_name, *args, **kwargs):
         inputs, targets, masks, sample = batch
         
-        if split_name == "val" and sample["task_idx"][0].item() != -1:
+        if split_name == "val" and sample["task_idx"][0].item() not in [-1, -2]:
             # No evaluation for sanity check
             if self.trainer.sanity_checking:
                 return {

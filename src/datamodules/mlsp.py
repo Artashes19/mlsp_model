@@ -29,6 +29,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         kaggle_task1_path: Optional[str],
         kaggle_task2_path: Optional[str],
         kaggle_freqs_mhz: Optional[list[int]],
+        icassp_train_path: Optional[str],
         aug_p: float,
         walls_aug_p: Optional[int],
         transmittance_range: Optional[tuple[int, int]],
@@ -39,6 +40,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         scale_range: Optional[tuple[float, float]],
         inference: bool,
         multi_gpu: bool = False,
+        validation_names: Optional[list[str]] = None,
         *args, **kwargs
     ):
         self.freqs_mhz = freqs_mhz
@@ -46,7 +48,9 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.val_buildings = val_buildings
         self.inference = inference
         self.kaggle: bool = kaggle_task1_path is not None or kaggle_task2_path is not None
-        
+        self.icassp_validation: bool = icassp_train_path is not None
+        self.validation_names = validation_names or []
+
         self.aug_p = aug_p
         self.walls_aug_p = walls_aug_p
         self.transmittance_range = transmittance_range
@@ -62,6 +66,8 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.kaggle_task2_list = self.get_inputs_list(kaggle_task2_path, kaggle_freqs_mhz, [1, 2], task="Task_2_ICASSP") if kaggle_task2_path else []
         self.kaggle_task1_set = None
         self.kaggle_task2_set = None
+        self.icassp_train_list = self.get_inputs_list(icassp_train_path, freqs_mhz, freqs, 0.0, "Task_2_ICASSP") if icassp_train_path else []
+        self.icassp_val_set = None
         self.args = args
         self.kwargs = kwargs
         
@@ -248,6 +254,15 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     task_idx=2,
                     *self.args, **self.kwargs
                 )
+            if self.icassp_train_list:
+                self.icassp_val_set = PathlossDataset(
+                    self.icassp_train_list,
+                    training=False,
+                    augmentations=None,
+                    inference=False,
+                    task_idx=-2,  # Use -2 to distinguish from regular validation (-1) and kaggle tasks (1, 2)
+                    *self.args, **self.kwargs
+                )
     
     @property
     def test_set(self):
@@ -293,6 +308,18 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
             dataloaders.append(
                 DataLoader(
                     self._val_set,
+                    batch_size=self._batch_size,
+                    num_workers=self._num_workers,
+                    sampler=sampler,
+                    collate_fn=self.collate_fn,
+                    drop_last=self._drop_last
+                )
+            )
+        if self.icassp_val_set:
+            sampler = DistributedSampler(self.icassp_val_set, shuffle=False) if self._multi_gpu else None
+            dataloaders.append(
+                DataLoader(
+                    self.icassp_val_set,
                     batch_size=self._batch_size,
                     num_workers=self._num_workers,
                     sampler=sampler,

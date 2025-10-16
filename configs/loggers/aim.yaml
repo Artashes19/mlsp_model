@@ -1,4 +1,4 @@
 aim:
   _target_: aim.pytorch_lightning.AimLogger
-  repo: ${oc.env:OUTPUT_DIR}
+  repo: /auto/home/xoren/mlsp_wair_d/runs
   experiment: default
