@@ -63,6 +63,11 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.flip_horizontal = flip_horizontal
         self.cardinal_rotation = cardinal_rotation
         
+        # Optional experiment controls (not forwarded to dataset)
+        self.split_save_path = kwargs.pop("split_save_path", "./train_val_split.pkl")
+        self.train_subset_size = kwargs.pop("train_subset_size", None)
+        self.train_subset_seed = kwargs.pop("train_subset_seed", 0)
+        
         sparsity = 100 * kwargs["sparsity_range"][0]
         self.inputs_list = self.get_inputs_list(data_dir, freqs_mhz, freqs, sparsity, "Task_2_ICASSP")
         self.kaggle_task1_list = self.get_inputs_list(kaggle_task1_path, kaggle_freqs_mhz, [1], 0.5, "Task_1_ICASSP") if kaggle_task1_path else []
@@ -158,8 +163,8 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         return train_files, val_files
     
     @staticmethod
-    def split_data_task2(inputs_list: list[RadarSampleInputs], val_freqs, val_buildings, split_save_path=None):
-        train_inputs, val_inputs = MLSPDatamodule.split_data_task1(inputs_list, val_buildings=val_buildings)
+    def split_data_task2(inputs_list: list[RadarSampleInputs], val_freqs, val_buildings, split_save_path=None, seed=None):
+        train_inputs, val_inputs = MLSPDatamodule.split_data_task1(inputs_list, val_buildings=val_buildings, seed=seed)
         val_inputs = [f for f in val_inputs if f.ids[2] in val_freqs]
         # train_inputs = [f for f in train_inputs if f.ids[2] not in val_freqs]
         
@@ -175,6 +180,19 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         return train_inputs, val_inputs
     
     def prepare_data(self) -> None:
+        def _dataset_kwargs_filter(src_kwargs: dict) -> dict:
+            allowed = {
+                "mlsp_task1",
+                "mlsp_task_idx",
+                "pl_clip",
+                "use_fspl",
+                "use_transmittance_loss",
+                "sparsity_range",
+                "reps_per_epoch",
+                "augment_val",
+            }
+            return {k: v for k, v in src_kwargs.items() if k in allowed}
+        
         if self.inference:
             self._test_set = PathlossDataset(
                 self.inputs_list,
@@ -182,16 +200,28 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 augmentations=None,
                 inference=True,
                 task_idx=-1,
-                *self.args, **self.kwargs
+                **_dataset_kwargs_filter(self.kwargs)
             )
         else:
-            split_save_path = "./train_val_split.pkl"
-            train_inputs, val_inputs = self.split_data_task2(
-                self.inputs_list,
-                val_freqs=self.val_freq,
-                val_buildings=self.val_buildings,
-                split_save_path=split_save_path
-            )
+            split_save_path = self.split_save_path
+            if split_save_path and os.path.exists(split_save_path):
+                with open(split_save_path, "rb") as fp:
+                    split_dict = pkl.load(fp)
+                    train_inputs = split_dict["train_inputs"]
+                    val_inputs = split_dict["val_inputs"]
+            else:
+                train_inputs, val_inputs = self.split_data_task2(
+                    self.inputs_list,
+                    val_freqs=self.val_freq,
+                    val_buildings=self.val_buildings,
+                    split_save_path=split_save_path,
+                    seed=self.train_subset_seed,
+                )
+            # Optional deterministic train subset
+            if self.train_subset_size is not None and self.train_subset_size > 0:
+                rng = random.Random(self.train_subset_seed)
+                rng.shuffle(train_inputs)
+                train_inputs = train_inputs[: self.train_subset_size]
             
             train_augmentations = AugmentationPipeline(
                 [
@@ -213,7 +243,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 augmentations=train_augmentations,
                 inference=False,
                 task_idx=-1,
-                *self.args, **self.kwargs
+                **_dataset_kwargs_filter(self.kwargs)
             )
             if val_inputs:
                 val_augmentations = AugmentationPipeline(
@@ -236,7 +266,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     augmentations=val_augmentations,
                     inference=False,
                     task_idx=-1,
-                    *self.args, **self.kwargs
+                    **_dataset_kwargs_filter(self.kwargs)
                 )
                 self._test_set = self._val_set
             if self.kaggle_task1_list:
@@ -246,7 +276,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     augmentations=None,
                     inference=True,
                     task_idx=1,
-                    *self.args, **self.kwargs
+                    **_dataset_kwargs_filter(self.kwargs)
                 )
             if self.kaggle_task2_list:
                 self.kaggle_task2_set = PathlossDataset(
@@ -255,7 +285,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     augmentations=None,
                     inference=True,
                     task_idx=2,
-                    *self.args, **self.kwargs
+                    **_dataset_kwargs_filter(self.kwargs)
                 )
             if self.icassp_train_list:
                 # Subsample ICASSP validation data for faster validation
@@ -268,7 +298,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     augmentations=None,
                     inference=False,
                     task_idx=-2,  # Use -2 to distinguish from regular validation (-1) and kaggle tasks (1, 2)
-                    *self.args, **self.kwargs
+                    **_dataset_kwargs_filter(self.kwargs)
                 )
     
     @property
