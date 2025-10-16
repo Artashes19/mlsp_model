@@ -21,8 +21,11 @@ kaggle_freqs_mhz: [ 868, 2400 ]
 # ICASSP train data validation
 icassp_train_path: "/auto/home/xoren/icassp2025/data/train"
 
-# Validation dataloader names for AIM logging (in order)
-validation_names: ["kaggle_task1", "kaggle_task2", "synthetic_val", "icassp_val"]
+# Validation dataloader names for AIM logging (in order of creation)
+validation_names: ["synthetic_val", "icassp_val"]
+
+# ICASSP validation subsampling ratio (0.0-1.0) for faster validation
+icassp_val_subsample_ratio: 0.25
 sparsity_range: [ 0.0002, 0.005 ] # This means 0 with 25% probability and random from [0, 0.005] with 75% probability
 reps_per_epoch: 1
 mlsp_task_idx: 1

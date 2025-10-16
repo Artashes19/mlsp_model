@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle as pkl
+import random
 from typing import Optional, Union
 
 import numpy as np
@@ -41,14 +42,16 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         inference: bool,
         multi_gpu: bool = False,
         validation_names: Optional[list[str]] = None,
+        icassp_val_subsample_ratio: float = 0.25,
         *args, **kwargs
     ):
         self.freqs_mhz = freqs_mhz
         self.val_freq = val_freq
         self.val_buildings = val_buildings
         self.inference = inference
-        self.kaggle: bool = kaggle_task1_path is not None or kaggle_task2_path is not None
-        self.icassp_validation: bool = icassp_train_path is not None
+        self.kaggle: bool = bool(kaggle_task1_path) or bool(kaggle_task2_path)
+        self.icassp_validation: bool = bool(icassp_train_path)
+        self.icassp_val_subsample_ratio = icassp_val_subsample_ratio
         self.validation_names = validation_names or []
 
         self.aug_p = aug_p
@@ -255,8 +258,12 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     *self.args, **self.kwargs
                 )
             if self.icassp_train_list:
+                # Subsample ICASSP validation data for faster validation
+                subsample_size = max(1, int(len(self.icassp_train_list) * self.icassp_val_subsample_ratio))
+                subsampled_list = random.sample(self.icassp_train_list, subsample_size)
+
                 self.icassp_val_set = PathlossDataset(
-                    self.icassp_train_list,
+                    subsampled_list,
                     training=False,
                     augmentations=None,
                     inference=False,
