@@ -726,55 +726,17 @@ def featurizer(sample: RadarSample) -> torch.Tensor:
         sample.x_ant,
         sample.y_ant
     )
-    
-    if sample.use_fspl:
-        free_space_pathloss = calculate_fspl(
-            dist_m=distance,
-            freq_MHz=sample.freq_MHz,
-            antenna_gain=antenna_gain,
-        )
-    else:
-        free_space_pathloss = torch.zeros_like(distance)
-    
-    # Calculate transmittance loss on CPU
-    if sample.use_transmittance_loss:
-        transmittance_loss = calculate_transmittance_loss(
-            transmittance,
-            sample.x_ant,
-            sample.y_ant
-        )
-    else:
-        transmittance_loss = torch.zeros_like(transmittance)
-    
-    pl_init = free_space_pathloss + transmittance_loss
-    # hybrid_loss = calculate_hybrid_loss(
-    #     reflectance,
-    #     transmittance,
-    #     sample.x_ant,
-    #     sample.y_ant,
-    # ) + free_space_pathloss
-    # reflectance_eff = calculate_reflectance_eff(
-    #     reflectance,
-    #     transmittance,
-    #     sample.x_ant,
-    #     sample.y_ant
-    # ) + free_space_pathloss
-    # pl_adjusted = interpolate_difference(pl_init, sparse_sample, method="linear")
-    # Build input tensor: [8, H, W] - Already in correct (C, H, W) format
-    
-    input_tensor = torch.zeros((8, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
+    # Build input tensor without FSPL/PL_init channels
+    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, sparse_sample]
+    input_tensor = torch.zeros((7, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
     input_tensor[0] = reflectance  # reflectance
     input_tensor[1] = transmittance  # transmittance
     input_tensor[2] = distance  # distance
     input_tensor[3] = antenna_gain
     input_tensor[4] = torch.full((sample.H, sample.W), sample.freq_MHz, dtype=torch.float32, device=torch.device('cpu'))
-    input_tensor[5] = pl_init
     mask = sample.mask
-    input_tensor[6] = mask
-    # input_tensor[7] = hybrid_loss
-    # input_tensor[8] = reflectance_eff
-    # input_tensor[9] = torch.minimum(torch.minimum(pl_init, hybrid_loss), reflectance_eff)
-    input_tensor[7] = sparse_sample  # sparse sample
+    input_tensor[5] = mask
+    input_tensor[6] = sparse_sample  # sparse sample
     
     input_tensor = normalize_input(input_tensor)
     
