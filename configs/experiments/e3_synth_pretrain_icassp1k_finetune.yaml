@@ -25,7 +25,25 @@ datamodule:
   split_save_path: ./splits/e3_icassp1k_finetune.pkl
   icassp_val_subsample_ratio: 1.0
 
-ckpt_path: ./runs/e1/checkpoints/hard/last.ckpt
+algorithm:
+  finetune:
+    enable: True
+    ckpt_path: ./runs/e1/checkpoints/hard/last.ckpt
+    freeze_encoder_epochs: 5
+    discriminative_lr:
+      enable: True
+      encoder_lr_factor: 0.1
+    warmup:
+      enable: True
+      warmup_epochs: 5
+      warmup_factor: 0.1
+    bn_recalibration:
+      enable: True
+      num_batches: 200
+    l2sp:
+      enable: True
+      alpha: 1e-4
+      include_patterns: ["encoder"]
 
 callbacks:
   model_checkpoint_0:

@@ -3,6 +3,8 @@ import os
 import shutil
 import time
 from collections import defaultdict
+from copy import deepcopy
+import re
 from typing import Any
 
 import numpy as np
@@ -65,6 +67,29 @@ class MLSP(AlgorithmBase):
         self.validation_step_outputs = defaultdict(list)
         self.test_step_outputs = defaultdict(list)
         self.loss = nn.MSELoss()
+
+        # Finetune configuration (optional)
+        self._finetune_conf: DictConfig | dict | None = kwargs.get("finetune", None)
+        if self._finetune_conf is None:
+            # default disabled
+            self._finetune_conf = {
+                "enable": False
+            }
+
+        # Placeholders for finetune utilities
+        self._pretrained_weights: dict[str, torch.Tensor] | None = None
+        self._freeze_encoder_epochs: int = int(self._finetune_conf.get("freeze_encoder_epochs", 0))
+        self._encoder_frozen: bool = False
+
+        # Optionally load weights-only from checkpoint for finetuning
+        try:
+            if bool(self._finetune_conf.get("enable", False)) and self._finetune_conf.get("ckpt_path"):
+                self._load_weights_only(self._finetune_conf.get("ckpt_path"))
+                # Snapshot reference weights for L2-SP if enabled
+                if bool(self._finetune_conf.get("l2sp", {}).get("enable", False)):
+                    self._capture_pretrained_reference()
+        except Exception as ex:
+            log.error(f"Finetune weight loading failed: {ex}")
     
     def pred(self, batch):
         inputs, targets, masks, sample = batch
@@ -95,6 +120,123 @@ class MLSP(AlgorithmBase):
         return {
             "pred": pred
         }
+
+    # -------------------- Finetune helpers --------------------
+    def _load_weights_only(self, ckpt_path: str) -> None:
+        """Load only network weights from a PL checkpoint, ignore optimizer/scheduler."""
+        device = next(self._network.parameters()).device
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        state_dict = ckpt.get("state_dict", ckpt)
+        net_state = self._network.state_dict()
+        remapped = {}
+        matched, total = 0, 0
+        for k in net_state.keys():
+            total += 1
+            for prefix in ("_network.", "network.", ""):
+                cand = f"{prefix}{k}" if prefix else k
+                if cand in state_dict:
+                    remapped[k] = state_dict[cand]
+                    matched += 1
+                    break
+        missing = [k for k in net_state.keys() if k not in remapped]
+        if missing:
+            log.info(f"Weights-only load: matched {matched}/{total}; missing {len(missing)} params")
+        self._network.load_state_dict(remapped, strict=False)
+        self._network.to(device)
+        log.info(f"Loaded weights-only from {ckpt_path}")
+
+    def _capture_pretrained_reference(self) -> None:
+        self._pretrained_weights = {
+            name: p.detach().clone().cpu()
+            for name, p in self._network.named_parameters()
+        }
+
+    @staticmethod
+    def _name_matches(name: str, include_patterns: list[str] | None, exclude_patterns: list[str] | None) -> bool:
+        def any_match(patterns: list[str] | None) -> bool:
+            if not patterns:
+                return False
+            for pat in patterns:
+                try:
+                    if re.search(pat, name):
+                        return True
+                except re.error:
+                    if pat in name:
+                        return True
+            return False
+        if include_patterns and not any_match(include_patterns):
+            return False
+        if exclude_patterns and any_match(exclude_patterns):
+            return False
+        return True
+
+    def _l2sp_penalty(self) -> torch.Tensor:
+        if self._pretrained_weights is None:
+            return torch.tensor(0.0, device=next(self._network.parameters()).device)
+        l2sp_conf = self._finetune_conf.get("l2sp", {})
+        include_patterns = l2sp_conf.get("include_patterns", [])
+        exclude_patterns = l2sp_conf.get("exclude_patterns", [])
+        penalty = None
+        for name, p in self._network.named_parameters():
+            if not p.requires_grad:
+                continue
+            if not self._name_matches(name, include_patterns, exclude_patterns):
+                continue
+            ref = self._pretrained_weights.get(name, None)
+            if ref is None:
+                continue
+            ref = ref.to(p.device)
+            diff = (p - ref).pow(2).sum()
+            penalty = diff if penalty is None else penalty + diff
+        if penalty is None:
+            penalty = torch.tensor(0.0, device=next(self._network.parameters()).device)
+        return penalty
+
+    def _set_encoder_trainable(self, requires_grad: bool) -> None:
+        net = self._network
+        encoder = getattr(net, "unet", None)
+        if encoder is not None:
+            encoder = encoder.encoder
+        else:
+            # fallback: search for attribute named 'encoder'
+            encoder = getattr(net, "encoder", None)
+        if encoder is None:
+            return
+        for p in encoder.parameters():
+            p.requires_grad = requires_grad
+        self._encoder_frozen = not requires_grad
+        log.info(f"Encoder trainable={requires_grad}")
+
+    def on_fit_start(self) -> None:
+        # Optional BN recalibration
+        bn_conf = self._finetune_conf.get("bn_recalibration", {}) if self._finetune_conf else {}
+        if bool(self._finetune_conf.get("enable", False)) and bool(bn_conf.get("enable", False)):
+            num_batches = int(bn_conf.get("num_batches", 100))
+            try:
+                self._network.train()
+                dl = self.trainer.datamodule.train_dataloader()
+                processed = 0
+                device = self._gpu if self._gpu is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+                for batch in dl:
+                    with torch.no_grad():
+                        x = batch[0].to(device)
+                        _ = self._network(x)
+                    processed += 1
+                    if processed >= num_batches:
+                        break
+                log.info(f"BN recalibrated on {processed} batches")
+            except Exception as ex:
+                log.warning(f"BN recalibration skipped due to error: {ex}")
+
+        # Initial freeze if configured
+        if bool(self._finetune_conf.get("enable", False)) and self._freeze_encoder_epochs > 0:
+            self._set_encoder_trainable(False)
+
+    def on_train_epoch_start(self) -> None:
+        # Unfreeze after configured epochs
+        if bool(self._finetune_conf.get("enable", False)) and self._encoder_frozen:
+            if self.current_epoch >= self._freeze_encoder_epochs:
+                self._set_encoder_trainable(True)
     
     # noinspection PyMethodOverriding
     def _step(self, batch, split_name, *args, **kwargs):
@@ -283,11 +425,79 @@ class MLSP(AlgorithmBase):
             loss, _ = self.sip2net_criterion(preds, targets, masks, weights)
         else:
             loss = batch_mse
+
+        # L2-SP regularization (optional)
+        if bool(self._finetune_conf.get("enable", False)) and bool(self._finetune_conf.get("l2sp", {}).get("enable", False)):
+            alpha = float(self._finetune_conf.get("l2sp", {}).get("alpha", 1e-4))
+            l2sp = self._l2sp_penalty()
+            loss = loss + alpha * l2sp
         
         return {
             "loss": loss,
             "mse": batch_mse,
         }
+
+    # Override to support discriminative LR and warmup
+    def configure_optimizers(self):
+        if not bool(self._finetune_conf.get("enable", False)):
+            return super().configure_optimizers()
+
+        # Base optimizer settings
+        import torch.optim as optim
+        base_conf = self._optimizer_conf
+        try:
+            base_lr = float(base_conf.get("lr", 3e-4))  # OmegaConf-like access
+        except Exception:
+            base_lr = 3e-4
+
+        discr_conf = self._finetune_conf.get("discriminative_lr", {})
+        use_discr = bool(discr_conf.get("enable", False))
+        enc_factor = float(discr_conf.get("encoder_lr_factor", 0.1))
+
+        # Build param groups
+        params_encoder = []
+        params_other = []
+        for name, p in self._network.named_parameters():
+            if not p.requires_grad:
+                continue
+            if ".encoder." in name or name.startswith("unet.encoder") or name.startswith("encoder."):
+                params_encoder.append(p)
+            else:
+                params_other.append(p)
+
+        if use_discr:
+            param_groups = [
+                {"params": params_encoder, "lr": base_lr * enc_factor},
+                {"params": params_other, "lr": base_lr},
+            ]
+        else:
+            param_groups = [{"params": params_encoder + params_other, "lr": base_lr}]
+
+        optimizer = optim.Adam(param_groups)
+
+        # Warmup scheduler (epoch-based)
+        warm_conf = self._finetune_conf.get("warmup", {})
+        use_warm = bool(warm_conf.get("enable", False))
+        if use_warm:
+            warm_epochs = int(warm_conf.get("warmup_epochs", 5))
+            warm_factor = float(warm_conf.get("warmup_factor", 0.1))
+
+            def lr_lambda(epoch):
+                if epoch >= warm_epochs:
+                    return 1.0
+                return warm_factor + (1.0 - warm_factor) * (epoch / max(1, warm_epochs))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "epoch",
+                    "monitor": None,
+                },
+            }
+        else:
+            return {"optimizer": optimizer}
     
     def _calculate_epoch_metrics(self, outputs: list[Any]) -> dict:
         # init combined metrics with zero values
