@@ -2,7 +2,6 @@ import logging
 import os
 import pickle as pkl
 import random
-import time
 from typing import Optional, Union
 
 import numpy as np
@@ -70,15 +69,9 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.train_subset_seed = kwargs.pop("train_subset_seed", 0)
         
         sparsity = 100 * kwargs["sparsity_range"][0]
-        t0 = time.perf_counter()
         self.inputs_list = self.get_inputs_list(data_dir, freqs_mhz, freqs, sparsity, "Task_2_ICASSP")
-        log.info(f"MLSPDatamodule.get_inputs_list main: {len(self.inputs_list)} samples collected in {time.perf_counter() - t0:.2f}s from {data_dir}")
         self.kaggle_task1_list = self.get_inputs_list(kaggle_task1_path, kaggle_freqs_mhz, [1], 0.5, "Task_1_ICASSP") if kaggle_task1_path else []
-        if kaggle_task1_path:
-            log.info(f"MLSPDatamodule.get_inputs_list kaggle task1: {len(self.kaggle_task1_list)} samples from {kaggle_task1_path}")
         self.kaggle_task2_list = self.get_inputs_list(kaggle_task2_path, kaggle_freqs_mhz, [1, 2], task="Task_2_ICASSP") if kaggle_task2_path else []
-        if kaggle_task2_path:
-            log.info(f"MLSPDatamodule.get_inputs_list kaggle task2: {len(self.kaggle_task2_list)} samples from {kaggle_task2_path}")
         self.kaggle_task1_set = None
         self.kaggle_task2_set = None
         self.icassp_train_list = self.get_inputs_list(icassp_train_path, freqs_mhz, freqs, 0.0, "Task_2_ICASSP") if icassp_train_path else []
@@ -104,15 +97,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         positions_dir = os.path.join(data_dir, "Positions/")
         radiation_patterns_dir = os.path.join(data_dir, "Radiation_Patterns/")
         sampling_dir = os.path.join(data_dir, f"rate{sparsity}/sampledGT")
-        t0 = time.perf_counter()
-        if not os.path.isdir(input_dir):
-            log.warning(f"Inputs dir not found: {input_dir}")
-        if not os.path.isdir(output_dir):
-            log.warning(f"Outputs dir not found: {output_dir}")
-        if not os.path.isdir(positions_dir):
-            log.warning(f"Positions dir not found: {positions_dir}")
-        if not os.path.isdir(radiation_patterns_dir):
-            log.warning(f"Radiation patterns dir not found: {radiation_patterns_dir}")
+        # Expect these directories to exist for the ICASSP train-style dataset
         
         for b in range(1, 26):  # 25 buildings
             for ant in range(1, 3):  # 2 antenna types
@@ -146,7 +131,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             
                             inputs_list.append(radar_sample_inputs)
         
-        log.info(f"Collected {len(inputs_list)} entries for task {task} (sparsity={sparsity}) in {time.perf_counter() - t0:.2f}s")
         return inputs_list
     
     @staticmethod
@@ -231,14 +215,11 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         else:
             split_save_path = self.split_save_path
             if split_save_path and os.path.exists(split_save_path):
-                t0 = time.perf_counter()
                 with open(split_save_path, "rb") as fp:
                     split_dict = pkl.load(fp)
                     train_inputs = split_dict["train_inputs"]
                     val_inputs = split_dict["val_inputs"]
-                log.info(f"Loaded split from {split_save_path}: train_inputs={len(train_inputs)}, val_inputs={len(val_inputs)} in {time.perf_counter() - t0:.2f}s")
             else:
-                t0 = time.perf_counter()
                 train_inputs, val_inputs = self.split_data_task2(
                     self.inputs_list,
                     val_freqs=self.val_freq,
@@ -246,13 +227,11 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     split_save_path=split_save_path,
                     seed=self.train_subset_seed,
                 )
-                log.info(f"Computed split: train_inputs={len(train_inputs)}, val_inputs={len(val_inputs)} in {time.perf_counter() - t0:.2f}s")
             # Optional deterministic train subset
             if self.train_subset_size is not None and self.train_subset_size > 0:
                 rng = random.Random(self.train_subset_seed)
                 rng.shuffle(train_inputs)
                 train_inputs = train_inputs[: self.train_subset_size]
-                log.info(f"Applied train subset size: now train_inputs={len(train_inputs)} (seed={self.train_subset_seed})")
             
             train_augmentations = AugmentationPipeline(
                 [
@@ -276,7 +255,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 task_idx=-1,
                 **_dataset_kwargs_filter(self.kwargs)
             )
-            log.info(f"Prepared train dataset: size={len(self._train_set)}")
             if val_inputs:
                 val_augmentations = AugmentationPipeline(
                     [
@@ -301,7 +279,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     **_dataset_kwargs_filter(self.kwargs)
                 )
                 self._test_set = self._val_set
-                log.info(f"Prepared val dataset: size={len(self._val_set)}")
             if self.kaggle_task1_list:
                 self.kaggle_task1_set = PathlossDataset(
                     self.kaggle_task1_list,
@@ -311,7 +288,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     task_idx=1,
                     **_dataset_kwargs_filter(self.kwargs)
                 )
-                log.info(f"Prepared kaggle_task1 dataset: size={len(self.kaggle_task1_set)}")
             if self.kaggle_task2_list:
                 self.kaggle_task2_set = PathlossDataset(
                     self.kaggle_task2_list,
@@ -321,7 +297,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     task_idx=2,
                     **_dataset_kwargs_filter(self.kwargs)
                 )
-                log.info(f"Prepared kaggle_task2 dataset: size={len(self.kaggle_task2_set)}")
             if self.icassp_train_list:
                 # Subsample ICASSP validation data for faster validation
                 subsample_size = max(1, int(len(self.icassp_train_list) * self.icassp_val_subsample_ratio))
@@ -335,7 +310,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     task_idx=-2,  # Use -2 to distinguish from regular validation (-1) and kaggle tasks (1, 2)
                     **_dataset_kwargs_filter(self.kwargs)
                 )
-                log.info(f"Prepared icassp_val_set: size={len(self.icassp_val_set)} (subsample ratio={self.icassp_val_subsample_ratio})")
     
     @property
     def test_set(self):
