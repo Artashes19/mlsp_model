@@ -1,4 +1,6 @@
 import os
+import logging
+import time
 from typing import Optional, Union
 
 import numpy as np
@@ -12,6 +14,8 @@ from src.utils import normalize_size, RadarSample
 from src.utils.mlsp.augmentations import AugmentationPipeline
 from src.utils.mlsp.featurizer import featurizer, sparse_sampling
 from src.utils.mlsp.types import RadarSampleInputs
+
+log = logging.getLogger(__name__)
 
 INITIAL_PIXEL_SIZE = 0.25
 IMG_TARGET_SIZE = 640
@@ -105,7 +109,8 @@ class PathlossDataset(Dataset):
         position_file = inputs["position_file"]
         sampling_position = inputs["sampling_position"]
         radiation_pattern_file = inputs["radiation_pattern_file"]
-        
+
+        t_read0 = time.perf_counter()
         input_img = read_image(input_file).float()
         C, H, W = input_img.shape
         
@@ -115,11 +120,18 @@ class PathlossDataset(Dataset):
             output_img = read_image(output_file).float()
             if output_img.size(0) == 1:  # If single channel, remove channel dimension
                 output_img = output_img.squeeze(0)
-        
+        t_img = time.perf_counter() - t_read0
+        t_read1 = time.perf_counter()
         sampling_positions = pd.read_csv(position_file)
         x_ant, y_ant, azimuth = sampling_positions.loc[int(sampling_position), ["Y", "X", "Azimuth"]]
         radiation_pattern_np = np.genfromtxt(radiation_pattern_file, delimiter=',')
         radiation_pattern = torch.from_numpy(radiation_pattern_np).float()
+        t_meta = time.perf_counter() - t_read1
+        if t_img > 0.5 or t_meta > 0.5:
+            log.warning(
+                f"Slow IO read for {file_name}: images={t_img:.2f}s, meta={t_meta:.2f}s; "
+                f"input='{input_file}', output='{output_file}', pos='{position_file}', rp='{radiation_pattern_file}'"
+            )
         
         if self.pl_clip is not None and not self.inference:
             pl_clip = torch.tensor(self.pl_clip, dtype=torch.float32)
@@ -153,7 +165,12 @@ class PathlossDataset(Dataset):
     def __getitem__(self, idx):
         idx = idx % len(self.inputs_list)
         inp = self.inputs_list[idx]
-        sample = self.read_sample(inp)
+        t0 = time.perf_counter()
+        try:
+            sample = self.read_sample(inp)
+        except Exception as e:
+            log.exception(f"Exception in read_sample at idx={idx} for file={getattr(inp, 'file_name', 'unknown')}: {e}")
+            raise
         
         orig_h, orig_w = sample.H, sample.W
         if self.mlsp_task1:
@@ -174,7 +191,11 @@ class PathlossDataset(Dataset):
 
         output_tensor = sample.output_img if sample.output_img is not None else None
 
-        input_tensor = featurizer(sample=sample)
+        try:
+            input_tensor = featurizer(sample=sample)
+        except Exception as e:
+            log.exception(f"Exception in featurizer at idx={idx} for file={getattr(inp, 'file_name', 'unknown')}: {e}")
+            raise
         mask = sample.mask
         # Store original dimensions for algorithm to use
         sample_dict = sample.asdict()
@@ -183,4 +204,10 @@ class PathlossDataset(Dataset):
         # Reset dimensions back to original for consistency with inference.py logic
         sample.H = orig_h
         sample.W = orig_w
+        elapsed = time.perf_counter() - t0
+        if idx < 3 or elapsed > 1.0:
+            log.info(
+                f"Loaded sample idx={idx} file={sample_dict.get('file_name','?')} in {elapsed:.2f}s; "
+                f"input_shape={tuple(input_tensor.shape) if hasattr(input_tensor, 'shape') else type(input_tensor)}"
+            )
         return input_tensor, output_tensor, mask, sample_dict

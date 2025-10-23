@@ -1,4 +1,6 @@
 import logging
+import time
+from typing import Any
 from typing import Iterable, Optional
 
 import hydra
@@ -6,6 +8,8 @@ from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Callback, Trainer
 from pytorch_lightning.loggers import Logger
 from pytorch_lightning.strategies import ParallelStrategy
+from torch.utils.data import DataLoader
+import torch
 
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.datamodules.wair_d_base import WAIRDBaseDatamodule
@@ -24,6 +28,16 @@ def train(config: DictConfig) -> None:
         config.datamodule,
         epoch_counter=epoch_counter, multi_gpu=multi_gpu, drop_last=not config.algorithm.compiled.disable
     )
+    # Quick dataset sizes
+    try:
+        train_size = len(getattr(datamodule, 'train_set')) if getattr(datamodule, 'train_set', None) is not None else 0
+        val_size = 0
+        if getattr(datamodule, 'val_set', None) is not None:
+            val_obj = datamodule.val_set
+            val_size = sum(len(v) for v in val_obj) if isinstance(val_obj, list) else len(val_obj)
+        log.info(f"Dataset sizes: train={train_size}, val={val_size}")
+    except Exception as e:
+        log.warning(f"Unable to compute dataset sizes: {e}")
     
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
     algorithm: AlgorithmBase = hydra.utils.instantiate(
@@ -66,6 +80,33 @@ def train(config: DictConfig) -> None:
     log_hyperparameters(config=config, algorithm=algorithm, trainer=trainer)
     
     # Train the model
+    # Improve matmul performance on Tensor Cores
+    try:
+        torch.set_float32_matmul_precision('medium')
+        log.info("Set torch float32 matmul precision to 'medium'")
+    except Exception:
+        pass
+
+    # Preflight: build a no-worker DataLoader and fetch one batch to surface slow IO early
+    try:
+        if getattr(datamodule, 'train_set', None) is not None and len(datamodule.train_set) > 0:
+            preflight_bs = getattr(config.datamodule, 'batch_size', 1)
+            t0 = time.perf_counter()
+            pre_dl = DataLoader(datamodule.train_set, batch_size=preflight_bs, num_workers=0, shuffle=False)
+            log.info(f"Preflight: created single-process DataLoader (batch_size={preflight_bs}) in {time.perf_counter() - t0:.2f}s")
+            t1 = time.perf_counter()
+            first_batch = next(iter(pre_dl))
+            t_fetch = time.perf_counter() - t1
+            shapes: list[Any] = []
+            try:
+                # Expect tuple (input, output, mask, meta)
+                shapes = [tuple(x.shape) if hasattr(x, 'shape') else type(x) for x in first_batch[:3]]
+            except Exception:
+                pass
+            log.info(f"Preflight: fetched first batch in {t_fetch:.2f}s; shapes={shapes}")
+    except Exception as e:
+        log.warning(f"Preflight failed: {e}")
+
     log.info("Starting training!")
     trainer.fit(algorithm, datamodule=datamodule, ckpt_path=config.ckpt_path)
     

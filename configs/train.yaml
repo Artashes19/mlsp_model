@@ -27,4 +27,4 @@ hydra:
     chdir: True
   sweeper:
     params:
-      +exp: null
+      +exp: ""
