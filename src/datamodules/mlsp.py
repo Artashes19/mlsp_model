@@ -146,12 +146,35 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             ids = meta.get('ids', {})
                             b = int(ids.get('building', 0))
                             ant = int(ids.get('antenna', 0))
-                            f_idx = int(ids.get('frequency_index', 1))
+                            # Synthetic data may use 0-based frequency_index (0,1,2)
+                            f_idx_raw = ids.get('frequency_index') if isinstance(ids, dict) and 'frequency_index' in ids else None
+                            f_idx_internal = None
+                            if f_idx_raw is not None:
+                                try:
+                                    f_idx_raw = int(f_idx_raw)
+                                    if f_idx_raw in (0, 1, 2):
+                                        # Map 0-based [0,1,2] -> 1-based [1,2,3] for internal filtering/ids
+                                        f_idx_internal = f_idx_raw + 1
+                                    else:
+                                        f_idx_internal = f_idx_raw
+                                except Exception:
+                                    f_idx_internal = None
+                            if f_idx_internal is None:
+                                # Infer from frequency_MHz to nearest freqs_mhz index (1-based)
+                                try:
+                                    freq_mhz_val = float(meta.get('frequency_MHz'))
+                                    if freqs_mhz and len(freqs_mhz) > 0:
+                                        diffs = [abs(freq_mhz_val - float(m)) for m in freqs_mhz]
+                                        nearest = int(min(range(len(diffs)), key=lambda i: diffs[i]))
+                                        f_idx_internal = 1 + nearest
+                                except Exception:
+                                    # Fallback to 1 if all else fails
+                                    f_idx_internal = 1
                             sp = int(ids.get('sample_index', 0))
-                            # Filter by requested frequency indices if provided
-                            if freqs and f_idx not in freqs:
+                            # Filter by requested frequency indices if provided (expects 1-based indices)
+                            if freqs and f_idx_internal not in freqs:
                                 continue
-                            ids_tuple = (b, ant, f_idx, sp)
+                            ids_tuple = (b, ant, f_idx_internal, sp)
                         except Exception:
                             ids_tuple = (0, 0, 1, 0)
                         # Minimal dict for dataset reader

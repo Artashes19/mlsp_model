@@ -102,19 +102,45 @@ class PathlossDataset(Dataset):
         with open(json_path, "r") as f:
             meta = json.load(f)
 
+        # Enforce presence of all required fields; fail hard if any missing
+        required_keys = ["reflectance", "transmittance", "mask", "pathloss"]
+        missing = [k for k in required_keys if k not in data]
+        if missing:
+            raise RuntimeError(
+                f"Synthetic NPZ missing required arrays {missing} in {npz_path}. Training cannot proceed."
+            )
         reflectance = data["reflectance"].astype(np.float32)
         transmittance = data["transmittance"].astype(np.float32)
-        pathloss = data.get("pathloss", None)
-        if pathloss is not None:
-            pathloss = pathloss.astype(np.float32)
-        mask_np = data.get("mask", np.ones_like(reflectance)).astype(np.float32)
+        mask_np = np.ones_like(reflectance).astype(np.float32)
+        pathloss = data["pathloss"].astype(np.float32)
+        # Validate shapes match
+        H, W = reflectance.shape
+        for arr_name, arr in {
+            "transmittance": transmittance,
+            "mask": mask_np,
+            "pathloss": pathloss,
+        }.items():
+            if arr.shape != (H, W):
+                raise RuntimeError(
+                    f"Array '{arr_name}' shape {arr.shape} != reflectance shape {(H, W)} in {npz_path}"
+                )
 
         H, W = reflectance.shape
 
-        ant = meta.get("antenna", {})
-        x_ant = float(ant.get("x_px", 0))
-        y_ant = float(ant.get("y_px", 0))
-        pixel_size = float(meta.get("pixel_size_m", INITIAL_PIXEL_SIZE))
+        # Enforce required JSON fields
+        if "antenna" not in meta or not isinstance(meta["antenna"], dict):
+            raise RuntimeError(f"Missing 'antenna' object in JSON {json_path}")
+        ant = meta["antenna"]
+        if "x_px" not in ant or "y_px" not in ant:
+            raise RuntimeError(f"Missing antenna 'x_px'/'y_px' in JSON {json_path}")
+        if "frequency_MHz" not in meta:
+            raise RuntimeError(f"Missing 'frequency_MHz' in JSON {json_path}")
+        if "pixel_size_m" not in meta:
+            raise RuntimeError(f"Missing 'pixel_size_m' in JSON {json_path}")
+
+        x_ant = float(ant["x_px"])  # will raise if not numeric
+        y_ant = float(ant["y_px"])  # will raise if not numeric
+        pixel_size = float(meta["pixel_size_m"])  # will raise if not numeric
 
         yy, xx = np.meshgrid(np.arange(H, dtype=np.float32), np.arange(W, dtype=np.float32), indexing="ij")
         dist_px = np.hypot(xx - x_ant, yy - y_ant)
@@ -125,9 +151,9 @@ class PathlossDataset(Dataset):
         input_img[1] = torch.from_numpy(transmittance)
         input_img[2] = torch.from_numpy(dist_m)
 
-        output_img = torch.from_numpy(pathloss) if pathloss is not None else torch.zeros((H, W), dtype=torch.float32)
+        output_img = torch.from_numpy(pathloss)
 
-        freq_MHz = float(meta.get("frequency_MHz", 1800))
+        freq_MHz = float(meta["frequency_MHz"])  # required above
         radiation_pattern = torch.ones(360, dtype=torch.float32)
 
         if self.pl_clip is not None and not self.inference:
@@ -158,7 +184,7 @@ class PathlossDataset(Dataset):
 
     def read_sample_icassp(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
         if isinstance(inputs, RadarSampleInputs):
-            inputs = inputs.asdict()
+            inputs = inputs.asdict() 
         file_name = inputs["file_name"]
         freq_MHz = inputs["freq_MHz"]
         input_file = inputs["input_file"]
