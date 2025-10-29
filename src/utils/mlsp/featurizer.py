@@ -435,7 +435,7 @@ def calculate_fspl(
     return pathloss_db
 
 
-def update_rectangles(transmittance_loss, sparse_sample):
+def update_rectangles(transmittance_loss, aux_sample):
     # Get unique rectangle values
     unique_values = torch.unique(transmittance_loss.flatten())
     updated_loss = transmittance_loss.clone()
@@ -445,14 +445,14 @@ def update_rectangles(transmittance_loss, sparse_sample):
         # Create a mask for the current rectangle
         mask = (transmittance_loss == val)
         
-        # Get sparse values within this rectangle
-        sparse_values = sparse_sample[mask]
-        sparse_values = sparse_values[sparse_values != 0]
+        # Get auxiliary values within this rectangle
+        aux_values = aux_sample[mask]
+        aux_values = aux_values[aux_values != 0]
         
-        # Update rectangle if there are any sparse values
-        if sparse_values.numel() > 0:
-            # Use the mean of sparse values as the new value
-            updated_loss[mask] = sparse_values.mean()
+        # Update rectangle if there are any auxiliary values
+        if aux_values.numel() > 0:
+            # Use the mean of auxiliary values as the new value
+            updated_loss[mask] = aux_values.mean()
     
     return updated_loss
 
@@ -462,7 +462,7 @@ def calculate_pl_init(
     distance,
     antenna_gain,
     transmittance,
-    sparse_sample=None,
+    aux_sample=None,
 ):
     # Calculate free space path loss on CPU
     free_space_pathloss = calculate_fspl(
@@ -478,13 +478,7 @@ def calculate_pl_init(
         sample.y_ant
     )
     
-    # if sparse_sample is not None:
-    #     sparse_transmittance_loss = sparse_sample
-    #     sparse_transmittance_loss[sparse_sample != 0] = (
-    #         sparse_sample[sparse_sample != 0] -
-    #         free_space_pathloss[sparse_sample != 0]
-    #     )
-    #     transmittance_loss = update_rectangles(transmittance_loss, sparse_transmittance_loss)
+    # auxiliary based update disabled
     
     pl_init = free_space_pathloss + transmittance_loss
     if sample.pl_clip != float("inf"):
@@ -577,72 +571,19 @@ def add_points(matrix, x_ant, y_ant, num_points, alpha=2.0, min_sep=None, oversa
     return selected
 
 
-def sparse_sampling(
-    sample: RadarSample, task_idx: int, inference: bool, sparsity_range: tuple[float, float]
-):
-    """
-    Sparse sampling of the output pathloss values.
-    """
-    # select random pixels to keep
-    # if training:
-    #     sample.mask = torch.rand_like(sample.mask) > p
-    # if not training or inference:
-    # Exactly p% of the pixels are set to 0
-    p = random.choice(sparsity_range)
-    total_pixels = sample.H * sample.W
-    num_zeros = math.ceil(total_pixels * p)
-    
-    # task 1
-    if task_idx == 1:
-        flat_mask = torch.ones(total_pixels, dtype=torch.bool)
-        flat_mask[:num_zeros] = 0
-        flat_mask = flat_mask[torch.randperm(total_pixels)]
-        sampling_mask = flat_mask.view(sample.H, sample.W)
-    # task 2
-    else:
-        mask = torch.zeros((sample.H, sample.W), dtype=torch.bool)
-        if num_zeros > 0:
-            sampling_coords = add_points(
-                mask,
-                sample.x_ant, sample.y_ant, num_zeros
-            )
-        sampling_mask = ~mask
-    
-    # add a new channels to the input where the mask is False, take values from the output
-    if inference:
-        transmittance = sample.input_img[1]  # Second channel
-        distance = sample.input_img[2]  # Third channel
-        radiation_pattern = sample.radiation_pattern
-        antenna_gain = calculate_antenna_gain(
-            radiation_pattern,
-            sample.W,
-            sample.H,
-            sample.azimuth,
-            sample.x_ant,
-            sample.y_ant
-        )
-        if sample.output_img != "":
-            sparse_input = sample.output_img
-        else:
-            pl_init = calculate_pl_init(sample, distance, antenna_gain, transmittance)
-            sparse_input = pl_init * (~sampling_mask)
-    else:
-        sparse_input = sample.output_img * (~sampling_mask)
-    sample.input_img = torch.cat([sample.input_img, sparse_input.unsqueeze(0)], dim=0)
-    
-    return sample
+# Sampling-based masking removed; model operates on full data
 
 
 def kriging(
-    pl_init, sparse_sample,
+    pl_init, aux_sample,
     length_scale=20.0, length_scale_bounds=(1.0, 100.0),
     constant_value=1.0, constant_value_bounds=(1e-3, 1e3)
 ):
     h, w = pl_init.shape
-    mask = sparse_sample != 0
+    mask = aux_sample != 0
     sample_indices = np.argwhere(mask)
     x_train = sample_indices.T
-    y_train = sparse_sample[mask] - pl_init[mask]
+    y_train = aux_sample[mask] - pl_init[mask]
     
     # Define the Gaussian Process model
     kernel = C(constant_value, constant_value_bounds) * RBF(length_scale, length_scale_bounds)
@@ -662,13 +603,13 @@ def kriging(
     return adjusted_map
 
 
-def interpolate_difference(pl_init: np.ndarray, sparse_sample: np.ndarray, method="linear") -> np.ndarray:
+def interpolate_difference(pl_init: np.ndarray, aux_sample: np.ndarray, method="linear") -> np.ndarray:
     """
-    Interpolates the difference between pl_init and sparse_sample using linear interpolation.
+    Interpolates the difference between pl_init and an auxiliary sample using linear interpolation.
 
     Parameters:
         pl_init (np.ndarray): Initial pathloss estimate (H x W).
-        sparse_sample (np.ndarray): Sparse ground truth measurements (H x W), with 0 indicating missing data.
+        aux_sample (np.ndarray): Ground truth measurements (H x W), with 0 indicating missing data.
         method (str): Interpolation method, one of 'linear', 'nearest', or 'cubic'.
 
     Returns:
@@ -676,10 +617,10 @@ def interpolate_difference(pl_init: np.ndarray, sparse_sample: np.ndarray, metho
     """
     # Identify valid measurement positions
     try:
-        mask = sparse_sample > 0  # or ~np.isnan(sparse_sample) if using NaNs
+        mask = aux_sample > 0
         
         coords = np.column_stack(np.nonzero(mask)).T  # (N, 2) -> (row, col)
-        diff_values = (sparse_sample - pl_init)[mask]  # Difference at valid points
+        diff_values = (aux_sample - pl_init)[mask]
         
         # Generate full grid
         h, w = pl_init.shape
@@ -697,10 +638,10 @@ def interpolate_difference(pl_init: np.ndarray, sparse_sample: np.ndarray, metho
         return pl_init
 
 
-def extrapolate_difference(pl_init: np.ndarray, sparse_sample: np.ndarray, neighbors=10) -> np.ndarray:
-    mask = (sparse_sample > 0) & np.isfinite(sparse_sample)
+def extrapolate_difference(pl_init: np.ndarray, aux_sample: np.ndarray, neighbors=10) -> np.ndarray:
+    mask = (aux_sample > 0) & np.isfinite(aux_sample)
     coords = np.array(np.nonzero(mask))
-    diff_values = (sparse_sample - pl_init)[mask]
+    diff_values = (aux_sample - pl_init)[mask]
     
     H, W = pl_init.shape
     grid_x, grid_y = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
@@ -716,7 +657,6 @@ def featurizer(sample: RadarSample) -> torch.Tensor:
     reflectance = sample.input_img[0]  # First channel
     transmittance = sample.input_img[1]  # Second channel
     distance = sample.input_img[2]  # Third channel
-    sparse_sample = sample.input_img[3]  # Fourth channel
     radiation_pattern = sample.radiation_pattern
     antenna_gain = calculate_antenna_gain(
         radiation_pattern,
@@ -726,17 +666,15 @@ def featurizer(sample: RadarSample) -> torch.Tensor:
         sample.x_ant,
         sample.y_ant
     )
-    # Build input tensor without FSPL/PL_init channels
-    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, sparse_sample]
-    input_tensor = torch.zeros((7, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
-    input_tensor[0] = reflectance  # reflectance
-    input_tensor[1] = transmittance  # transmittance
-    input_tensor[2] = distance  # distance
+    # Build input tensor with a zero auxiliary channel to keep network input stable
+    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask]
+    input_tensor = torch.zeros((6, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
+    input_tensor[0] = reflectance
+    input_tensor[1] = transmittance
+    input_tensor[2] = distance
     input_tensor[3] = antenna_gain
     input_tensor[4] = torch.full((sample.H, sample.W), sample.freq_MHz, dtype=torch.float32, device=torch.device('cpu'))
-    mask = sample.mask
-    input_tensor[5] = mask
-    input_tensor[6] = sparse_sample  # sparse sample
+    input_tensor[5] = sample.mask
     
     input_tensor = normalize_input(input_tensor)
     

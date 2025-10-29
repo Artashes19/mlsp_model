@@ -60,11 +60,9 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     
     reflectance = sample.input_img[0:1]  # First channel with dimension [1, H, W]
     transmittance = sample.input_img[1:2]  # Second channel with dimension [1, H, W]
-    sparse_sample = sample.input_img[3:4]  # Fourth channel with dimension [1, H, W]
     
     reflectance_resized = resize_nearest(reflectance, new_size)
     transmittance_resized = resize_nearest(transmittance, new_size)
-    sparse_sample_resized = resize_nearest(sparse_sample, new_size)
     mask_resized = resize_nearest(sample.mask.unsqueeze(0), new_size).squeeze(0)
     
     sample.x_ant = int(sample.x_ant * scale_factor)
@@ -72,10 +70,9 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     
     sample.pixel_size /= scale_factor  # Update pixel size (divide by scale factor)
     
-    sample.input_img = torch.zeros((C, target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
+    sample.input_img = torch.zeros((max(3, C), target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
     sample.input_img[0:1, :new_h, :new_w] = reflectance_resized
     sample.input_img[1:2, :new_h, :new_w] = transmittance_resized
-    sample.input_img[3:4, :new_h, :new_w] = sparse_sample_resized
     
     if sample.output_img != "":
         resized_output = resize_db(sample.output_img.unsqueeze(0), new_size).squeeze(0)
@@ -161,12 +158,10 @@ class GeometricAugmentation(BaseAugmentation):
         reflectance = sample.input_img[0:1]  # (1, H, W)
         transmittance = sample.input_img[1:2]  # (1, H, W)
         distance = sample.input_img[2:3]  # (1, H, W)
-        sparse_sample = sample.input_img[3:4]  # (1, H, W)
         
         rot_reflectance = rotate_nearest(reflectance, angle)
         rot_transmittance = rotate_nearest(transmittance, angle)
         rot_distance = rotate_nearest(distance, angle)
-        rot_sparse_sample = rotate_nearest(sparse_sample, angle)
         
         if sample.output_img is not None:
             out_expanded = sample.output_img.unsqueeze(0)  # (1,H,W)
@@ -180,7 +175,8 @@ class GeometricAugmentation(BaseAugmentation):
         
         _, new_H, new_W = rot_reflectance.shape
         sample.H, sample.W = new_H, new_W
-        sample.input_img = torch.cat([rot_reflectance, rot_transmittance, rot_distance, rot_sparse_sample], dim=0)
+        # Keep exactly the first three physical channels
+        sample.input_img = torch.cat([rot_reflectance, rot_transmittance, rot_distance], dim=0)
         
         sample = normalize_size(sample=sample, target_size=old_H)
         

@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Optional, Union
 
 import numpy as np
@@ -10,7 +11,7 @@ from torchvision.io import read_image
 
 from src.utils import normalize_size, RadarSample
 from src.utils.mlsp.augmentations import AugmentationPipeline
-from src.utils.mlsp.featurizer import featurizer, sparse_sampling
+from src.utils.mlsp.featurizer import featurizer
 from src.utils.mlsp.types import RadarSampleInputs
 
 INITIAL_PIXEL_SIZE = 0.25
@@ -30,7 +31,6 @@ class PathlossDataset(Dataset):
         use_fspl: bool,
         use_transmittance_loss: bool,
         inference: bool,
-        sparsity_range: tuple[float, float],
         reps_per_epoch: int,
         augment_val: bool,
         augmentations: Optional[AugmentationPipeline],
@@ -46,7 +46,6 @@ class PathlossDataset(Dataset):
         self.use_fspl = use_fspl
         self.use_transmittance_loss = use_transmittance_loss
         self.inference = inference
-        self.sparsity_range = sparsity_range
         self.reps_per_epoch = reps_per_epoch
         self.augment_val = augment_val
         
@@ -95,7 +94,69 @@ class PathlossDataset(Dataset):
         sample.H, sample.W = new_H, new_W
         return sample
     
-    def read_sample(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
+    def read_sample_synthetic(self, inputs: dict) -> RadarSample:
+        npz_path = inputs["npz_file"]
+        json_path = inputs.get("json_file")
+        file_name = inputs.get("file_name", os.path.basename(npz_path))
+        data = np.load(npz_path)
+        with open(json_path, "r") as f:
+            meta = json.load(f)
+
+        reflectance = data["reflectance"].astype(np.float32)
+        transmittance = data["transmittance"].astype(np.float32)
+        pathloss = data.get("pathloss", None)
+        if pathloss is not None:
+            pathloss = pathloss.astype(np.float32)
+        mask_np = data.get("mask", np.ones_like(reflectance)).astype(np.float32)
+
+        H, W = reflectance.shape
+
+        ant = meta.get("antenna", {})
+        x_ant = float(ant.get("x_px", 0))
+        y_ant = float(ant.get("y_px", 0))
+        pixel_size = float(meta.get("pixel_size_m", INITIAL_PIXEL_SIZE))
+
+        yy, xx = np.meshgrid(np.arange(H, dtype=np.float32), np.arange(W, dtype=np.float32), indexing="ij")
+        dist_px = np.hypot(xx - x_ant, yy - y_ant)
+        dist_m = (dist_px * pixel_size).astype(np.float32)
+
+        input_img = torch.zeros((3, H, W), dtype=torch.float32)
+        input_img[0] = torch.from_numpy(reflectance)
+        input_img[1] = torch.from_numpy(transmittance)
+        input_img[2] = torch.from_numpy(dist_m)
+
+        output_img = torch.from_numpy(pathloss) if pathloss is not None else torch.zeros((H, W), dtype=torch.float32)
+
+        freq_MHz = float(meta.get("frequency_MHz", 1800))
+        radiation_pattern = torch.ones(360, dtype=torch.float32)
+
+        if self.pl_clip is not None and not self.inference:
+            pl_clip = torch.tensor(self.pl_clip, dtype=torch.float32)
+        else:
+            pl_clip = float("inf")
+
+        sample = RadarSample(
+            file_name=file_name,
+            task_idx=self.task_idx,
+            pl_clip=pl_clip,
+            use_fspl=self.use_fspl,
+            use_transmittance_loss=self.use_transmittance_loss,
+            H=H,
+            W=W,
+            x_ant=x_ant,
+            y_ant=y_ant,
+            azimuth=0.0,
+            freq_MHz=freq_MHz,
+            input_img=input_img,
+            output_img=output_img,
+            radiation_pattern=radiation_pattern,
+            pixel_size=pixel_size,
+            mask=torch.from_numpy(mask_np),
+        )
+        sample = self.pad_sample(sample)
+        return sample
+
+    def read_sample_icassp(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
         if isinstance(inputs, RadarSampleInputs):
             inputs = inputs.asdict()
         file_name = inputs["file_name"]
@@ -113,7 +174,7 @@ class PathlossDataset(Dataset):
             output_img = ""
         else:
             output_img = read_image(output_file).float()
-            if output_img.size(0) == 1:  # If single channel, remove channel dimension
+            if output_img.size(0) == 1:
                 output_img = output_img.squeeze(0)
         sampling_positions = pd.read_csv(position_file)
         x_ant, y_ant, azimuth = sampling_positions.loc[int(sampling_position), ["Y", "X", "Azimuth"]]
@@ -143,11 +204,13 @@ class PathlossDataset(Dataset):
             pixel_size=INITIAL_PIXEL_SIZE,
             mask=torch.ones_like(input_img[0]),
         )
-        
-        # Ensure the antenna is within bounds
         sample = self.pad_sample(sample)
-        
         return sample
+
+    def read_sample(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
+        if isinstance(inputs, dict) and "npz_file" in inputs:
+            return self.read_sample_synthetic(inputs)
+        return self.read_sample_icassp(inputs)
     
     def __getitem__(self, idx):
         idx = idx % len(self.inputs_list)
@@ -155,13 +218,6 @@ class PathlossDataset(Dataset):
         sample = self.read_sample(inp)
         
         orig_h, orig_w = sample.H, sample.W
-        if self.mlsp_task1:
-            sample = sparse_sampling(
-                sample,
-                task_idx=self.mlsp_task_idx,
-                inference=self.inference,
-                sparsity_range=self.sparsity_range
-            )
 
         sample = normalize_size(sample=sample, target_size=self.target_size)
 

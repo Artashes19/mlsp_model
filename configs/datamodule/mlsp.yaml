@@ -1,8 +1,8 @@
 _target_: src.datamodules.MLSPDatamodule
 
 name: icassp_task1
-batch_size: 32
-num_workers: 6
+batch_size: 2
+num_workers: 1
 
 data_dir: ${oc.env:ICASSP_ORIG_PATH}
 mlsp_task1: True
@@ -26,7 +26,6 @@ validation_names: ["synthetic_val", "icassp_val"]
 
 # ICASSP validation subsampling ratio (0.0-1.0) for faster validation
 icassp_val_subsample_ratio: 0.25
-sparsity_range: [ 0.0, 0.0 ]
 reps_per_epoch: 1
 mlsp_task_idx: 1
 use_fspl: True

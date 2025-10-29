@@ -340,20 +340,8 @@ class MLSP(AlgorithmBase):
                     target_cut = target_normalized[:, :resized_w]
                     target_final = resize_db(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
 
-                    # Create sparse mask for evaluation (resize sparse channel to original dims)
-                    sparse_channel = (input_i[-1] == 0).unsqueeze(0)  # [1, 640, 640]
-                    sparse_cut = sparse_channel.squeeze(0)[:, :resized_w]  # Cut padding
-                    sparse_mask = resize_nearest(sparse_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-
-                    # Calculate MSE only on valid (non-sparse) pixels
-                    valid_pixels = sparse_mask == 0  # 0 means keep (not sparse), 1 means sparse (ignore)
-                    if valid_pixels.sum() > 0:
-                        mse = torch.mean((pred_final[valid_pixels] - target_final[valid_pixels]) ** 2)
-                        mses.append(mse)
-                    else:
-                        # Fallback to all pixels if no valid pixels (edge case)
-                        mse = torch.mean((pred_final - target_final) ** 2)
-                        mses.append(mse)
+                    mse = torch.mean((pred_final - target_final) ** 2)
+                    mses.append(mse)
 
                 except Exception as ex:
                     log.error(f"Error in validation sample {i}: {ex}")

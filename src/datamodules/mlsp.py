@@ -68,13 +68,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.train_subset_size = kwargs.pop("train_subset_size", None)
         self.train_subset_seed = kwargs.pop("train_subset_seed", 0)
         
-        sparsity = 100 * kwargs["sparsity_range"][0]
-        self.inputs_list = self.get_inputs_list(data_dir, freqs_mhz, freqs, sparsity, "Task_2_ICASSP")
+        # Always use dense ground truth outputs for ICASSP train-style data (Task_2_ICASSP layout)
+        self.inputs_list = self.get_inputs_list(data_dir, freqs_mhz, freqs, task="Task_2_ICASSP")
         self.kaggle_task1_list = self.get_inputs_list(kaggle_task1_path, kaggle_freqs_mhz, [1], 0.5, "Task_1_ICASSP") if kaggle_task1_path else []
         self.kaggle_task2_list = self.get_inputs_list(kaggle_task2_path, kaggle_freqs_mhz, [1, 2], task="Task_2_ICASSP") if kaggle_task2_path else []
         self.kaggle_task1_set = None
         self.kaggle_task2_set = None
-        self.icassp_train_list = self.get_inputs_list(icassp_train_path, freqs_mhz, freqs, 0.0, "Task_2_ICASSP") if icassp_train_path else []
+        self.icassp_train_list = self.get_inputs_list(icassp_train_path, freqs_mhz, freqs, "Task_2_ICASSP") if icassp_train_path else []
         self.icassp_val_set = None
         self.args = args
         self.kwargs = kwargs
@@ -87,7 +87,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         )
     
     @staticmethod
-    def get_inputs_list(data_dir, freqs_mhz, freqs, sparsity=0.0, task="Task_2_ICASSP"):
+    def get_inputs_list(data_dir, freqs_mhz, freqs, task="Task_2_ICASSP"):
         inputs_list = []
         if not data_dir:
             return inputs_list
@@ -96,7 +96,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         output_dir = os.path.join(data_dir, f"Outputs/{task}")
         positions_dir = os.path.join(data_dir, "Positions/")
         radiation_patterns_dir = os.path.join(data_dir, "Radiation_Patterns/")
-        sampling_dir = os.path.join(data_dir, f"rate{sparsity}/sampledGT")
         # Expect these directories to exist for the ICASSP train-style dataset
         
         for b in range(1, 26):  # 25 buildings
@@ -114,9 +113,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             output_img_path = os.path.join(output_dir, output_file)
                             positions_path = os.path.join(positions_dir, position_file)
                             radiation_pattern_file = os.path.join(radiation_patterns_dir, radiation_file)
-                            sampling_file = os.path.join(sampling_dir, output_file)
-                            if os.path.exists(sampling_file):
-                                output_img_path = sampling_file
+                            # Always use dense Outputs
                             
                             radar_sample_inputs = RadarSampleInputs(
                                 file_name=input_file,
@@ -131,11 +128,49 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             
                             inputs_list.append(radar_sample_inputs)
         
+        # Synthetic dataset fallback: scan for per-sample NPZ+JSON pairs
+        if not inputs_list and os.path.isdir(str(data_dir)):
+            try:
+                for root, dirs, files in os.walk(data_dir):
+                    npz_files = [f for f in files if f.endswith('.npz')]
+                    for npz in npz_files:
+                        sample_name = os.path.splitext(npz)[0]
+                        json_file = os.path.join(root, sample_name + '.json')
+                        if not os.path.exists(json_file):
+                            continue
+                        npz_path = os.path.join(root, npz)
+                        # Parse metadata for ids and optional filtering
+                        try:
+                            with open(json_file, 'r') as fp:
+                                meta = __import__('json').load(fp)
+                            ids = meta.get('ids', {})
+                            b = int(ids.get('building', 0))
+                            ant = int(ids.get('antenna', 0))
+                            f_idx = int(ids.get('frequency_index', 1))
+                            sp = int(ids.get('sample_index', 0))
+                            # Filter by requested frequency indices if provided
+                            if freqs and f_idx not in freqs:
+                                continue
+                            ids_tuple = (b, ant, f_idx, sp)
+                        except Exception:
+                            ids_tuple = (0, 0, 1, 0)
+                        # Minimal dict for dataset reader
+                        inputs_list.append({
+                            "file_name": sample_name,
+                            "npz_file": npz_path,
+                            "json_file": json_file,
+                            "ids": ids_tuple,
+                        })
+            except Exception:
+                pass
+        
         return inputs_list
     
     @staticmethod
     def split_data_task1(inputs_list, val_buildings: list[int], val_ratio=0.25, split_save_path=None, seed=None):
-        building_ids = list(set([f.ids[0] for f in inputs_list]))
+        def _get_ids(obj):
+            return getattr(obj, 'ids', obj.get('ids') if isinstance(obj, dict) else None)
+        building_ids = list(set([_get_ids(f)[0] for f in inputs_list if _get_ids(f) is not None]))
         np.random.seed(seed=seed)
         np.random.shuffle(building_ids)
         
@@ -152,7 +187,10 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         
         val_files, train_files = [], []
         for f in inputs_list:
-            if f.ids[0] in val_buildings:
+            ids = _get_ids(f)
+            if ids is None:
+                continue
+            if ids[0] in val_buildings:
                 val_files.append(f)
             else:
                 train_files.append(f)
@@ -171,7 +209,10 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
     @staticmethod
     def split_data_task2(inputs_list: list[RadarSampleInputs], val_freqs, val_buildings, split_save_path=None, seed=None):
         train_inputs, val_inputs = MLSPDatamodule.split_data_task1(inputs_list, val_buildings=val_buildings, seed=seed)
-        val_inputs = [f for f in val_inputs if f.ids[2] in val_freqs]
+        def _get_f_idx(obj):
+            ids = getattr(obj, 'ids', obj.get('ids') if isinstance(obj, dict) else None)
+            return ids[2] if ids is not None else None
+        val_inputs = [f for f in val_inputs if _get_f_idx(f) in val_freqs]
         # train_inputs = [f for f in train_inputs if f.ids[2] not in val_freqs]
         
         if split_save_path:
@@ -196,7 +237,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 "pl_clip",
                 "use_fspl",
                 "use_transmittance_loss",
-                "sparsity_range",
                 "reps_per_epoch",
                 "augment_val",
             }
