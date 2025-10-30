@@ -19,7 +19,7 @@ from tqdm import tqdm
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.datamodules.datasets.mlsp import IMG_TARGET_SIZE
 from src.utils import CompileParams
-from src.utils.mlsp.augmentations import resize_db, resize_nearest
+from src.utils.mlsp.augmentations import resize_linear
 from src.utils.mlsp.loss import create_sip2net_loss, se
 
 log = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class MLSP(AlgorithmBase):
         pred_cut = pred[:, :resized_w]
 
         # Resize prediction back to exact original dimensions
-        pred_final = resize_db(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+        pred_final = resize_linear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
         pred = pred_final.detach().cpu().numpy()
 
         return {
@@ -302,6 +302,8 @@ class MLSP(AlgorithmBase):
             }
         
         preds = self._network(inputs)
+
+        
         if split_name == "train":
             # weights = (inputs[:, -1] == 0) * 9 + 1
             weights = torch.ones_like(inputs[:, -1])
@@ -333,12 +335,12 @@ class MLSP(AlgorithmBase):
                     pred_cut = pred_i.squeeze(0)[:, :resized_w]
 
                     # Resize prediction back to exact original dimensions
-                    pred_final = resize_db(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+                    pred_final = resize_linear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
 
                     # Target is also in normalized 640x640 space - apply same processing
                     target_normalized = targets_i.squeeze(0)  # [640, 640]
                     target_cut = target_normalized[:, :resized_w]
-                    target_final = resize_db(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+                    target_final = resize_linear(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
 
                     mse = torch.mean((pred_final - target_final) ** 2)
                     mses.append(mse)

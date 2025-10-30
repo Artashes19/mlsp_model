@@ -181,7 +181,7 @@ class PathlossDataset(Dataset):
         )
         sample = self.pad_sample(sample)
         return sample
-
+    
     def read_sample_icassp(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
         if isinstance(inputs, RadarSampleInputs):
             inputs = inputs.asdict() 
@@ -232,7 +232,7 @@ class PathlossDataset(Dataset):
         )
         sample = self.pad_sample(sample)
         return sample
-
+    
     def read_sample(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
         if isinstance(inputs, dict) and "npz_file" in inputs:
             return self.read_sample_synthetic(inputs)

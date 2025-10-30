@@ -19,7 +19,10 @@ def resize_linear(img, new_size):
 
 
 def resize_db(img, new_size):
-    lin_energy = 10.0 ** (img / 10.0)
+    # Prevent overflow in 10^(x/10) for very large dB values (~>385 dB overflows float32)
+    safe_db_max = float(10.0 * np.log10(np.finfo(np.float32).max)) - 1.0  # small margin
+    img_clamped = torch.clamp(img, max=safe_db_max)
+    lin_energy = 10.0 ** (img_clamped / 10.0)
     lin_rs = TF.resize(lin_energy, new_size, interpolation=InterpolationMode.BILINEAR)
     img_rs = torch.zeros_like(lin_rs)
     valid_mask = lin_rs > 0
@@ -75,7 +78,7 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     sample.input_img[1:2, :new_h, :new_w] = transmittance_resized
     
     if sample.output_img != "":
-        resized_output = resize_db(sample.output_img.unsqueeze(0), new_size).squeeze(0)
+        resized_output = resize_linear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
         padded_output = torch.zeros((target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
         padded_output[:new_h, :new_w] = resized_output
         sample.output_img = padded_output

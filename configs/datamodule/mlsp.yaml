@@ -19,7 +19,7 @@ kaggle_task2_path: ""
 kaggle_freqs_mhz: [ 868, 2400 ]
 
 # ICASSP train data validation
-icassp_train_path: "/auto/home/xoren/icassp2025/data/train"
+icassp_train_path: "/auto/home/xoren/mlsp_wair_d/data/icassp2025"
 
 # Validation dataloader names for AIM logging (in order of creation)
 validation_names: ["synthetic_val", "icassp_val"]

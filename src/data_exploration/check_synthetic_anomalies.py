@@ -3,6 +3,8 @@ import argparse
 import json
 import os
 import random
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm import tqdm
 from typing import List, Tuple, Dict
 
 import numpy as np
@@ -61,10 +63,14 @@ def check_sample(npz_path: str, json_path: str, cfg: Dict) -> List[str]:
     if pathloss is not None and not np.isfinite(pathloss).all():
         issues.append("pathloss contains NaN/Inf")
 
+    # Non-zero counts (reuse across checks)
+    nz_ref_count = int(np.count_nonzero(reflectance))
+    nz_trans_count = int(np.count_nonzero(transmittance))
+
     # Empty / constant channels
-    if np.count_nonzero(reflectance) == 0:
+    if nz_ref_count == 0:
         issues.append("reflectance is all zeros")
-    if np.count_nonzero(transmittance) == 0:
+    if nz_trans_count == 0:
         issues.append("transmittance is all zeros")
     if float(reflectance.max() - reflectance.min()) == 0.0:
         issues.append(f"reflectance constant value={float(reflectance.min()):.3f}")
@@ -75,8 +81,6 @@ def check_sample(npz_path: str, json_path: str, cfg: Dict) -> List[str]:
 
     # Ratio checks and non-zero range checks (zeros are common; min is often 0)
     total = float(H * W)
-    nz_ref_count = int(np.count_nonzero(reflectance))
-    nz_trans_count = int(np.count_nonzero(transmittance))
     nz_ref = nz_ref_count / total
     nz_trans = nz_trans_count / total
     z_ref = 1.0 - nz_ref
@@ -88,13 +92,15 @@ def check_sample(npz_path: str, json_path: str, cfg: Dict) -> List[str]:
 
     # Non-zero value ranges only
     if nz_ref_count > 0:
-        ref_nz = reflectance[reflectance > 0]
-        r_nz_min, r_nz_max = float(np.nanmin(ref_nz)), float(np.nanmax(ref_nz))
+        ref_gt0 = reflectance > 0
+        r_nz_min = float(np.min(reflectance, where=ref_gt0, initial=np.inf))
+        r_nz_max = float(np.max(reflectance, where=ref_gt0, initial=-np.inf))
         if r_nz_min < cfg['refl_nz_min_ok'] or r_nz_max > cfg['refl_nz_max_ok']:
             issues.append(f"reflectance non-zero out-of-range min={r_nz_min:.3f} max={r_nz_max:.3f}")
     if nz_trans_count > 0:
-        trans_nz = transmittance[transmittance > 0]
-        t_nz_min, t_nz_max = float(np.nanmin(trans_nz)), float(np.nanmax(trans_nz))
+        trans_gt0 = transmittance > 0
+        t_nz_min = float(np.min(transmittance, where=trans_gt0, initial=np.inf))
+        t_nz_max = float(np.max(transmittance, where=trans_gt0, initial=-np.inf))
         if t_nz_min < cfg['trans_nz_min_ok'] or t_nz_max > cfg['trans_nz_max_ok']:
             issues.append(f"transmittance non-zero out-of-range min={t_nz_min:.3f} max={t_nz_max:.3f}")
     if pathloss is not None:
@@ -146,32 +152,38 @@ def check_sample(npz_path: str, json_path: str, cfg: Dict) -> List[str]:
     if mask is not None:
         if not np.isfinite(mask).all():
             issues.append("mask contains NaN/Inf")
-        unique_vals = np.unique(mask)
         if mask.shape == (H, W):
-            if np.count_nonzero(mask) == 0:
+            mask_nz = int(np.count_nonzero(mask))
+            if mask_nz == 0:
                 issues.append("mask all zeros")
-            if len(unique_vals) > 4:  # very non-binary
-                issues.append(f"mask has many unique values (len={len(unique_vals)})")
+            # Fast path for typical binary masks; fall back to unique() only if needed
+            m_min = float(mask.min())
+            m_max = float(mask.max())
+            if not (m_min == m_max or (m_min in (0.0, 1.0) and m_max in (0.0, 1.0))):
+                u = np.unique(mask)
+                if len(u) > 4:  # very non-binary
+                    issues.append(f"mask has many unique values (len={len(u)})")
 
     return issues
 
 
 def main():
     parser = argparse.ArgumentParser("Check synthetic NPZ+JSON samples for anomalies")
-    parser.add_argument('--data_dir', type=str, default='/auto/home/xoren/icassp2025/data/synthetic', help='Root of synthetic dataset')
+    parser.add_argument('--data_dir', type=str, default='/auto/home/xoren/mlsp_wair_d/data/synthetic', help='Root of synthetic dataset')
     parser.add_argument('--num', type=int, default=1000, help='Number of random samples to test (<= total)')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
+    parser.add_argument('--workers', type=int, default=0, help='Number of parallel workers (0=auto)')
     # Non-zero range thresholds (reflectance/transmittance values are >=0 with zeros common)
     parser.add_argument('--refl_nz_min_ok', type=float, default=0.0)
-    parser.add_argument('--refl_nz_max_ok', type=float, default=15.0)
+    parser.add_argument('--refl_nz_max_ok', type=float, default=30.0)
     parser.add_argument('--trans_nz_min_ok', type=float, default=0.0)
-    parser.add_argument('--trans_nz_max_ok', type=float, default=15.0)
-    parser.add_argument('--pl_min_ok', type=float, default=0.0)
-    parser.add_argument('--pl_max_ok', type=float, default=300.0)
-    parser.add_argument('--density_low', type=float, default=0.001)
-    parser.add_argument('--density_high', type=float, default=0.999)
-    parser.add_argument('--pix_min_ok', type=float, default=0.01)
-    parser.add_argument('--pix_max_ok', type=float, default=10.0)
+    parser.add_argument('--trans_nz_max_ok', type=float, default=30.0)
+    parser.add_argument('--pl_min_ok', type=float, default=5.0)
+    parser.add_argument('--pl_max_ok', type=float, default=2000.0)
+    parser.add_argument('--density_low', type=float, default=0.002)
+    parser.add_argument('--density_high', type=float, default=0.2)
+    parser.add_argument('--pix_min_ok', type=float, default=0.24)
+    parser.add_argument('--pix_max_ok', type=float, default=0.26)
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -199,14 +211,38 @@ def main():
     )
 
     total_flagged = 0
-    for npz_path, json_path in chosen:
-        issues = check_sample(npz_path, json_path, cfg)
-        if issues:
-            total_flagged += 1
-            rel = os.path.relpath(npz_path, args.data_dir)
-            print(f"[ANOMALY] {npz_path}")
-            for msg in issues:
-                print(f"  - {msg}")
+
+    # Determine worker count
+    workers = args.workers if args.workers and args.workers > 0 else (os.cpu_count() or 1)
+    workers = max(1, min(workers, 32))  # sensible cap to avoid oversubscription
+
+    if workers == 1:
+        for npz_path, json_path in tqdm(chosen):
+            issues = check_sample(npz_path, json_path, cfg)
+            if issues:
+                total_flagged += 1
+                print(f"[ANOMALY] {npz_path}")
+                for msg in issues:
+                    print(f"  - {msg}")
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = {
+                ex.submit(check_sample, npz_path, json_path, cfg): (npz_path, json_path)
+                for (npz_path, json_path) in chosen
+            }
+            with tqdm(total=sample_ct) as pbar:
+                for fut in as_completed(futures):
+                    npz_path, _ = futures[fut]
+                    try:
+                        issues = fut.result()
+                    except Exception as ex:
+                        issues = [f"worker error: {ex}"]
+                    if issues:
+                        total_flagged += 1
+                        print(f"[ANOMALY] {npz_path}")
+                        for msg in issues:
+                            print(f"  - {msg}")
+                    pbar.update(1)
 
     print(f"Checked {sample_ct} samples; flagged {total_flagged} with at least one anomaly.")
 
