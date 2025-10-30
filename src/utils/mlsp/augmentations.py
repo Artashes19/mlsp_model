@@ -17,35 +17,12 @@ def resize_nearest(img, new_size):
 def resize_linear(img, new_size):
     return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
 
-
-def resize_db(img, new_size):
-    # Prevent overflow in 10^(x/10) for very large dB values (~>385 dB overflows float32)
-    safe_db_max = float(10.0 * np.log10(np.finfo(np.float32).max)) - 1.0  # small margin
-    img_clamped = torch.clamp(img, max=safe_db_max)
-    lin_energy = 10.0 ** (img_clamped / 10.0)
-    lin_rs = TF.resize(lin_energy, new_size, interpolation=InterpolationMode.BILINEAR)
-    img_rs = torch.zeros_like(lin_rs)
-    valid_mask = lin_rs > 0
-    img_rs[valid_mask] = 10.0 * torch.log10(lin_rs[valid_mask])
-    
-    return img_rs
-
-
 def rotate_nearest(img, angle):
     return TF.rotate(img, angle, interpolation=InterpolationMode.NEAREST, fill=0, expand=True)
 
 
 def rotate_linear(img, angle):
     return TF.rotate(img, angle, interpolation=InterpolationMode.BILINEAR, fill=0, expand=True)
-
-
-def rotate_db(img, angle):
-    lin_energy = 10.0 ** (img / 10.0)
-    lin_rs = TF.rotate(lin_energy, angle, interpolation=InterpolationMode.BILINEAR, fill=0, expand=True)
-    img_rs = torch.zeros_like(lin_rs)
-    valid_mask = lin_rs > 0
-    img_rs[valid_mask] = 10.0 * torch.log10(lin_rs[valid_mask])
-    return img_rs
 
 
 def normalize_size(sample: RadarSample, target_size) -> RadarSample:
@@ -168,7 +145,7 @@ class GeometricAugmentation(BaseAugmentation):
         
         if sample.output_img is not None:
             out_expanded = sample.output_img.unsqueeze(0)  # (1,H,W)
-            rot_output = rotate_db(out_expanded, angle).squeeze(0)
+            rot_output = rotate_linear(out_expanded, angle).squeeze(0)
             sample.output_img = rot_output
         
         if sample.mask is not None:

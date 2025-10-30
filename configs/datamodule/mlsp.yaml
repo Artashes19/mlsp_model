@@ -1,7 +1,7 @@
 _target_: src.datamodules.MLSPDatamodule
 
 name: icassp_task1
-batch_size: 2
+batch_size: 16
 num_workers: 1
 
 data_dir: ${oc.env:ICASSP_ORIG_PATH}

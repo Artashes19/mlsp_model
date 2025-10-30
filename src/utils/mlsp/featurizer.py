@@ -429,10 +429,10 @@ def calculate_fspl(
 ):
     dist_clamped = torch.clamp(dist_m, min=min_dist_m)
     freq_tensor = torch.tensor(freq_MHz, device=torch.device('cpu'))
-    fspl_db = 20.0 * torch.log10(dist_clamped) + 20.0 * torch.log10(freq_tensor) - 27.55
-    pathloss_db = fspl_db - antenna_gain
+    fspl_linear = 20.0 * torch.log10(dist_clamped) + 20.0 * torch.log10(freq_tensor) - 27.55
+    pathloss_linear = fspl_linear - antenna_gain
     
-    return pathloss_db
+    return pathloss_linear
 
 
 def update_rectangles(transmittance_loss, aux_sample):
