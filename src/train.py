@@ -15,7 +15,7 @@ from src.utils import EpochCounter, log_hyperparameters
 log = logging.getLogger(__name__)
 
 
-def train(config: DictConfig) -> None:
+def train(config: DictConfig) -> str | None:
     epoch_counter = EpochCounter()
     gpus = config.trainer.devices
     multi_gpu = gpus == -1 or (isinstance(gpus, Iterable) and len(gpus) > 1) or (isinstance(gpus, int) and gpus > 1)
@@ -71,3 +71,15 @@ def train(config: DictConfig) -> None:
     trainer.fit(algorithm, datamodule=datamodule, ckpt_path=config.ckpt_path)
     
     trainer.test(dataloaders=datamodule.test_dataloader())
+
+    # Retrieve best checkpoint path if available
+    best_path = None
+    try:
+        for cb in trainer.checkpoint_callbacks:
+            p = getattr(cb, 'best_model_path', None)
+            if p:
+                best_path = p
+                break
+    except Exception:
+        best_path = None
+    return best_path

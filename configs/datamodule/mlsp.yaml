@@ -2,9 +2,9 @@ _target_: src.datamodules.MLSPDatamodule
 
 name: icassp_task1
 batch_size: 16
-num_workers: 1
+num_workers: 12
 
-data_dir: ${oc.env:ICASSP_ORIG_PATH}
+data_dir: "/auto/home/xoren/mlsp_wair_d/data/synthetic"
 mlsp_task1: True
 inference: False
 
@@ -19,7 +19,7 @@ kaggle_task2_path: ""
 kaggle_freqs_mhz: [ 868, 2400 ]
 
 # ICASSP train data validation
-icassp_train_path: "/auto/home/xoren/mlsp_wair_d/data/icassp2025"
+icassp_train_path: ""
 
 # Validation dataloader names for AIM logging (in order of creation)
 validation_names: ["synthetic_val", "icassp_val"]
@@ -33,11 +33,18 @@ use_transmittance_loss: True
 
 # Data augmentation parameters
 augment_val: False
-aug_p: 0.5
-walls_aug_p: 0.99
+aug_p: 0.0
+walls_aug_p: 0.0
 transmittance_range: [ 2, 18 ]
-angle_range: [ -30, 30 ]
-scale_range: [ 0.6666666666666667, 1.5 ]
-flip_vertical: True
-flip_horizontal: True
-cardinal_rotation: True
+angle_range: [ 0, 0 ]
+scale_range: [ 1.0, 1.0 ]
+flip_vertical: False
+flip_horizontal: False
+cardinal_rotation: False
+
+# Experiment controls (optional)
+train_buildings: null
+val_buildings_override: null
+use_synthetic_train: False
+synthetic_dir: ""
+manifest_path: "/auto/home/xoren/mlsp_wair_d/data/synthetic/samples.csv"

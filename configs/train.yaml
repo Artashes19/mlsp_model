@@ -20,6 +20,20 @@ defaults:
 
 ckpt_path: null
 
+# Multi-experiment orchestrator controls
+exps: ""  # e.g., "e1,e2,e3,e4"
+exp_dir: ""  # optional explicit experiments directory
+experiments_root: experiments
+
+split:
+  train_small_n: 7
+  train_full_n: 20
+  validation_n: 5
+
+data:
+  real_dir: ${datamodule.data_dir}
+  synthetic_dir: ""
+
 hydra:
   run:
     dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}

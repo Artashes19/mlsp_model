@@ -10,7 +10,11 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
         super().__init__()
         
         self._batch_size = batch_size
-        self._num_workers = num_workers
+        # Coerce possibly-string env values (e.g., '8') to int
+        try:
+            self._num_workers = int(num_workers) if num_workers is not None else 0
+        except Exception:
+            self._num_workers = 0
         self._drop_last = drop_last
         
         self._train_set = None
@@ -25,25 +29,46 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
     
     def train_dataloader(self) -> DataLoader:
         sampler = DistributedSampler(self._train_set) if self._multi_gpu else None
-        return DataLoader(
-            self._train_set, batch_size=self._batch_size, num_workers=self._num_workers,
-            sampler=sampler, shuffle=None if self._multi_gpu else True, collate_fn=self.collate_fn,
-            drop_last=self._drop_last
+        dl_kwargs = dict(
+            batch_size=self._batch_size,
+            num_workers=self._num_workers,
+            sampler=sampler,
+            shuffle=None if self._multi_gpu else True,
+            collate_fn=self.collate_fn,
+            drop_last=self._drop_last,
+            pin_memory=True,
         )
+        if self._num_workers and self._num_workers > 0:
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+        return DataLoader(self._train_set, **dl_kwargs)
     
     def val_dataloader(self) -> DataLoader:
         sampler = DistributedSampler(self._val_set, shuffle=False) if self._multi_gpu else None
-        return DataLoader(
-            self._val_set, batch_size=self._batch_size, num_workers=self._num_workers, sampler=sampler,
-            collate_fn=self.collate_fn, drop_last=self._drop_last
+        dl_kwargs = dict(
+            batch_size=self._batch_size,
+            num_workers=self._num_workers,
+            sampler=sampler,
+            collate_fn=self.collate_fn,
+            drop_last=self._drop_last,
+            pin_memory=True,
         )
+        if self._num_workers and self._num_workers > 0:
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+        return DataLoader(self._val_set, **dl_kwargs)
     
     def test_dataloader(self) -> DataLoader:
         sampler = DistributedSampler(self._test_set, shuffle=False) if self._multi_gpu else None
-        return DataLoader(
-            self._test_set, batch_size=self._batch_size, num_workers=self._num_workers, sampler=sampler,
-            collate_fn=self.collate_fn, drop_last=self._drop_last
+        dl_kwargs = dict(
+            batch_size=self._batch_size,
+            num_workers=self._num_workers,
+            sampler=sampler,
+            collate_fn=self.collate_fn,
+            drop_last=self._drop_last,
+            pin_memory=True,
         )
+        if self._num_workers and self._num_workers > 0:
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+        return DataLoader(self._test_set, **dl_kwargs)
     
     @property
     def train_set(self):
