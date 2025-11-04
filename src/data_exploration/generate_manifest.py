@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import json
 import os
 from typing import List, Sequence
@@ -85,7 +86,98 @@ def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
         for r in rows:
             writer.writerow(r)
 
+    # Write/update a companion meta file with a dataset signature for cache invalidation
+    meta_path = out + '.meta.json'
+    try:
+        sig = compute_dataset_signature(root)
+        meta = {
+            'root': os.path.abspath(root),
+            'num_pairs': sig['num_pairs'],
+            'sha256': sig['sha256'],
+        }
+        with open(meta_path, 'w') as fp:
+            json.dump(meta, fp, indent=2, sort_keys=True)
+    except Exception:
+        # Do not fail manifest creation if meta write fails
+        pass
+
     return len(rows)
+
+
+def compute_dataset_signature(root: str) -> dict:
+    """Compute a fast signature of the dataset contents based on relative paths,
+    file sizes, and mtimes of paired npz+json files. Avoids hashing file bytes.
+    """
+    entries: List[tuple[str, int, int, int, int]] = []
+    root_abs = os.path.abspath(root)
+    for dirpath, dirnames, filenames in os.walk(root_abs):
+        # Collect candidate basenames from npz files only; require json to exist
+        for f in filenames:
+            if not f.endswith('.npz'):
+                continue
+            base = os.path.splitext(f)[0]
+            npz_path = os.path.join(dirpath, f)
+            json_path = os.path.join(dirpath, base + '.json')
+            if not os.path.exists(json_path):
+                continue
+            try:
+                npz_stat = os.stat(npz_path)
+                json_stat = os.stat(json_path)
+            except FileNotFoundError:
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, base), root_abs)
+            entries.append(
+                (
+                    rel.replace('\\', '/'),
+                    int(npz_stat.st_size),
+                    int(npz_stat.st_mtime),
+                    int(json_stat.st_size),
+                    int(json_stat.st_mtime),
+                )
+            )
+    # Deterministic order
+    entries.sort(key=lambda x: x[0])
+    h = hashlib.sha256()
+    total = 0
+    for rel, ns, nm, js, jm in entries:
+        line = f"{rel}|{ns}|{nm}|{js}|{jm}\n".encode('utf-8')
+        h.update(line)
+        total += 1
+    return {'root': root_abs, 'num_pairs': total, 'sha256': h.hexdigest()}
+
+
+def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
+    """Ensure a fresh manifest exists for the dataset.
+    - If the manifest or its meta is missing, rebuild it.
+    - If the signature differs from the current dataset state, rebuild it.
+    - Otherwise, leave it as is.
+    Returns the number of rows (if rebuilt) or -1 if left unchanged.
+    """
+    os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+    meta_path = out + '.meta.json'
+    try:
+        current_sig = compute_dataset_signature(root)
+    except Exception:
+        # If signature computation fails, force rebuild
+        return generate_manifest(root, out, freqs_mhz)
+
+    need_rebuild = not os.path.exists(out) or not os.path.exists(meta_path)
+    if not need_rebuild:
+        try:
+            with open(meta_path, 'r') as fp:
+                meta = json.load(fp)
+            if (
+                str(meta.get('root')) != str(current_sig.get('root')) or
+                str(meta.get('sha256')) != str(current_sig.get('sha256')) or
+                int(meta.get('num_pairs', -1)) != int(current_sig.get('num_pairs', -2))
+            ):
+                need_rebuild = True
+        except Exception:
+            need_rebuild = True
+
+    if need_rebuild:
+        return generate_manifest(root, out, freqs_mhz)
+    return -1
 
 
 def main():

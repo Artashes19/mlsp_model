@@ -1,7 +1,7 @@
 _target_: src.datamodules.MLSPDatamodule
 
 name: icassp_task1
-batch_size: 16
+batch_size: 2
 num_workers: 12
 
 data_dir: "/auto/home/xoren/mlsp_wair_d/data/synthetic"

@@ -12,6 +12,7 @@ from src.datamodules.datasets import PathlossDataset
 from src.datamodules.wair_d_base import WAIRDBaseDatamodule
 from src.utils.mlsp.augmentations import AugmentationPipeline, GeometricAugmentation
 from src.utils.mlsp.types import RadarSampleInputs
+from src.data_exploration.generate_manifest import generate_manifest
 
 log = logging.getLogger(__name__)
 
@@ -101,18 +102,15 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         if not data_dir:
             return inputs_list
 
-        # If manifest path is configured but missing, generate it via the helper script
-        if manifest_path and not os.path.exists(manifest_path):
+        # Ensure manifest exists and is fresh; the helper handles signatures/regen
+        if manifest_path:
             try:
-                from src.data_exploration.generate_manifest import generate_manifest
-                parent_dir = os.path.dirname(manifest_path)
-                if parent_dir:
-                    os.makedirs(parent_dir, exist_ok=True)
-                _ = generate_manifest(data_dir, manifest_path, freqs_mhz)
+                from src.data_exploration.generate_manifest import ensure_manifest
+                _ = ensure_manifest(data_dir, manifest_path, freqs_mhz)
             except Exception:
                 pass
 
-        # Fast path: load synthetic manifest if provided
+        # Fast path: load synthetic manifest if present
         if manifest_path and os.path.exists(manifest_path):
             try:
                 with open(manifest_path, "r", newline="") as fp:
