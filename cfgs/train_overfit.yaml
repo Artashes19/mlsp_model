@@ -1,0 +1,16 @@
+optimizer: Adam
+lr: 1e-3
+epochs: 100
+batch_size: 2
+scheduler: cosine
+min_lr: 1e-5
+warmup_ratio: 0.05
+grad_clip: 1.0
+num_workers: 2
+pin_memory: true
+seed: 42
+validate_every_steps: 0
+grad_accum_steps: 1
+
+
+

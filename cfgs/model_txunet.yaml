@@ -1,0 +1,11 @@
+name: radio_unet_tx
+in_ch: 3
+out_ch: 1
+base_ch: 48
+depths: [4, 6, 6, 8]
+heads: [4, 4, 8, 8]
+expand: 2.66
+
+
+
+
