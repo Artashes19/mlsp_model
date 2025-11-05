@@ -1,10 +1,10 @@
 _target_: src.datamodules.MLSPDatamodule
 
 name: icassp_task1
-batch_size: 2
+batch_size: 16
 num_workers: 12
 
-data_dir: "/auto/home/xoren/mlsp_wair_d/data/synthetic"
+data_dir: "/auto/home/xoren/mlsp_wair_d/data/synthetic_train"
 mlsp_task1: True
 inference: False
 
@@ -47,4 +47,4 @@ train_buildings: null
 val_buildings_override: null
 use_synthetic_train: False
 synthetic_dir: ""
-manifest_path: "/auto/home/xoren/mlsp_wair_d/data/synthetic/samples.csv"
+manifest_path: "/auto/home/xoren/mlsp_wair_d/data/synthetic_train/samples.csv"

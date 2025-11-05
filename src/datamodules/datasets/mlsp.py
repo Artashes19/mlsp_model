@@ -258,10 +258,15 @@ class PathlossDataset(Dataset):
         input_tensor = featurizer(sample=sample)
         mask = sample.mask
         # Store original dimensions for algorithm to use
-        sample_dict = sample.asdict()
-        sample_dict['orig_H'] = orig_h
-        sample_dict['orig_W'] = orig_w
+        # Return only lightweight metadata to minimize batch transfer overhead
+        meta = {
+            "file_name": sample.file_name,
+            # keep as a plain float; default_collate will tensorize to (B,)
+            "pixel_size": float(sample.pixel_size),
+            # keep task_idx as tensor so downstream checks like sample["task_idx"][0].item() work
+            "task_idx": torch.tensor(sample.task_idx, dtype=torch.int64),
+        }
         # Reset dimensions back to original for consistency with inference.py logic
         sample.H = orig_h
         sample.W = orig_w
-        return input_tensor, output_tensor, mask, sample_dict
+        return input_tensor, output_tensor, mask, meta

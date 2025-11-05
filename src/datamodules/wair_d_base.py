@@ -39,7 +39,7 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
             pin_memory=True,
         )
         if self._num_workers and self._num_workers > 0:
-            dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
         return DataLoader(self._train_set, **dl_kwargs)
     
     def val_dataloader(self) -> DataLoader:
@@ -53,7 +53,7 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
             pin_memory=True,
         )
         if self._num_workers and self._num_workers > 0:
-            dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
         return DataLoader(self._val_set, **dl_kwargs)
     
     def test_dataloader(self) -> DataLoader:
@@ -67,7 +67,7 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
             pin_memory=True,
         )
         if self._num_workers and self._num_workers > 0:
-            dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
         return DataLoader(self._test_set, **dl_kwargs)
     
     @property

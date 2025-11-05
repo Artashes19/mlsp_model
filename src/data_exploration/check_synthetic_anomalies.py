@@ -169,7 +169,7 @@ def check_sample(npz_path: str, json_path: str, cfg: Dict) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser("Check synthetic NPZ+JSON samples for anomalies")
-    parser.add_argument('--data_dir', type=str, default='/auto/home/xoren/mlsp_wair_d/data/synthetic', help='Root of synthetic dataset')
+    parser.add_argument('--data_dir', type=str, default='/auto/home/xoren/mlsp_wair_d/data/synthetic_train', help='Root of synthetic dataset')
     parser.add_argument('--num', type=int, default=1000, help='Number of random samples to test (<= total)')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
     parser.add_argument('--workers', type=int, default=0, help='Number of parallel workers (0=auto)')

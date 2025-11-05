@@ -518,7 +518,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 pin_memory=True,
             )
             if self._num_workers and self._num_workers > 0:
-                dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+                dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
             dataloaders.append(DataLoader(self._val_set, **dl_kwargs))
         if self.icassp_val_set:
             sampler = DistributedSampler(self.icassp_val_set, shuffle=False) if self._multi_gpu else None
@@ -531,6 +531,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 pin_memory=True,
             )
             if self._num_workers and self._num_workers > 0:
-                dl_kwargs.update(persistent_workers=True, prefetch_factor=4)
+                dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
             dataloaders.append(DataLoader(self.icassp_val_set, **dl_kwargs))
         return dataloaders
