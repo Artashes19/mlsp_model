@@ -1,0 +1,19 @@
+resize: [256, 256]
+normalize: true
+
+# Dataset root (expects train/Inputs/Task_2_ICASSP, train/Outputs/Task_2_ICASSP)
+# Set to the dataset base path on the A6000 server
+data_root: /auto/home/artashes/data
+
+# Split
+val_ratio: 0.2
+seed: 1337
+split_mode: hash
+
+# Metrics scaling
+metric_bit_depth: 8
+y_db_min: 0.0
+y_db_max: 160.0
+
+
+

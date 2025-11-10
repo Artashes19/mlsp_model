@@ -165,8 +165,8 @@ x → LN → EfficientAttention(dim, heads)
 
 #### 4.3.1 EfficientAttention
 - **Projections:** Q, K, V via **1×1 conv** to `dim`, then **depthwise 3×3** on Q and K to inject locality.
-- **Affinity:** standard scaled dot‑product attention across spatial tokens (reshape to [B, HW, Hn, Ch] or [B, Hn, HW, Ch]).
-- **Complexity reduction:** pointwise + depthwise keep FLOPs/memory manageable at high resolution.
+- **Affinity:** windowed spatial scaled dot‑product attention over a fixed `K×K` neighborhood per pixel (reshape to per‑pixel queries and `K×K` key/value patches).
+- **Complexity:** linear in pixels, `O(HW·K²)` (with small constant `K²`, e.g., 7×7), rather than global `O((HW)²)`.
 
 _Pseudocode (shape‑aware):_
 ```python
@@ -175,7 +175,7 @@ def efficient_attention(x, heads, dim):
     Q = dw3x3(conv1x1_q(x))  # [B, Cq, H, W]
     K = dw3x3(conv1x1_k(x))  # [B, Ck, H, W]
     V = conv1x1_v(x)         # [B, Cv, H, W]
-    # reshape: [B, heads, HW, C_head], scale, attn, and fold back to [B, dim, H, W]
+    # per‑pixel: unfold K×K patches around each location, compute softmax(q·k/√C_head) over K², and fold back to [B, dim, H, W]
     ...
 ```
 
@@ -214,7 +214,7 @@ def gdfn(x, expand=2.66):
 - **Refinement stage (optional):** several blocks at full resolution after the decoder to polish details.
 
 ### 5.2 Radio adaptation
-- Change input conv to **`in_ch=4`** and final head to **`out_ch=1`**.
+- Change input conv to **`in_ch=3`** and final head to **`out_ch=1`**.
 - Keep MDTA/GDFN and pixel‑(un)shuffle as in the original design.
 
 ### 5.3 MDTA (conceptual)

@@ -6,7 +6,9 @@ depths: [4, 6, 6, 8]
 heads: [4, 4, 8, 8]
 expand: 2.66
 use_checkpoint: true
-
+ln_eps: 1.0e-5
+residual_scale: 0.5
+apply_dw_on_v: false
 
 
 

@@ -1,10 +1,10 @@
 optimizer: Adam
-lr: 1e-4
-epochs: 35
+lr: 4e-4
+epochs: 3
 batch_size: 2
-scheduler: cosine
+scheduler: none
 min_lr: 1e-5
-warmup_ratio: 0.05
+warmup_ratio: 0.0
 grad_clip: 1.0
 num_workers: 4
 pin_memory: true
@@ -12,7 +12,6 @@ seed: 42
 amp: true
 grad_accum_steps: 4
 validate_every_steps: 5
-
 
 
 

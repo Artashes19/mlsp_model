@@ -1,0 +1,21 @@
+resize: [64, 64]
+normalize: true
+
+# Dataset roots and task selection
+data_root: /auto/home/artashes/data
+task: Task_2
+
+# Metrics scaling
+metric_bit_depth: 8
+y_db_min: 0.0
+y_db_max: 160.0
+
+# Validation split (building-disjoint)
+val_ratio: 0.2
+seed: 42
+split_mode: building
+train_buildings: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+val_buildings: [21, 22, 23, 24, 25]
+
+
+
