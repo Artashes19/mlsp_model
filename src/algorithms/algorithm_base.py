@@ -200,19 +200,12 @@ class AlgorithmBase(pl.LightningModule):
         self.training_step_outputs.clear()
     
     def on_validation_epoch_end(self) -> None:
-        # Get validation names from datamodule if available
-        validation_names = []
-        if hasattr(self, 'trainer') and hasattr(self.trainer, 'datamodule') and self.trainer.datamodule:
-            validation_names = getattr(self.trainer.datamodule, 'validation_names', [])
-
-        for validation_num in self.validation_step_outputs:
-            outputs = self.validation_step_outputs[validation_num]
-            # Use configured name if available, otherwise use default naming
-            if validation_num < len(validation_names) and validation_names[validation_num]:
-                split_name = validation_names[validation_num]
-            else:
-                split_name = f"val_{validation_num}"
-            self._epoch_end(outputs, split_name=split_name)
+        # Always expose a single validation metric namespace: 'val'
+        # If multiple validation loaders exist, only the first is used for tracked metrics.
+        if len(self.validation_step_outputs) > 0:
+            first_idx = sorted(self.validation_step_outputs.keys())[0]
+            outputs = self.validation_step_outputs[first_idx]
+            self._epoch_end(outputs, split_name="val")
 
         self.validation_step_outputs.clear()
     

@@ -119,9 +119,9 @@ def main(config: DictConfig) -> None:
                         tgt = ""
                     if "ModelCheckpoint" in tgt:
                         cfg_e.callbacks[cb_name].dirpath = ckpt_dir
-                # Expect metric name based on dataloader label for the primary checkpoint
+                # Track the canonical 'val_loss' metric
                 if "model_checkpoint_0" in cfg_e.callbacks:
-                    cfg_e.callbacks.model_checkpoint_0.monitor = "real_val_mse"
+                    cfg_e.callbacks.model_checkpoint_0.monitor = "val_loss"
             if "trainer" in cfg_e:
                 cfg_e.trainer.default_root_dir = os.path.join(exp_dir, name, "pl")
                 if fast_dev:
