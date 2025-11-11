@@ -47,4 +47,8 @@ train_buildings: null
 val_buildings_override: null
 use_synthetic_train: False
 synthetic_dir: ""
-manifest_path: "/auto/home/xoren/mlsp_wair_d/data/synthetic_train/samples.csv"
+manifest_path: null
+real_manifest_path: null
+synthetic_manifest_path: null
+icassp_limit_per_building: null
+synthetic_limit: null

@@ -13,6 +13,7 @@ from src.datamodules.wair_d_base import WAIRDBaseDatamodule
 from src.utils.mlsp.augmentations import AugmentationPipeline, GeometricAugmentation
 from src.utils.mlsp.types import RadarSampleInputs
 from src.data_exploration.generate_manifest import generate_manifest
+from src.data_exploration.icassp_manifest import ensure_icassp_manifest  # import for type reference, generation is called in orchestrator
 
 log = logging.getLogger(__name__)
 
@@ -74,12 +75,21 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.val_buildings_override: Optional[list[int]] = kwargs.pop("val_buildings_override", None)
         self.use_synthetic_train: bool = bool(kwargs.pop("use_synthetic_train", False))
         self.synthetic_dir: Optional[str] = kwargs.pop("synthetic_dir", None)
+        # Deprecated fallback; do not use implicit manifest_path
         self.manifest_path: Optional[str] = kwargs.pop("manifest_path", None)
+        # Explicit manifest paths (set by orchestrator)
+        self.real_manifest_path: Optional[str] = kwargs.pop("real_manifest_path", None)
+        self.synthetic_manifest_path: Optional[str] = kwargs.pop("synthetic_manifest_path", None)
+        # Debug/limit knobs (explicit only; default off)
+        _lpb = kwargs.pop("icassp_limit_per_building", None)
+        self.icassp_limit_per_building: Optional[int] = int(_lpb) if (_lpb is not None and str(_lpb).strip() != "") else None
+        _slim = kwargs.pop("synthetic_limit", None)
+        self.synthetic_limit: Optional[int] = int(_slim) if (_slim is not None and str(_slim).strip() != "") else None
         
         # Always use dense ground truth outputs for ICASSP train-style data (Task_2_ICASSP layout)
         # Real dataset: always use ICASSP layout scan; do not use manifest here
         self.inputs_list = self.get_inputs_list(
-            data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path=None
+            data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path=self.real_manifest_path
         )
         self.kaggle_task1_list = self.get_inputs_list(kaggle_task1_path, kaggle_freqs_mhz, [1], 0.5, "Task_1_ICASSP") if kaggle_task1_path else []
         self.kaggle_task2_list = self.get_inputs_list(kaggle_task2_path, kaggle_freqs_mhz, [1, 2], task="Task_2_ICASSP") if kaggle_task2_path else []
@@ -119,9 +129,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 with open(manifest_path, "r", newline="") as fp:
                     reader = csv.DictReader(fp)
                     for row in reader:
-                        npz_path = row.get("npz_file")
-                        json_path = row.get("json_file")
-                        sample_name = row.get("file_name") or (os.path.splitext(os.path.basename(npz_path))[0] if npz_path else None)
+                        # Common fields
                         try:
                             b = int(row.get("building", 0))
                             ant = int(row.get("antenna", 0))
@@ -146,17 +154,40 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             except Exception:
                                 f_idx_internal = 1
                         try:
-                            sp = int(row.get("sample_index", 0))
+                            sp = int(row.get("sample_index", row.get("sampling_position", 0)))
                         except Exception:
                             sp = 0
                         # Filter by requested frequencies if provided
                         if freqs and f_idx_internal not in freqs:
                             continue
-                        if npz_path and json_path and sample_name:
+                        # Synthetic row
+                        npz_path = row.get("npz_file")
+                        json_path = row.get("json_file")
+                        if npz_path and json_path:
+                            sample_name = row.get("file_name") or (os.path.splitext(os.path.basename(npz_path))[0] if npz_path else None)
                             inputs_list.append({
                                 "file_name": sample_name,
                                 "npz_file": npz_path,
                                 "json_file": json_path,
+                                "ids": (b, ant, f_idx_internal, sp),
+                            })
+                            continue
+                        # ICASSP row
+                        input_file = row.get("input_file")
+                        output_file = row.get("output_file")
+                        position_file = row.get("position_file")
+                        radiation_pattern_file = row.get("radiation_pattern_file")
+                        if input_file and position_file and radiation_pattern_file:
+                            sample_name = row.get("file_name") or os.path.basename(input_file)
+                            freq_mhz = float(row.get("freq_MHz", freqs_mhz[f_idx_internal - 1] if f_idx_internal else freqs_mhz[0]))
+                            inputs_list.append({
+                                "file_name": sample_name,
+                                "freq_MHz": freq_mhz,
+                                "input_file": input_file,
+                                "output_file": output_file or "",
+                                "position_file": position_file,
+                                "radiation_pattern_file": radiation_pattern_file,
+                                "sampling_position": sp,
                                 "ids": (b, ant, f_idx_internal, sp),
                             })
                 return inputs_list
@@ -266,6 +297,34 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         return train_inputs, val_inputs
     
     def prepare_data(self) -> None:
+        def _ids_of(obj):
+            return getattr(obj, 'ids', obj.get('ids') if isinstance(obj, dict) else None)
+        def _sort_key(obj):
+            ids = _ids_of(obj)
+            if ids is None:
+                # fallback to file_name for deterministic order
+                try:
+                    return (str(getattr(obj, 'file_name', '')),)
+                except Exception:
+                    return ('',)
+            return tuple(ids)
+        def _limit_per_building(inputs: list, limit: int) -> list:
+            if not inputs or limit is None or limit <= 0:
+                return inputs
+            # Deterministic: sort by ids then keep first N per building
+            sorted_inputs = sorted(inputs, key=_sort_key)
+            seen: dict[int, int] = {}
+            kept = []
+            for it in sorted_inputs:
+                ids = _ids_of(it)
+                b = ids[0] if ids is not None else None
+                if b is None:
+                    continue
+                c = seen.get(b, 0)
+                if c < limit:
+                    kept.append(it)
+                    seen[b] = c + 1
+            return kept
         def _dataset_kwargs_filter(src_kwargs: dict) -> dict:
             allowed = {
                 "mlsp_task1",
@@ -294,10 +353,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
 
             # Determine source for training inputs
             if self.use_synthetic_train and self.synthetic_dir:
-                synth_manifest = os.path.join(self.synthetic_dir, "samples.csv")
+                synth_manifest = self.synthetic_manifest_path or os.path.join(self.synthetic_dir, "samples.csv")
                 train_source_list = self.get_inputs_list(
                     self.synthetic_dir, self.freqs_mhz, self.freqs, task="Task_2_ICASSP", manifest_path=synth_manifest
                 )
+                if self.synthetic_limit is not None and self.synthetic_limit > 0:
+                    # Deterministic cap for synthetic
+                    train_source_list = sorted(train_source_list, key=_sort_key)[: self.synthetic_limit]
                 # Validation is always from real data
                 _, val_inputs = self.split_data_task2(
                     self.inputs_list,
@@ -323,12 +385,15 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                         split_save_path=split_save_path if not self.val_buildings_override else None,
                         seed=self.train_subset_seed,
                     )
+                # Optional deterministic per-building cap for real training
+                if self.icassp_limit_per_building is not None and self.icassp_limit_per_building > 0:
+                    train_inputs = _limit_per_building(train_inputs, self.icassp_limit_per_building)
 
             # Optional training building whitelist (real training only)
             if not self.use_synthetic_train and self.train_buildings:
                 tb = set(int(x) for x in self.train_buildings)
                 def _get_b(obj):
-                    ids = getattr(obj, 'ids', obj.get('ids') if isinstance(obj, dict) else None)
+                    ids = _ids_of(obj)
                     return ids[0] if ids is not None else None
                 train_inputs = [f for f in train_inputs if _get_b(f) in tb]
             # Optional deterministic train subset
