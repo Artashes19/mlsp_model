@@ -7,7 +7,7 @@ import warnings
 import hydra
 import torch
 from dotenv import load_dotenv
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 from pytorch_lightning import seed_everything
 
 log = logging.getLogger(__name__)
@@ -62,8 +62,13 @@ def main(config: DictConfig) -> None:
         warnings.filterwarnings("ignore")
     
     # Orchestrated multi-experiment run
-    exps = str(config.get("exps", "") or "").strip()
-    if exps:
+    raw_exps = config.get("exps", "")
+    exp_list = []
+    if isinstance(raw_exps, (list, tuple)) or isinstance(raw_exps, ListConfig):
+        exp_list = [str(x).strip() for x in raw_exps if str(x).strip()]
+    elif isinstance(raw_exps, str):
+        exp_list = [s.strip() for s in raw_exps.split(',') if s.strip()]
+    if exp_list:
         # Resolve or create exp_dir
         experiments_root = config.get("experiments_root") or "experiments"
         exp_dir = config.get("exp_dir") or None
@@ -85,7 +90,9 @@ def main(config: DictConfig) -> None:
             return OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
 
         e3_best_ckpt: str | None = None
-        for name in [s.strip() for s in exps.split(',') if s.strip()]:
+        # Fast-dev toggle
+        fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
+        for name in exp_list:
             cfg_e = clone_cfg(config)
             # Common overrides
             # datamodule
@@ -100,8 +107,12 @@ def main(config: DictConfig) -> None:
                 cfg_e.callbacks.model_checkpoint_0.monitor = "real_val_mse"
             if "trainer" in cfg_e:
                 cfg_e.trainer.default_root_dir = os.path.join(exp_dir, name, "pl")
+                if fast_dev:
+                    cfg_e.trainer.max_epochs = 1
+                    cfg_e.trainer.limit_train_batches = 4
+                    cfg_e.trainer.limit_val_batches = 2
             # One validation stream name
-            cfg_e.datamodule.validation_names = ["real_val"]
+            # Keep datamodule-configured names
 
             # Data dirs
             data_cfg = cfg_e.get("data", {})

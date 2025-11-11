@@ -501,6 +501,11 @@ class MLSP(AlgorithmBase):
         # compute means of metrics
         for k in outputs[0].keys():
             combined_general_metrics[k] /= len(outputs)
+
+        # derive RMSE from MSE (tensors throughout in this codebase)
+        if "mse" in combined_general_metrics:
+            import torch as _torch
+            combined_general_metrics["rmse"] = _torch.sqrt(combined_general_metrics["mse"])    
         
         # merge all
         epoch_metrics_sep = combined_general_metrics

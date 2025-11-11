@@ -34,6 +34,9 @@ data:
   real_dir: ${datamodule.data_dir}
   synthetic_dir: ""
 
+# Developer convenience: cap training for quick smoke tests
+fast_dev: false
+
 hydra:
   run:
     dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}

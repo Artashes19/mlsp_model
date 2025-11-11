@@ -77,8 +77,9 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.manifest_path: Optional[str] = kwargs.pop("manifest_path", None)
         
         # Always use dense ground truth outputs for ICASSP train-style data (Task_2_ICASSP layout)
+        # Real dataset: always use ICASSP layout scan; do not use manifest here
         self.inputs_list = self.get_inputs_list(
-            data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path=self.manifest_path
+            data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path=None
         )
         self.kaggle_task1_list = self.get_inputs_list(kaggle_task1_path, kaggle_freqs_mhz, [1], 0.5, "Task_1_ICASSP") if kaggle_task1_path else []
         self.kaggle_task2_list = self.get_inputs_list(kaggle_task2_path, kaggle_freqs_mhz, [1, 2], task="Task_2_ICASSP") if kaggle_task2_path else []
@@ -197,65 +198,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             
                             inputs_list.append(radar_sample_inputs)
         
-        # Synthetic dataset fallback: scan for per-sample NPZ+JSON pairs
-        if not inputs_list and os.path.isdir(str(data_dir)):
-            try:
-                for root, dirs, files in os.walk(data_dir):
-                    npz_files = [f for f in files if f.endswith('.npz')]
-                    for npz in npz_files:
-                        sample_name = os.path.splitext(npz)[0]
-                        json_file = os.path.join(root, sample_name + '.json')
-                        if not os.path.exists(json_file):
-                            continue
-                        npz_path = os.path.join(root, npz)
-                        # Parse metadata for ids and optional filtering
-                        try:
-                            with open(json_file, 'r') as fp:
-                                meta = __import__('json').load(fp)
-                            ids = meta.get('ids', {})
-                            b = int(ids.get('building', 0))
-                            ant = int(ids.get('antenna', 0))
-                            # Synthetic data may use 0-based frequency_index (0,1,2)
-                            f_idx_raw = ids.get('frequency_index') if isinstance(ids, dict) and 'frequency_index' in ids else None
-                            f_idx_internal = None
-                            if f_idx_raw is not None:
-                                try:
-                                    f_idx_raw = int(f_idx_raw)
-                                    if f_idx_raw in (0, 1, 2):
-                                        # Map 0-based [0,1,2] -> 1-based [1,2,3] for internal filtering/ids
-                                        f_idx_internal = f_idx_raw + 1
-                                    else:
-                                        f_idx_internal = f_idx_raw
-                                except Exception:
-                                    f_idx_internal = None
-                            if f_idx_internal is None:
-                                # Infer from frequency_MHz to nearest freqs_mhz index (1-based)
-                                try:
-                                    freq_mhz_val = float(meta.get('frequency_MHz'))
-                                    if freqs_mhz and len(freqs_mhz) > 0:
-                                        diffs = [abs(freq_mhz_val - float(m)) for m in freqs_mhz]
-                                        nearest = int(min(range(len(diffs)), key=lambda i: diffs[i]))
-                                        f_idx_internal = 1 + nearest
-                                except Exception:
-                                    # Fallback to 1 if all else fails
-                                    f_idx_internal = 1
-                            sp = int(ids.get('sample_index', 0))
-                            # Filter by requested frequency indices if provided (expects 1-based indices)
-                            if freqs and f_idx_internal not in freqs:
-                                continue
-                            ids_tuple = (b, ant, f_idx_internal, sp)
-                        except Exception:
-                            ids_tuple = (0, 0, 1, 0)
-                        # Minimal dict for dataset reader
-                        inputs_list.append({
-                            "file_name": sample_name,
-                            "npz_file": npz_path,
-                            "json_file": json_file,
-                            "ids": ids_tuple,
-                        })
-            except Exception:
-                pass
-        
         return inputs_list
     
     @staticmethod
@@ -350,7 +292,10 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
 
             # Determine source for training inputs
             if self.use_synthetic_train and self.synthetic_dir:
-                train_source_list = self.get_inputs_list(self.synthetic_dir, self.freqs_mhz, self.freqs, task="Task_2_ICASSP")
+                synth_manifest = os.path.join(self.synthetic_dir, "samples.csv")
+                train_source_list = self.get_inputs_list(
+                    self.synthetic_dir, self.freqs_mhz, self.freqs, task="Task_2_ICASSP", manifest_path=synth_manifest
+                )
                 # Validation is always from real data
                 _, val_inputs = self.split_data_task2(
                     self.inputs_list,

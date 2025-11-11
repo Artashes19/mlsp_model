@@ -22,7 +22,7 @@ kaggle_freqs_mhz: [ 868, 2400 ]
 icassp_train_path: ""
 
 # Validation dataloader names for AIM logging (in order of creation)
-validation_names: ["synthetic_val", "icassp_val"]
+validation_names: ["real_val", "icassp_val"]
 
 # ICASSP validation subsampling ratio (0.0-1.0) for faster validation
 icassp_val_subsample_ratio: 0.25

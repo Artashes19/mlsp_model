@@ -1,4 +1,7 @@
 import logging
+import os
+import json
+import time
 from typing import Iterable, Optional
 
 import hydra
@@ -17,6 +20,7 @@ log = logging.getLogger(__name__)
 
 def train(config: DictConfig) -> str | None:
     epoch_counter = EpochCounter()
+    start_time = time.time()
     gpus = config.trainer.devices
     multi_gpu = gpus == -1 or (isinstance(gpus, Iterable) and len(gpus) > 1) or (isinstance(gpus, int) and gpus > 1)
     
@@ -82,4 +86,30 @@ def train(config: DictConfig) -> str | None:
                 break
     except Exception:
         best_path = None
+
+    # Persist simple results.json into experiment dir if default_root_dir hints at it
+    try:
+        duration_sec = time.time() - start_time
+        # Collect final callback metrics as floats
+        metrics = {}
+        for k, v in (trainer.callback_metrics or {}).items():
+            try:
+                metrics[k] = float(v.detach().cpu()) if hasattr(v, 'detach') else float(v)
+            except Exception:
+                pass
+        # Determine destination: parent of default_root_dir if endswith '/pl', else default_root_dir
+        droot = getattr(trainer, 'default_root_dir', None) or None
+        out_dir = None
+        if isinstance(droot, str) and droot:
+            parent = os.path.dirname(droot.rstrip('/'))
+            out_dir = parent if os.path.basename(droot.rstrip('/')) == 'pl' else droot
+            os.makedirs(out_dir, exist_ok=True)
+            with open(os.path.join(out_dir, 'results.json'), 'w', encoding='utf-8') as fp:
+                json.dump({
+                    'best_checkpoint': best_path,
+                    'duration_sec': duration_sec,
+                    'metrics': metrics,
+                }, fp, indent=2)
+    except Exception:
+        pass
     return best_path

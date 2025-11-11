@@ -102,8 +102,8 @@ class PathlossDataset(Dataset):
         with open(json_path, "r") as f:
             meta = json.load(f)
 
-        # Enforce presence of all required fields; fail hard if any missing
-        required_keys = ["reflectance", "transmittance", "mask", "pathloss"]
+        # Enforce presence of required fields; mask optional, pathloss required for supervision
+        required_keys = ["reflectance", "transmittance", "pathloss"]
         missing = [k for k in required_keys if k not in data]
         if missing:
             raise RuntimeError(
@@ -111,7 +111,7 @@ class PathlossDataset(Dataset):
             )
         reflectance = data["reflectance"].astype(np.float32)
         transmittance = data["transmittance"].astype(np.float32)
-        mask_np = np.ones_like(reflectance).astype(np.float32)
+        mask_np = (data["mask"].astype(np.float32) if "mask" in data else np.ones_like(reflectance, dtype=np.float32))
         pathloss = data["pathloss"].astype(np.float32)
         # Validate shapes match
         H, W = reflectance.shape
