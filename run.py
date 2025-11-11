@@ -128,17 +128,20 @@ def main(config: DictConfig) -> None:
                     cfg_e.trainer.max_epochs = 1
                     cfg_e.trainer.limit_train_batches = 4
                     cfg_e.trainer.limit_val_batches = 2
-            # One validation stream name
-            # Keep datamodule-configured names
-
-            # Data dirs
-            data_cfg = cfg_e.get("data", {})
-            real_dir = data_cfg.get("real_dir") or cfg_e.datamodule.get("data_dir")
-            synth_dir = data_cfg.get("synthetic_dir") or cfg_e.datamodule.get("synthetic_dir")
-            if real_dir:
-                cfg_e.datamodule.data_dir = real_dir
-            if synth_dir:
-                cfg_e.datamodule.synthetic_dir = synth_dir
+            # Enforce required data roots (no fallbacks)
+            data_dir_req = cfg_e.datamodule.get("data_dir")
+            data_dir_req = os.path.expanduser(str(data_dir_req)) if data_dir_req is not None else ""
+            if not data_dir_req or not os.path.isdir(data_dir_req):
+                raise RuntimeError(
+                    f"datamodule.data_dir must point to an existing ICASSP root. Got: {cfg_e.datamodule.get('data_dir')}"
+                )
+            if name == "e2":
+                synth_dir_req = cfg_e.datamodule.get("synthetic_dir")
+                synth_dir_req = os.path.expanduser(str(synth_dir_req)) if synth_dir_req is not None else ""
+                if not synth_dir_req or not os.path.isdir(synth_dir_req):
+                    raise RuntimeError(
+                        f"datamodule.synthetic_dir must point to an existing synthetic root for e2. Got: {cfg_e.datamodule.get('synthetic_dir')}"
+                    )
 
             if name == "e0":
                 # Train on train_small (ICASSR real only)
@@ -239,6 +242,21 @@ def main(config: DictConfig) -> None:
                 config.datamodule.train_buildings = train_buildings
             except Exception:
                 pass
+        # Enforce required data roots (no fallbacks)
+        data_dir_req = config.datamodule.get("data_dir")
+        data_dir_req = os.path.expanduser(str(data_dir_req)) if data_dir_req is not None else ""
+        if not data_dir_req or not os.path.isdir(data_dir_req):
+            raise RuntimeError(
+                f"datamodule.data_dir must point to an existing ICASSP root. Got: {config.datamodule.get('data_dir')}"
+            )
+        use_synth = bool(config.datamodule.get("use_synthetic_train", False))
+        if use_synth:
+            synth_dir_req = config.datamodule.get("synthetic_dir")
+            synth_dir_req = os.path.expanduser(str(synth_dir_req)) if synth_dir_req is not None else ""
+            if not synth_dir_req or not os.path.isdir(synth_dir_req):
+                raise RuntimeError(
+                    f"datamodule.synthetic_dir must point to an existing synthetic root when use_synthetic_train=True. Got: {config.datamodule.get('synthetic_dir')}"
+                )
         # If requested finetune but no checkpoint, hint to run e2 under the same experiments set
         try:
             ft = config.algorithm.get("finetune", {}) or {}

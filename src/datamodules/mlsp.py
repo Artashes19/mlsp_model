@@ -101,7 +101,9 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
     def get_inputs_list(data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path: Optional[str] = None):
         inputs_list = []
         if not data_dir:
-            return inputs_list
+            raise RuntimeError("data_dir is required for dataset discovery but was empty or None.")
+        if not os.path.isdir(data_dir):
+            raise RuntimeError(f"data_dir does not exist or is not a directory: {data_dir}")
 
         # Ensure manifest exists and is fresh; the helper handles signatures/regen
         if manifest_path:
