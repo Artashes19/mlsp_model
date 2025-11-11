@@ -25,6 +25,7 @@ def main(config: DictConfig) -> None:
     from src import utils
     from src.train import train
     from src.experiments.splits import (
+        ensure_experiments_dir,
         ensure_exp_dir,
         generate_building_split,
         read_split_json,
@@ -69,18 +70,25 @@ def main(config: DictConfig) -> None:
     elif isinstance(raw_exps, str):
         exp_list = [s.strip() for s in raw_exps.split(',') if s.strip()]
     if exp_list:
-        # Resolve or create exp_dir
+        # Resolve experiments root and exp_dir with strict rules:
+        # - If exp_dir IS PROVIDED: it must exist and contain split.json, else crash.
+        # - If exp_dir IS NOT PROVIDED: create a NEW timestamped dir and create split.json there.
         experiments_root = config.get("experiments_root") or "experiments"
-        exp_dir = config.get("exp_dir") or None
-        exp_dir = ensure_exp_dir(exp_dir, root_dir=experiments_root)
-
-        # Ensure split.json exists (sizes from config.split if present)
-        split = read_split_json(exp_dir)
-        if split is None:
+        root_abs = ensure_experiments_dir(experiments_root)
+        exp_dir_opt = config.get("exp_dir")
+        if exp_dir_opt:
+            exp_dir = exp_dir_opt if os.path.isabs(exp_dir_opt) else os.path.join(root_abs, exp_dir_opt)
+            if not os.path.isdir(exp_dir):
+                raise RuntimeError(f"Experiment directory does not exist: {exp_dir}. Provide a valid exp_dir or omit it to create a new experiments set.")
+            split = read_split_json(exp_dir)
+            if split is None:
+                raise RuntimeError(f"Missing split.json in {exp_dir}. This experiments set is invalid. Create a new experiments set or generate the split explicitly.")
+        else:
+            # Create a NEW experiments set dir and write a split
+            exp_dir = ensure_exp_dir(None, root_dir=root_abs)
             split_cfg = config.get("split") or {}
             tsn = int(split_cfg.get("train_small_n", 7))
             tfn = int(split_cfg.get("train_full_n", 20))
-            # validation_n is implied as n_buildings - train_full_n
             split = generate_building_split(seed=int(config.seed), n_buildings=25, train_small_n=tsn, train_full_n=tfn)
             write_split_json(exp_dir, split)
 
@@ -89,7 +97,7 @@ def main(config: DictConfig) -> None:
         def clone_cfg(cfg: DictConfig) -> DictConfig:
             return OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
 
-        e3_best_ckpt: str | None = None
+        e2_best_ckpt: str | None = None
         # Fast-dev toggle
         fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
         for name in exp_list:
@@ -101,10 +109,19 @@ def main(config: DictConfig) -> None:
             if "loggers" in cfg_e and "aim" in cfg_e.loggers:
                 cfg_e.loggers.aim.repo = os.path.join(exp_dir, "aim")
                 cfg_e.loggers.aim.experiment = name
-            if "callbacks" in cfg_e and "model_checkpoint_0" in cfg_e.callbacks:
-                cfg_e.callbacks.model_checkpoint_0.dirpath = os.path.join(exp_dir, name, "checkpoints")
-                # Expect metric name based on dataloader label
-                cfg_e.callbacks.model_checkpoint_0.monitor = "real_val_mse"
+            # Normalize checkpoint dirs for all ModelCheckpoint callbacks
+            if "callbacks" in cfg_e:
+                ckpt_dir = os.path.join(exp_dir, name, "checkpoints")
+                for cb_name, cb_conf in list(cfg_e.callbacks.items()):
+                    try:
+                        tgt = str(cb_conf.get("_target_", ""))
+                    except Exception:
+                        tgt = ""
+                    if "ModelCheckpoint" in tgt:
+                        cfg_e.callbacks[cb_name].dirpath = ckpt_dir
+                # Expect metric name based on dataloader label for the primary checkpoint
+                if "model_checkpoint_0" in cfg_e.callbacks:
+                    cfg_e.callbacks.model_checkpoint_0.monitor = "real_val_mse"
             if "trainer" in cfg_e:
                 cfg_e.trainer.default_root_dir = os.path.join(exp_dir, name, "pl")
                 if fast_dev:
@@ -123,38 +140,57 @@ def main(config: DictConfig) -> None:
             if synth_dir:
                 cfg_e.datamodule.synthetic_dir = synth_dir
 
-            if name == "e1":
+            if name == "e0":
+                # Train on train_small (ICASSR real only)
                 cfg_e.datamodule.use_synthetic_train = False
                 cfg_e.datamodule.train_buildings = list(split.train_small)
-                e3_best_ckpt = train(cfg_e)
-            elif name == "e2":
+                _ = train(cfg_e)
+            elif name == "e1":
+                # Train on train_full (ICASSR real only)
                 cfg_e.datamodule.use_synthetic_train = False
                 cfg_e.datamodule.train_buildings = list(split.train_full)
-                e3_best_ckpt = train(cfg_e)
-            elif name == "e3":
+                _ = train(cfg_e)
+            elif name == "e2":
+                # Pretrain on synthetic only; validation on real held-out buildings
                 cfg_e.datamodule.use_synthetic_train = True
                 cfg_e.datamodule.train_buildings = None
-                e3_best_ckpt = train(cfg_e)
-            elif name == "e4":
-                # Finetuning on train_small using e3 best checkpoint
-                if not e3_best_ckpt:
-                    # Try to find previous e3 best checkpoint under exp_dir
-                    ckpt_dir = os.path.join(exp_dir, "e3", "checkpoints")
+                _ = train(cfg_e)
+                # Try to capture the best checkpoint path for downstream e3
+                ckpt_dir = os.path.join(exp_dir, "e2", "checkpoints")
+                e2_best_ckpt = None
+                if os.path.isdir(ckpt_dir):
+                    try:
+                        files = [os.path.join(ckpt_dir, f) for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
+                        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                        e2_best_ckpt = files[0] if files else None
+                    except Exception:
+                        e2_best_ckpt = None
+            elif name == "e3":
+                # Finetune on train_small using e2 checkpoints
+                ckpt_dir = os.path.join(exp_dir, "e2", "checkpoints")
+                # If not recorded from this run, try filesystem
+                if not e2_best_ckpt:
                     if os.path.isdir(ckpt_dir):
-                        # pick the most recent checkpoint
                         try:
                             files = [os.path.join(ckpt_dir, f) for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
                             files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-                            e3_best_ckpt = files[0] if files else None
+                            e2_best_ckpt = files[0] if files else None
                         except Exception:
-                            e3_best_ckpt = None
+                            e2_best_ckpt = None
+                if not e2_best_ckpt:
+                    cmd = f"timeout 60 python3 run.py exps=e2 exp_dir={os.path.basename(exp_dir)}"
+                    raise RuntimeError(
+                        f"e3 requires a pretrained checkpoint from e2.\n"
+                        f"Cause: no .ckpt found under {ckpt_dir}\n"
+                        f"Run this first:\n  {cmd}"
+                    )
                 cfg_e.datamodule.use_synthetic_train = False
                 cfg_e.datamodule.train_buildings = list(split.train_small)
                 # Finetune knobs: enable weights-only load
                 if "algorithm" in cfg_e:
                     ft = cfg_e.algorithm.get("finetune", {}) or {}
                     ft["enable"] = True
-                    ft["ckpt_path"] = e3_best_ckpt
+                    ft["ckpt_path"] = e2_best_ckpt
                     cfg_e.algorithm.finetune = ft
                 _ = train(cfg_e)
             else:
@@ -163,6 +199,58 @@ def main(config: DictConfig) -> None:
 
     # Single run, original behavior
     if config.name == "train":
+        # Strict single-run handling mirroring orchestrator:
+        # - If exp_dir provided: require existing split.json.
+        # - If not provided: create a NEW experiments set and create split.json.
+        # - If finetune is enabled but no ckpt_path is provided, raise an instructive error.
+        experiments_root = config.get("experiments_root") or "experiments"
+        root_abs = ensure_experiments_dir(experiments_root)
+        exp_dir_opt = config.get("exp_dir")
+        if exp_dir_opt:
+            exp_dir_single = exp_dir_opt if os.path.isabs(exp_dir_opt) else os.path.join(root_abs, exp_dir_opt)
+            if not os.path.isdir(exp_dir_single):
+                raise RuntimeError(f"Experiment directory does not exist: {exp_dir_single}. Provide a valid exp_dir or omit it to create a new experiments set.")
+            split_single = read_split_json(exp_dir_single)
+            if split_single is None:
+                raise RuntimeError(f"Missing split.json in {exp_dir_single}. This experiments set is invalid. Create a new experiments set or generate the split explicitly.")
+        else:
+            exp_dir_single = ensure_exp_dir(None, root_dir=root_abs)
+            split_cfg = config.get("split") or {}
+            tsn = int(split_cfg.get("train_small_n", 7))
+            tfn = int(split_cfg.get("train_full_n", 20))
+            split_single = generate_building_split(
+                seed=int(config.seed), n_buildings=25, train_small_n=tsn, train_full_n=tfn
+            )
+            write_split_json(exp_dir_single, split_single)
+        # Enforce validation to be exactly the held-out 5 buildings
+        try:
+            config.datamodule.val_buildings_override = list(split_single.validation)
+        except Exception:
+            pass
+        # Optional: choose training buildings by declared split role
+        split_role = str(config.get("split_role", "")).lower()
+        train_buildings = None
+        if split_role in ("train_small", "small", "e0"):
+            train_buildings = list(split_single.train_small)
+        elif split_role in ("train_full", "full", "e1"):
+            train_buildings = list(split_single.train_full)
+        if train_buildings is not None:
+            try:
+                config.datamodule.train_buildings = train_buildings
+            except Exception:
+                pass
+        # If requested finetune but no checkpoint, hint to run e2 under the same experiments set
+        try:
+            ft = config.algorithm.get("finetune", {}) or {}
+            if bool(ft.get("enable", False)) and not ft.get("ckpt_path"):
+                cmd = f"timeout 60 python3 run.py exps=e2 exp_dir={os.path.basename(exp_dir_single)}"
+                raise RuntimeError(
+                    f"Finetune is enabled but no ckpt_path was provided.\n"
+                    f"Run the pretraining stage first:\n  {cmd}"
+                )
+        except Exception:
+            # If algorithm/finetune not present, nothing to enforce
+            pass
         return train(config)
 
 
