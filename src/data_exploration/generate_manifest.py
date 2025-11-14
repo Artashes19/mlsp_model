@@ -180,6 +180,115 @@ def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
     return -1
 
 
+# ===== ICASSP MANIFEST (general, signature-checked) =====
+
+def _icassp_expected_paths(root: str, task: str, b: int, ant: int, f: int, sp: int):
+    input_dir = os.path.join(root, f"Inputs/{task}")
+    output_dir = os.path.join(root, f"Outputs/{task}")
+    positions_dir = os.path.join(root, "Positions/")
+    radiation_patterns_dir = os.path.join(root, "Radiation_Patterns/")
+    input_file = os.path.join(input_dir, f"B{b}_Ant{ant}_f{f}_S{sp}.png")
+    output_file = os.path.join(output_dir, f"B{b}_Ant{ant}_f{f}_S{sp}.png")
+    position_file = os.path.join(positions_dir, f"Positions_B{b}_Ant{ant}_f{f}.csv")
+    radiation_pattern_file = os.path.join(radiation_patterns_dir, f"Ant{ant}_Pattern.csv")
+    return input_file, output_file, position_file, radiation_pattern_file
+
+
+def compute_icassp_signature(root: str) -> dict:
+    """Compute a simple signature of the ICASSP dataset layout."""
+    root_abs = os.path.abspath(os.path.expanduser(root))
+    h = hashlib.sha256()
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root_abs):
+        dirnames.sort()
+        filenames.sort()
+        h.update(dirpath.encode("utf-8"))
+        for f in filenames:
+            p = os.path.join(dirpath, f)
+            try:
+                st = os.stat(p)
+            except Exception:
+                continue
+            h.update(f.encode("utf-8"))
+            h.update(str(int(st.st_mtime)).encode("utf-8"))
+            h.update(str(int(st.st_size)).encode("utf-8"))
+            total += 1
+    return {"root": root_abs, "num_files": total, "sha256": h.hexdigest()}
+
+
+def generate_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], task: str = "Task_2_ICASSP") -> int:
+    """Scan ICASSP tree and write a complete manifest CSV. Returns number of rows written."""
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+    with open(out_csv, "w", newline="") as fp:
+        writer = csv.writer(fp)
+        writer.writerow([
+            "file_name",
+            "building",
+            "antenna",
+            "frequency_index",
+            "sample_index",
+            "freq_MHz",
+            "input_file",
+            "output_file",
+            "position_file",
+            "radiation_pattern_file",
+            "sampling_position",
+        ])
+        n = 0
+        for b in range(1, 26):
+            for ant in range(1, 3):
+                for f in range(1, 1 + len(freqs_mhz)):
+                    for sp in range(80):
+                        input_file, output_file, position_file, radiation = _icassp_expected_paths(root, task, b, ant, f, sp)
+                        if os.path.exists(input_file):
+                            file_name = os.path.basename(input_file)
+                            writer.writerow([
+                                file_name,
+                                b,
+                                ant,
+                                f,
+                                sp,
+                                float(freqs_mhz[f - 1]),
+                                input_file,
+                                output_file,
+                                position_file,
+                                radiation,
+                                sp,
+                            ])
+                            n += 1
+    # meta next to CSV
+    meta_path = out_csv + ".meta.json"
+    with open(meta_path, "w", encoding="utf-8") as mf:
+        json.dump(compute_icassp_signature(root), mf, indent=2)
+    return n
+
+
+def ensure_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], task: str = "Task_2_ICASSP") -> int:
+    """Ensure an up-to-date manifest exists for ICASSP root. Rebuild if signature changed."""
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+    meta_path = out_csv + ".meta.json"
+    try:
+        cur_sig = compute_icassp_signature(root)
+    except Exception:
+        # Force rebuild on failure
+        return generate_icassp_manifest(root, out_csv, freqs_mhz, task=task)
+    need = not os.path.exists(out_csv) or not os.path.exists(meta_path)
+    if not need:
+        try:
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                prev = json.load(mf)
+            if (
+                str(prev.get("root")) != str(cur_sig.get("root")) or
+                str(prev.get("sha256")) != str(cur_sig.get("sha256")) or
+                int(prev.get("num_files", -1)) != int(cur_sig.get("num_files", -2))
+            ):
+                need = True
+        except Exception:
+            need = True
+    if need:
+        return generate_icassp_manifest(root, out_csv, freqs_mhz, task=task)
+    return -1
+
 def main():
     parser = argparse.ArgumentParser(description="Generate samples.csv manifest for synthetic dataset")
     parser.add_argument('--root', required=True, help='Root directory of the synthetic dataset')

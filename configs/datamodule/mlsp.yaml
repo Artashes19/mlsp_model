@@ -4,7 +4,7 @@ name: icassp_task1
 batch_size: 16
 num_workers: 12
 
-data_dir: "/auto/home/xoren/mlsp_wair_d/data/synthetic_train"
+data_dir: ${oc.env:ICASSPS_ROOT}
 mlsp_task1: True
 inference: False
 
@@ -46,7 +46,7 @@ cardinal_rotation: False
 train_buildings: null
 val_buildings_override: null
 use_synthetic_train: False
-synthetic_dir: ""
+synthetic_dir: ${oc.env:SYNTH_ROOT}
 manifest_path: null
 real_manifest_path: null
 synthetic_manifest_path: null

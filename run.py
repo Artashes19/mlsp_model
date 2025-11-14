@@ -102,9 +102,52 @@ def main(config: DictConfig) -> None:
         fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
         for name in exp_list:
             cfg_e = clone_cfg(config)
+            # Merge experiment-specific config (required for trainer and any per-exp overrides)
+            exp_cfg_dir_opt = config.get("experiments_config_dir") or "configs/experiments"
+            repo_root = os.path.dirname(os.path.abspath(__file__))
+            exp_cfg_dir = exp_cfg_dir_opt if os.path.isabs(exp_cfg_dir_opt) else os.path.join(repo_root, exp_cfg_dir_opt)
+            exp_cfg_path = os.path.join(exp_cfg_dir, f"{name}.yaml")
+            if os.path.isfile(exp_cfg_path):
+                exp_cfg = OmegaConf.load(exp_cfg_path)
+                cfg_e = OmegaConf.merge(cfg_e, exp_cfg)
+            else:
+                # If no experiment config file, require trainer to be provided explicitly
+                if "trainer" not in cfg_e or not cfg_e.get("trainer"):
+                    raise RuntimeError(
+                        f"Missing experiment config for '{name}' at {exp_cfg_path} and no trainer provided.\n"
+                        f"Provide a per-experiment config file or pass trainer via CLI, e.g.:\n"
+                        f"  python run.py exps={name} trainer.max_epochs=2 trainer.devices=[0]"
+                    )
             # Common overrides
-            # datamodule
-            cfg_e.datamodule.val_buildings_override = list(split.validation)
+            # datamodule: resolve validation/train buildings from split by role keys if provided
+            try:
+                val_role = None
+                train_role = None
+                # Accept keys under datamodule or at root for convenience
+                if "datamodule" in cfg_e:
+                    val_role = cfg_e.datamodule.get("icassp_val_buildings", None)
+                    train_role = cfg_e.datamodule.get("icassp_train_buildings", None)
+                if val_role is None:
+                    val_role = cfg_e.get("icassp_val_buildings", None)
+                if train_role is None:
+                    train_role = cfg_e.get("icassp_train_buildings", None)
+                # Validation buildings
+                if val_role:
+                    grp = getattr(split, str(val_role), None)
+                    if grp is None:
+                        raise RuntimeError(f"Unknown split key '{val_role}' requested for validation. Expected one of: train_small, train_full, validation")
+                    cfg_e.datamodule.val_buildings_override = list(grp)
+                else:
+                    cfg_e.datamodule.val_buildings_override = list(split.validation)
+                # Training buildings (only for real-data training)
+                train_from_role: list[int] | None = None
+                if train_role:
+                    grp = getattr(split, str(train_role), None)
+                    if grp is None:
+                        raise RuntimeError(f"Unknown split key '{train_role}' requested for training. Expected one of: train_small, train_full, validation")
+                    train_from_role = list(grp)
+            except Exception as e:
+                raise
             # Logging and checkpoints
             if "loggers" in cfg_e and "aim" in cfg_e.loggers:
                 cfg_e.loggers.aim.repo = os.path.join(exp_dir, "aim")
@@ -146,12 +189,12 @@ def main(config: DictConfig) -> None:
             if name == "e0":
                 # Train on train_small (ICASSR real only)
                 cfg_e.datamodule.use_synthetic_train = False
-                cfg_e.datamodule.train_buildings = list(split.train_small)
+                cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(split.train_small)
                 _ = train(cfg_e)
             elif name == "e1":
                 # Train on train_full (ICASSR real only)
                 cfg_e.datamodule.use_synthetic_train = False
-                cfg_e.datamodule.train_buildings = list(split.train_full)
+                cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(split.train_full)
                 _ = train(cfg_e)
             elif name == "e2":
                 # Pretrain on synthetic only; validation on real held-out buildings
@@ -188,7 +231,7 @@ def main(config: DictConfig) -> None:
                         f"Run this first:\n  {cmd}"
                     )
                 cfg_e.datamodule.use_synthetic_train = False
-                cfg_e.datamodule.train_buildings = list(split.train_small)
+                cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(split.train_small)
                 # Finetune knobs: enable weights-only load
                 if "algorithm" in cfg_e:
                     ft = cfg_e.algorithm.get("finetune", {}) or {}
@@ -206,6 +249,12 @@ def main(config: DictConfig) -> None:
         # - If exp_dir provided: require existing split.json.
         # - If not provided: create a NEW experiments set and create split.json.
         # - If finetune is enabled but no ckpt_path is provided, raise an instructive error.
+        # Additionally: require an explicit trainer configuration (no global default).
+        if "trainer" not in config or not config.get("trainer"):
+            raise RuntimeError(
+                "No trainer configuration was provided. This project requires an explicit trainer per run.\n"
+                "Pass it via CLI (e.g., trainer.max_epochs=2 trainer.devices=[0]) or run with exps=e0 and an experiment config."
+            )
         experiments_root = config.get("experiments_root") or "experiments"
         root_abs = ensure_experiments_dir(experiments_root)
         exp_dir_opt = config.get("exp_dir")
