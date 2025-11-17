@@ -92,16 +92,7 @@ class MLSP(AlgorithmBase):
         self._pretrained_weights: dict[str, torch.Tensor] | None = None
         self._freeze_encoder_epochs: int = int(self._finetune_conf.get("freeze_encoder_epochs", 0))
         self._encoder_frozen: bool = False
-
-        # Optionally load weights-only from checkpoint for finetuning
-        try:
-            if bool(self._finetune_conf.get("enable", False)) and self._finetune_conf.get("ckpt_path"):
-                self._load_weights_only(self._finetune_conf.get("ckpt_path"))
-                # Snapshot reference weights for L2-SP if enabled
-                if bool(self._finetune_conf.get("l2sp", {}).get("enable", False)):
-                    self._capture_pretrained_reference()
-        except Exception as ex:
-            log.error(f"Finetune weight loading failed: {ex}")
+        
     
     def pred(self, batch):
         inputs, targets, masks, sample = batch

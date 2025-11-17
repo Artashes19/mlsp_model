@@ -12,6 +12,7 @@ from pytorch_lightning.strategies import ParallelStrategy
 import torch
 
 from src.algorithms.algorithm_base import AlgorithmBase
+from src.algorithms.mlsp import MLSP
 from src.datamodules.wair_d_base import WAIRDBaseDatamodule
 from src.utils import EpochCounter, log_hyperparameters
 
@@ -39,14 +40,43 @@ def train(config: DictConfig) -> str | None:
         pass
     
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
-    algorithm: AlgorithmBase = hydra.utils.instantiate(
-        config.algorithm,
-        epoch_counter=epoch_counter,
-        network=None,  # instead, we give network_conf
-        network_conf=(OmegaConf.to_yaml(config.network) if "network" in config else None),
-        optimizer_conf=(OmegaConf.to_yaml(config.optimizer) if "optimizer" in config else None),
-        scheduler_conf=(OmegaConf.to_yaml(config.scheduler) if "scheduler" in config else None)
-    )
+    ft_conf = config.algorithm.get("finetune", None)
+    if ft_conf and bool(ft_conf.get("enable", False)):
+        ckpt_ft = os.path.abspath(str(ft_conf.get("ckpt_path", "")))
+        if not ckpt_ft:
+            raise RuntimeError("Finetune is enabled but no ckpt_path was provided.")
+        if not os.path.isfile(ckpt_ft):
+            raise RuntimeError(f"Finetune checkpoint not found: {ckpt_ft}")
+        # Recreate MLSP via Lightning's load_from_checkpoint with current config
+        compiled_obj = hydra.utils.instantiate(config.algorithm.compiled)
+        algorithm: AlgorithmBase = MLSP.load_from_checkpoint(
+            ckpt_ft,
+            strict=False,
+            out_norm=float(config.algorithm.get("out_norm")),
+            use_sip2net=bool(config.algorithm.get("use_sip2net", False)),
+            sip2net_params=(OmegaConf.to_container(config.algorithm.get("sip2net_params"), resolve=True) if "sip2net_params" in config.algorithm else {}),
+            compiled=compiled_obj,
+            optimizer_conf=(OmegaConf.to_yaml(config.optimizer) if "optimizer" in config else None),
+            scheduler_conf=(OmegaConf.to_yaml(config.scheduler) if "scheduler" in config else None),
+            network=None,
+            network_conf=(OmegaConf.to_yaml(config.network) if "network" in config else None),
+            gpu=None,
+            finetune=(OmegaConf.to_container(ft_conf, resolve=True) if ft_conf else {}),
+            epoch_counter=epoch_counter,
+        )
+        # Optional: capture reference weights for L2-SP
+        if bool(ft_conf.get("l2sp", {}).get("enable", False)):
+            algorithm._capture_pretrained_reference()
+        log.info(f"[algorithm] loaded from checkpoint (finetune): {ckpt_ft}")
+    else:
+        algorithm: AlgorithmBase = hydra.utils.instantiate(
+            config.algorithm,
+            epoch_counter=epoch_counter,
+            network=None,  # instead, we give network_conf
+            network_conf=(OmegaConf.to_yaml(config.network) if "network" in config else None),
+            optimizer_conf=(OmegaConf.to_yaml(config.optimizer) if "optimizer" in config else None),
+            scheduler_conf=(OmegaConf.to_yaml(config.scheduler) if "scheduler" in config else None)
+        )
     
     # Init lightning callbacks
     callbacks: list[Callback] = []

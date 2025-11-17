@@ -416,14 +416,14 @@ def main(config: DictConfig) -> None:
                         f"Run this first:\n  {cmd}"
                     )
                 else:
-                    log.info(f"[e3] using e2 checkpoint: {e2_best_ckpt}")
+                    log.info(f"[e3] using e2 checkpoint: {os.path.abspath(e2_best_ckpt)}")
                 cfg_e.datamodule.use_synthetic_train = False
                 cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(split.train_small)
                 # Finetune knobs: enable weights-only load
                 if "algorithm" in cfg_e:
                     ft = cfg_e.algorithm.get("finetune", {}) or {}
                     ft["enable"] = True
-                    ft["ckpt_path"] = e2_best_ckpt
+                    ft["ckpt_path"] = os.path.abspath(e2_best_ckpt)
                     cfg_e.algorithm.finetune = ft
                 t0 = time.perf_counter()
                 best = train(cfg_e)
