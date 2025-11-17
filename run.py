@@ -158,15 +158,19 @@ def main(config: DictConfig) -> None:
         synth_limit = int(config.datamodule.get("synthetic_limit", 0) or 0)
         icassp_small_manifest = None
         icassp_full_manifest = None
+        icassp_val_manifest = None
         synth_filtered_manifest = None
         if icassp_global_manifest and os.path.exists(icassp_global_manifest):
             icassp_small_manifest = os.path.join(manifests_dir, "icassp_train_small.filtered.csv")
             icassp_full_manifest = os.path.join(manifests_dir, "icassp_train_full.filtered.csv")
+            icassp_val_manifest = os.path.join(manifests_dir, "icassp_validation.filtered.csv")
             t0 = t1 = time.perf_counter()
             _ = filter_icassp_manifest(icassp_global_manifest, icassp_small_manifest, list(split.train_small), icassp_limit if icassp_limit > 0 else None)
             t1 = time.perf_counter()
             _ = filter_icassp_manifest(icassp_global_manifest, icassp_full_manifest, list(split.train_full), icassp_limit if icassp_limit > 0 else None)
             t2 = time.perf_counter()
+            _ = filter_icassp_manifest(icassp_global_manifest, icassp_val_manifest, list(split.validation), icassp_limit if icassp_limit > 0 else None)
+            t3 = time.perf_counter()
             def _count_rows(p):
                 try:
                     with open(p, "r", newline="") as fp:
@@ -175,10 +179,13 @@ def main(config: DictConfig) -> None:
                     return -1
             rows_small = _count_rows(icassp_small_manifest)
             rows_full = _count_rows(icassp_full_manifest)
+            rows_val = _count_rows(icassp_val_manifest)
             log.info(f"[manifest] ICASSP filtered (small={len(split.train_small)} blds, limit_per_bld={icassp_limit or 'none'}) "
                      f"-> {icassp_small_manifest} (rows={rows_small}, took={(t1 - t0):.2f}s)")
             log.info(f"[manifest] ICASSP filtered (full={len(split.train_full)} blds, limit_per_bld={icassp_limit or 'none'}) "
                      f"-> {icassp_full_manifest} (rows={rows_full}, took={(t2 - t1):.2f}s)")
+            log.info(f"[manifest] ICASSP filtered (validation={len(split.validation)} blds, limit_per_bld={icassp_limit or 'none'}) "
+                     f"-> {icassp_val_manifest} (rows={rows_val}, took={(t3 - t2):.2f}s)")
         if synth_global_manifest and os.path.exists(synth_global_manifest):
             synth_filtered_manifest = os.path.join(manifests_dir, "synthetic.filtered.csv")
             t0 = time.perf_counter()
@@ -251,6 +258,46 @@ def main(config: DictConfig) -> None:
                 # Track the canonical 'val_loss' metric
                 if "model_checkpoint_0" in cfg_e.callbacks:
                     cfg_e.callbacks.model_checkpoint_0.monitor = "val_loss"
+                # Enforce checkpoint policy:
+                # - e2: keep best and add/save every epoch
+                # - others: best only (no save_last)
+                if name == "e2":
+                    # Ensure every-epoch checkpoint exists
+                    if "model_checkpoint_every" not in cfg_e.callbacks:
+                        from omegaconf import OmegaConf
+                        cfg_e.callbacks["model_checkpoint_every"] = OmegaConf.create(
+                            {
+                                "_target_": "pytorch_lightning.callbacks.ModelCheckpoint",
+                                "monitor": None,
+                                "mode": "min",
+                                "save_top_k": -1,
+                                "save_last": False,
+                                "verbose": False,
+                                "dirpath": ckpt_dir,
+                                "filename": "epoch_{epoch:04d}",
+                                "auto_insert_metric_name": False,
+                                "every_n_epochs": 1,
+                            }
+                        )
+                    # Best checkpoint: keep top-1 (save_last doesn't matter here)
+                    try:
+                        cfg_e.callbacks.model_checkpoint_0.save_top_k = 1
+                        cfg_e.callbacks.model_checkpoint_0.save_last = True
+                    except Exception:
+                        pass
+                else:
+                    # Best only: disable save_last and keep top-1
+                    for cb_name, cb_conf in list(cfg_e.callbacks.items()):
+                        try:
+                            tgt = str(cb_conf.get("_target_", ""))
+                        except Exception:
+                            tgt = ""
+                        if "ModelCheckpoint" in tgt:
+                            try:
+                                cfg_e.callbacks[cb_name].save_last = False
+                                cfg_e.callbacks[cb_name].save_top_k = 1
+                            except Exception:
+                                pass
             if "trainer" in cfg_e:
                 cfg_e.trainer.default_root_dir = os.path.join(exp_dir, name, "pl")
                 try:
@@ -277,14 +324,22 @@ def main(config: DictConfig) -> None:
                         f"datamodule.synthetic_dir must point to an existing synthetic root for e2. Got: {cfg_e.datamodule.get('synthetic_dir')}"
                     )
             # Wire per-experiment manifests when available
-            if name in ("e0", "e1", "e3"):
-                if icassp_small_manifest and name in ("e0", "e3"):
-                    cfg_e.datamodule.real_manifest_path = icassp_small_manifest
-                if icassp_full_manifest and name == "e1":
-                    cfg_e.datamodule.real_manifest_path = icassp_full_manifest
-            if name == "e2":
+            # New explicit train/val manifests: no runtime splitting
+            if name in ("e0", "e3"):
+                if icassp_small_manifest:
+                    cfg_e.datamodule.train_manifest_path = icassp_small_manifest
+                if icassp_val_manifest:
+                    cfg_e.datamodule.val_manifest_path = icassp_val_manifest
+            elif name == "e1":
+                if icassp_full_manifest:
+                    cfg_e.datamodule.train_manifest_path = icassp_full_manifest
+                if icassp_val_manifest:
+                    cfg_e.datamodule.val_manifest_path = icassp_val_manifest
+            elif name == "e2":
                 if synth_filtered_manifest:
                     cfg_e.datamodule.synthetic_manifest_path = synth_filtered_manifest
+                if icassp_val_manifest:
+                    cfg_e.datamodule.val_manifest_path = icassp_val_manifest
 
             # Summarize datamodule plan for this experiment
             try:
@@ -292,7 +347,8 @@ def main(config: DictConfig) -> None:
                 plan = dict(
                     use_synthetic_train=bool(dm.get("use_synthetic_train", False)),
                     train_buildings=("len=" + str(len(dm.get("train_buildings", []))) if dm.get("train_buildings") else "None"),
-                    real_manifest_path=dm.get("real_manifest_path", None),
+                    train_manifest_path=dm.get("train_manifest_path", None),
+                    val_manifest_path=dm.get("val_manifest_path", None),
                     synthetic_manifest_path=dm.get("synthetic_manifest_path", None),
                     data_dir=dm.get("data_dir", None),
                     synthetic_dir=dm.get("synthetic_dir", None),

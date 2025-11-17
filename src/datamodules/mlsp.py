@@ -52,6 +52,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.freqs = freqs
         self.val_freq = val_freq
         self.val_buildings = val_buildings
+        self.data_dir = data_dir
         self.inference = inference
         self.kaggle: bool = bool(kaggle_task1_path) or bool(kaggle_task2_path)
         self.icassp_validation: bool = bool(icassp_train_path)
@@ -80,6 +81,8 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.manifest_path: Optional[str] = kwargs.pop("manifest_path", None)
         # Explicit manifest paths (set by orchestrator)
         self.real_manifest_path: Optional[str] = kwargs.pop("real_manifest_path", None)
+        self.train_manifest_path: Optional[str] = kwargs.pop("train_manifest_path", None)
+        self.val_manifest_path: Optional[str] = kwargs.pop("val_manifest_path", None)
         self.synthetic_manifest_path: Optional[str] = kwargs.pop("synthetic_manifest_path", None)
         # Debug/limit knobs (explicit only; default off)
         _lpb = kwargs.pop("icassp_limit_per_building", None)
@@ -88,10 +91,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.synthetic_limit: Optional[int] = int(_slim) if (_slim is not None and str(_slim).strip() != "") else None
         
         # Always use dense ground truth outputs for ICASSP train-style data (Task_2_ICASSP layout)
-        # Real dataset: always use ICASSP layout scan; do not use manifest here
-        self.inputs_list = self.get_inputs_list(
-            data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path=self.real_manifest_path
-        )
+        # If explicit manifests are provided, skip enumerating the full ICASSP directory
+        if not self.train_manifest_path and not self.val_manifest_path:
+            self.inputs_list = self.get_inputs_list(
+                data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path=self.real_manifest_path
+            )
+        else:
+            self.inputs_list = []
         self.kaggle_task1_list = self.get_inputs_list(kaggle_task1_path, kaggle_freqs_mhz, [1], 0.5, "Task_1_ICASSP") if kaggle_task1_path else []
         self.kaggle_task2_list = self.get_inputs_list(kaggle_task2_path, kaggle_freqs_mhz, [1, 2], task="Task_2_ICASSP") if kaggle_task2_path else []
         self.kaggle_task1_set = None
@@ -337,7 +343,8 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
             if ids is None:
                 # fallback to file_name for deterministic order
                 try:
-                    return (str(getattr(obj, 'file_name', '')),)
+                    return (str(getattr(obj, 'file_name', '')),
+                    )
                 except Exception:
                     return ('',)
             return tuple(ids)
@@ -381,54 +388,47 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
             )
             log.info(f"Prepared inference dataset: test={len(self._test_set)}")
         else:
-            # Resolve validation buildings (override if provided)
+            # Resolve validation buildings (unused in manifest-driven flow; kept for fallback)
             val_buildings_eff = self.val_buildings_override if self.val_buildings_override else self.val_buildings
 
             # Determine source for training inputs
             if self.use_synthetic_train and self.synthetic_dir:
+                # Synthetic train via manifest; deterministic cap if requested
                 synth_manifest = self.synthetic_manifest_path or os.path.join(self.synthetic_dir, "samples.csv")
                 train_source_list = self.get_inputs_list(
                     self.synthetic_dir, self.freqs_mhz, self.freqs, task="Task_2_ICASSP", manifest_path=synth_manifest
                 )
                 if self.synthetic_limit is not None and self.synthetic_limit > 0:
-                    # Deterministic cap for synthetic
                     train_source_list = sorted(train_source_list, key=_sort_key)[: self.synthetic_limit]
-                # Validation is always from real data
-                _, val_inputs = self.split_data_task2(
-                    self.inputs_list,
-                    val_freqs=self.val_freq,
-                    val_buildings=val_buildings_eff,
-                    split_save_path=None,
-                    seed=self.train_subset_seed,
-                )
-                train_inputs = train_source_list
-            else:
-                # Real-only: use saved split if matches our needs, else recompute
-                split_save_path = self.split_save_path
-                if split_save_path and os.path.exists(split_save_path) and not self.val_buildings_override:
-                    log.info(f"[ICASSPS] loading split from cache: {split_save_path}")
-                    with open(split_save_path, "rb") as fp:
-                        split_dict = pkl.load(fp)
-                        train_inputs = split_dict["train_inputs"]
-                        val_inputs = split_dict["val_inputs"]
+                # Validation is always from real data via explicit manifest if provided
+                if self.val_manifest_path:
+                    val_inputs = self.get_inputs_list(
+                        self.data_dir, self.freqs_mhz, self.freqs, task="Task_2_ICASSP", manifest_path=self.val_manifest_path
+                    )
                 else:
-                    log.info(f"[ICASSPS] computing split and saving to: {split_save_path if not self.val_buildings_override else 'None'}")
-                    train_inputs, val_inputs = self.split_data_task2(
+                    # Fallback: compute from enumeration (not preferred)
+                    _, val_inputs = self.split_data_task2(
                         self.inputs_list,
                         val_freqs=self.val_freq,
                         val_buildings=val_buildings_eff,
-                        split_save_path=split_save_path if not self.val_buildings_override else None,
+                        split_save_path=None,
                         seed=self.train_subset_seed,
                     )
-                # Log pre-filter summary
-                t_total, t_top = _summarize_counts(train_inputs)
-                v_total, v_top = _summarize_counts(val_inputs)
-                log.info(f"[ICASSPS] initial train={t_total} (top5 per-building={t_top}), val={v_total} (top5={v_top})")
-                # Optional deterministic per-building cap for real training
+                train_inputs = train_source_list
+            else:
+                # Real-only: require explicit manifests; no runtime splitting
+                if not self.train_manifest_path or not self.val_manifest_path:
+                    raise RuntimeError("train_manifest_path and val_manifest_path must be provided for real-data training.")
+                train_inputs = self.get_inputs_list(
+                    self.data_dir, self.freqs_mhz, self.freqs, task="Task_2_ICASSP", manifest_path=self.train_manifest_path
+                )
+                val_inputs = self.get_inputs_list(
+                    self.data_dir, self.freqs_mhz, self.freqs, task="Task_2_ICASSP", manifest_path=self.val_manifest_path
+                )
+                # Optional deterministic per-building cap (manifests should already be capped, but keep deterministic guard)
                 if self.icassp_limit_per_building is not None and self.icassp_limit_per_building > 0:
                     train_inputs = _limit_per_building(train_inputs, self.icassp_limit_per_building)
-                    t_total_cap, t_top_cap = _summarize_counts(train_inputs)
-                    log.info(f"[ICASSPS] after per-building cap={self.icassp_limit_per_building}: train={t_total_cap} (top5={t_top_cap})")
+                    val_inputs = _limit_per_building(val_inputs, self.icassp_limit_per_building)
 
             # Optional training building whitelist (real training only)
             if not self.use_synthetic_train and self.train_buildings:
