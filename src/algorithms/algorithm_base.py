@@ -33,6 +33,7 @@ class AlgorithmBase(pl.LightningModule):
         self._compile = compiled
         self._optimizer_conf = optimizer_conf
         self._scheduler_conf = scheduler_conf
+        log.info(f"[algorithm] init compile={self._compile}, has_scheduler={self._scheduler_conf is not None}")
         
         if network is None:
             self._network: nn.Module = hydra.utils.instantiate(
@@ -69,6 +70,12 @@ class AlgorithmBase(pl.LightningModule):
             OmegaConf.create(self._optimizer_conf),
             params=filter(lambda p: p.requires_grad, self.parameters()),
         )
+        try:
+            opt_cls = type(optimizer).__name__
+            lr = optimizer.param_groups[0].get("lr", None)
+            log.info(f"[optimizer] {opt_cls} lr={lr}")
+        except Exception:
+            pass
         
         ret_opt = {"optimizer": optimizer}
         if self._scheduler_conf is not None:
@@ -87,6 +94,10 @@ class AlgorithmBase(pl.LightningModule):
                 sch_opt["monitor"] = monitor
             
             ret_opt.update({"lr_scheduler": sch_opt})
+            try:
+                log.info(f"[scheduler] {type(scheduler).__name__} monitor={monitor}")
+            except Exception:
+                pass
         
         return ret_opt
     
@@ -98,6 +109,7 @@ class AlgorithmBase(pl.LightningModule):
     
     def __step(self, batch, split_name):
         if self.__first_step:
+            log.info(f"[step:{split_name}] first step begin; measuring FLOPs and applying compile if enabled")
             with self.__flop_counter:
                 self.__start.record()
                 output = self._step(batch, split_name)
@@ -109,6 +121,9 @@ class AlgorithmBase(pl.LightningModule):
             
             if not self._compile.disable:
                 log.info("Compiling the model.")
+                t0 = torch.cuda.Event(enable_timing=True)
+                t1 = torch.cuda.Event(enable_timing=True)
+                t0.record()
                 self._network = torch.compile(
                     self._network,
                     fullgraph=self._compile.fullgraph,
@@ -118,6 +133,10 @@ class AlgorithmBase(pl.LightningModule):
                     options=self._compile.options,
                     disable=self._compile.disable,
                 )
+                t1.record()
+                torch.cuda.synchronize()
+                log.info(f"[compile] done; elapsed={t0.elapsed_time(t1)/1000.0:.3f}s "
+                         f"(fullgraph={self._compile.fullgraph}, backend={self._compile.backend}, mode={self._compile.mode})")
             
             self.__first_step = False
         else:

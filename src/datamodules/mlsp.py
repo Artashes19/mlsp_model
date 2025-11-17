@@ -5,6 +5,7 @@ import pickle as pkl
 import random
 from typing import Optional, Union
 
+import time
 import numpy as np
 from torch.utils.data import DataLoader, DistributedSampler
 
@@ -48,6 +49,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         *args, **kwargs
     ):
         self.freqs_mhz = freqs_mhz
+        self.freqs = freqs
         self.val_freq = val_freq
         self.val_buildings = val_buildings
         self.inference = inference
@@ -99,15 +101,18 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.args = args
         self.kwargs = kwargs
         
-        self.prepare_data()
-        
         super().__init__(
             batch_size=batch_size, num_workers=num_workers, drop_last=drop_last, multi_gpu=multi_gpu,
             *args, **kwargs
         )
+        
+        self.prepare_data()
     
     @staticmethod
     def get_inputs_list(data_dir, freqs_mhz, freqs, task="Task_2_ICASSP", manifest_path: Optional[str] = None):
+        t0 = time.perf_counter()
+        log.info(f"[inputs] discover start: data_dir={data_dir}, task={task}, manifest_path={manifest_path or 'None'}, "
+                 f"freqs_mhz={list(freqs_mhz) if freqs_mhz else []}, freqs={list(freqs) if freqs else []}")
         inputs_list = []
         if not data_dir:
             raise RuntimeError("data_dir is required for dataset discovery but was empty or None.")
@@ -119,9 +124,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
 
         # Fast path: load synthetic manifest if present
         if manifest_path:
+            n_rows = 0
+            n_synth = 0
+            n_real = 0
             with open(manifest_path, "r", newline="") as fp:
                 reader = csv.DictReader(fp)
                 for row in reader:
+                    n_rows += 1
                     # Common fields
                     b = int(row.get("building", 0))
                     ant = int(row.get("antenna", 0))
@@ -154,6 +163,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             "json_file": json_path,
                             "ids": (b, ant, f_idx_internal, sp),
                         })
+                        n_synth += 1
                         continue
                     # ICASSP row
                     input_file = row.get("input_file")
@@ -173,6 +183,10 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             "sampling_position": sp,
                             "ids": (b, ant, f_idx_internal, sp),
                         })
+                        n_real += 1
+            dt = time.perf_counter() - t0
+            log.info(f"[inputs] loaded from manifest={manifest_path} rows={n_rows}; parsed: synthetic={n_synth}, real={n_real} "
+                     f"(elapsed={dt:.2f}s)")
             return inputs_list
 
         # Resolve ICASSP layout. Prefer Inputs/Task_2_ICASSP but fallback to Inputs/ if needed.
@@ -221,11 +235,17 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                             )
                             
                             inputs_list.append(radar_sample_inputs)
-        
+        dt = time.perf_counter() - t0
+        log.info(f"[inputs] discovered ICASSP samples from directory "
+                 f"(count={len(inputs_list)}, input_dir={input_dir}, output_dir={output_dir}, elapsed={dt:.2f}s)")
         return inputs_list
     
     @staticmethod
     def split_data_task1(inputs_list, val_buildings: list[int], val_ratio=0.25, split_save_path=None, seed=None):
+        t0 = time.perf_counter()
+        log.info(f"[split_task1] start: total_inputs={len(inputs_list)}, "
+                 f"val_buildings={'auto' if val_buildings is None else len(val_buildings)}, "
+                 f"val_ratio={val_ratio}, split_save_path={split_save_path or 'None'}")
         def _get_ids(obj):
             return getattr(obj, 'ids', obj.get('ids') if isinstance(obj, dict) else None)
         building_ids = list(set([_get_ids(f)[0] for f in inputs_list if _get_ids(f) is not None]))
@@ -262,10 +282,17 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     "train_files": train_files,
                 }
                 pkl.dump(split_dict, f)
+        dt = time.perf_counter() - t0
+        log.info(f"[split_task1] done: train={len(train_files)}, val={len(val_files)} (elapsed={dt:.2f}s)")
         return train_files, val_files
     
     @staticmethod
     def split_data_task2(inputs_list: list[RadarSampleInputs], val_freqs, val_buildings, split_save_path=None, seed=None):
+        t0 = time.perf_counter()
+        log.info(f"[split_task2] start: total_inputs={len(inputs_list)}, "
+                 f"val_freqs={list(val_freqs) if val_freqs is not None else []}, "
+                 f"val_buildings={'auto' if val_buildings is None else len(val_buildings)}, "
+                 f"split_save_path={split_save_path or 'None'}")
         train_inputs, val_inputs = MLSPDatamodule.split_data_task1(inputs_list, val_buildings=val_buildings, seed=seed)
         def _get_f_idx(obj):
             ids = getattr(obj, 'ids', obj.get('ids') if isinstance(obj, dict) else None)
@@ -285,9 +312,12 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                         "val_freqs": val_freqs
                     }, fp
                 )
+        dt = time.perf_counter() - t0
+        log.info(f"[split_task2] done: train={len(train_inputs)}, val={len(val_inputs)} (elapsed={dt:.2f}s)")
         return train_inputs, val_inputs
     
     def prepare_data(self) -> None:
+        t0_prepare = time.perf_counter()
         def _summarize_counts(samples: list) -> tuple[int, dict]:
             total = len(samples)
             by_b: dict[int, int] = {}
@@ -376,11 +406,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 # Real-only: use saved split if matches our needs, else recompute
                 split_save_path = self.split_save_path
                 if split_save_path and os.path.exists(split_save_path) and not self.val_buildings_override:
+                    log.info(f"[ICASSPS] loading split from cache: {split_save_path}")
                     with open(split_save_path, "rb") as fp:
                         split_dict = pkl.load(fp)
                         train_inputs = split_dict["train_inputs"]
                         val_inputs = split_dict["val_inputs"]
                 else:
+                    log.info(f"[ICASSPS] computing split and saving to: {split_save_path if not self.val_buildings_override else 'None'}")
                     train_inputs, val_inputs = self.split_data_task2(
                         self.inputs_list,
                         val_freqs=self.val_freq,
@@ -415,6 +447,8 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 train_inputs = train_inputs[: self.train_subset_size]
                 log.info(f"[ICASSPS] after train_subset_size={self.train_subset_size}: train={len(train_inputs)}")
             
+            log.info(f"[datasets] final train={len(train_inputs)}, val={len(val_inputs) if 'val_inputs' in locals() else 0}, "
+                     f"use_synthetic_train={self.use_synthetic_train}")
             train_augmentations = AugmentationPipeline(
                 [
                     GeometricAugmentation(
@@ -470,6 +504,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     task_idx=1,
                     **_dataset_kwargs_filter(self.kwargs)
                 )
+                log.info(f"[Kaggle] prepared task1 set: n={len(self.kaggle_task1_set)}")
             if self.kaggle_task2_list:
                 self.kaggle_task2_set = PathlossDataset(
                     self.kaggle_task2_list,
@@ -479,6 +514,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     task_idx=2,
                     **_dataset_kwargs_filter(self.kwargs)
                 )
+                log.info(f"[Kaggle] prepared task2 set: n={len(self.kaggle_task2_set)}")
             if self.icassp_train_list:
                 # Subsample ICASSP validation data for faster validation
                 subsample_size = max(1, int(len(self.icassp_train_list) * self.icassp_val_subsample_ratio))
@@ -492,6 +528,12 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                     task_idx=-2,  # Use -2 to distinguish from regular validation (-1) and kaggle tasks (1, 2)
                     **_dataset_kwargs_filter(self.kwargs)
                 )
+                log.info(f"[ICASSPS] prepared ICASSP validation subsample: n={len(self.icassp_val_set)} "
+                         f"(ratio={self.icassp_val_subsample_ratio})")
+        log.info(f"[prepare_data] done in {(time.perf_counter()-t0_prepare):.2f}s "
+                 f"(train_set={len(self._train_set) if self._train_set is not None else 0}, "
+                 f"val_set={len(self._val_set) if self._val_set is not None else 0}, "
+                 f"test_set={len(self._test_set) if self._test_set is not None else 0})")
     
     @property
     def test_set(self):

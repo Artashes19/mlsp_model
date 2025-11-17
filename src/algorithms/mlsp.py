@@ -62,6 +62,8 @@ class MLSP(AlgorithmBase):
                 alpha3=sip2net_params.get("alpha3", 0.0)
             )
             log.info(f"Using SIP2Net loss")
+        else:
+            log.info("Using pure MSE objective")
         
         self.training_step_outputs = []
         self.validation_step_outputs = defaultdict(list)
@@ -75,6 +77,16 @@ class MLSP(AlgorithmBase):
             self._finetune_conf = {
                 "enable": False
             }
+        try:
+            log.info(f"[finetune] enable={bool(self._finetune_conf.get('enable', False))}, "
+                     f"ckpt_path={self._finetune_conf.get('ckpt_path', None)}, "
+                     f"freeze_encoder_epochs={int(self._finetune_conf.get('freeze_encoder_epochs', 0))}, "
+                     f"discriminative_lr={self._finetune_conf.get('discriminative_lr', {})}, "
+                     f"warmup={self._finetune_conf.get('warmup', {})}, "
+                     f"bn_recalibration={self._finetune_conf.get('bn_recalibration', {})}, "
+                     f"l2sp={self._finetune_conf.get('l2sp', {})}")
+        except Exception:
+            pass
 
         # Placeholders for finetune utilities
         self._pretrained_weights: dict[str, torch.Tensor] | None = None
@@ -213,6 +225,7 @@ class MLSP(AlgorithmBase):
         if bool(self._finetune_conf.get("enable", False)) and bool(bn_conf.get("enable", False)):
             num_batches = int(bn_conf.get("num_batches", 100))
             try:
+                log.info(f"[finetune] BN recalibration begin: num_batches={num_batches}")
                 self._network.train()
                 dl = self.trainer.datamodule.train_dataloader()
                 processed = 0
@@ -251,6 +264,7 @@ class MLSP(AlgorithmBase):
                 }
             
             # Getting predictions
+            log.info("[validation] Kaggle submission branch engaged")
             pred_path = "./task1" if sample["task_idx"][0] == 1 else "./task2"
             if os.path.exists(pred_path):
                 shutil.rmtree(pred_path)
@@ -455,6 +469,15 @@ class MLSP(AlgorithmBase):
             else:
                 params_other.append(p)
 
+        try:
+            num_enc = sum(p.numel() for p in params_encoder)
+            num_oth = sum(p.numel() for p in params_other)
+            log.info(f"[finetune] param groups: encoder_params={len(params_encoder)} ({num_enc} weights), "
+                     f"other_params={len(params_other)} ({num_oth} weights), "
+                     f"discriminative_lr={'on' if use_discr else 'off'} (encoder_lr_factor={enc_factor})")
+        except Exception:
+            pass
+
         if use_discr:
             param_groups = [
                 {"params": params_encoder, "lr": base_lr * enc_factor},
@@ -471,6 +494,7 @@ class MLSP(AlgorithmBase):
         if use_warm:
             warm_epochs = int(warm_conf.get("warmup_epochs", 5))
             warm_factor = float(warm_conf.get("warmup_factor", 0.1))
+            log.info(f"[finetune] warmup enabled: epochs={warm_epochs}, factor={warm_factor}")
 
             def lr_lambda(epoch):
                 if epoch >= warm_epochs:

@@ -4,6 +4,7 @@ import csv
 import random
 import sys
 import warnings
+import time
 
 import hydra
 import torch
@@ -75,6 +76,7 @@ def main(config: DictConfig) -> None:
         # - If exp_dir IS PROVIDED: it must exist and contain split.json, else crash.
         # - If exp_dir IS NOT PROVIDED: create a NEW timestamped dir and create split.json there.
         experiments_root = config.get("experiments_root") or "experiments"
+        log.info(f"[orchestrator] experiments_root={experiments_root}")
         root_abs = ensure_experiments_dir(experiments_root)
         exp_dir_opt = config.get("exp_dir")
         if exp_dir_opt:
@@ -84,6 +86,10 @@ def main(config: DictConfig) -> None:
             split = read_split_json(exp_dir)
             if split is None:
                 raise RuntimeError(f"Missing split.json in {exp_dir}. This experiments set is invalid. Create a new experiments set or generate the split explicitly.")
+            else:
+                log.info(f"[split] loaded split.json from {exp_dir} "
+                         f"(seed={split.seed}, train_small={len(split.train_small)}, train_full={len(split.train_full)}, "
+                         f"validation={len(split.validation)})")
         else:
             # Create a NEW experiments set dir and write a split
             exp_dir = ensure_exp_dir(None, root_dir=root_abs)
@@ -92,6 +98,9 @@ def main(config: DictConfig) -> None:
             tfn = int(split_cfg.get("train_full_n", 20))
             split = generate_building_split(seed=int(config.seed), n_buildings=25, train_small_n=tsn, train_full_n=tfn)
             write_split_json(exp_dir, split)
+            log.info(f"[split] created new experiments set at {exp_dir} "
+                     f"(seed={split.seed}, train_small={len(split.train_small)}, train_full={len(split.train_full)}, "
+                     f"validation={len(split.validation)})")
 
         from omegaconf import OmegaConf
 
@@ -116,13 +125,33 @@ def main(config: DictConfig) -> None:
         icassp_global_manifest = None
         if icassp_root and os.path.isdir(icassp_root):
             icassp_global_manifest = os.path.join(icassp_root, "icassp_manifest.csv")
+            t0 = time.perf_counter()
             _ = ensure_icassp_manifest(icassp_root, icassp_global_manifest, config.datamodule.get("freqs_mhz", []), task="Task_2_ICASSP")
+            dt = time.perf_counter() - t0
+            rows = 0
+            try:
+                with open(icassp_global_manifest, "r", newline="") as fp:
+                    rows = sum(1 for _ in fp) - 1  # minus header
+            except Exception:
+                rows = -1
+            log.info(f"[manifest] ensured ICASSP manifest at {icassp_global_manifest} "
+                     f"(rows={rows if rows >= 0 else 'unknown'}, took={dt:.2f}s)")
         # Global synthetic manifest under SYNTH root
         synth_root = os.path.expanduser(str(config.datamodule.get("synthetic_dir", "")))
         synth_global_manifest = None
         if synth_root and os.path.isdir(synth_root):
             synth_global_manifest = os.path.join(synth_root, "samples.csv")
+            t0 = time.perf_counter()
             _ = ensure_synth_manifest(synth_root, synth_global_manifest, config.datamodule.get("freqs_mhz", []))
+            dt = time.perf_counter() - t0
+            rows = 0
+            try:
+                with open(synth_global_manifest, "r", newline="") as fp:
+                    rows = sum(1 for _ in fp) - 1
+            except Exception:
+                rows = -1
+            log.info(f"[manifest] ensured synthetic manifest at {synth_global_manifest} "
+                     f"(rows={rows if rows >= 0 else 'unknown'}, took={dt:.2f}s)")
         # Build per-experiment-set filtered manifests
         # Create ICASSP train_small and train_full manifests if possible
         icassp_limit = int(config.datamodule.get("icassp_limit_per_building", 0) or 0)
@@ -133,15 +162,42 @@ def main(config: DictConfig) -> None:
         if icassp_global_manifest and os.path.exists(icassp_global_manifest):
             icassp_small_manifest = os.path.join(manifests_dir, "icassp_train_small.filtered.csv")
             icassp_full_manifest = os.path.join(manifests_dir, "icassp_train_full.filtered.csv")
+            t0 = t1 = time.perf_counter()
             _ = filter_icassp_manifest(icassp_global_manifest, icassp_small_manifest, list(split.train_small), icassp_limit if icassp_limit > 0 else None)
+            t1 = time.perf_counter()
             _ = filter_icassp_manifest(icassp_global_manifest, icassp_full_manifest, list(split.train_full), icassp_limit if icassp_limit > 0 else None)
+            t2 = time.perf_counter()
+            def _count_rows(p):
+                try:
+                    with open(p, "r", newline="") as fp:
+                        return max(0, sum(1 for _ in fp) - 1)
+                except Exception:
+                    return -1
+            rows_small = _count_rows(icassp_small_manifest)
+            rows_full = _count_rows(icassp_full_manifest)
+            log.info(f"[manifest] ICASSP filtered (small={len(split.train_small)} blds, limit_per_bld={icassp_limit or 'none'}) "
+                     f"-> {icassp_small_manifest} (rows={rows_small}, took={(t1 - t0):.2f}s)")
+            log.info(f"[manifest] ICASSP filtered (full={len(split.train_full)} blds, limit_per_bld={icassp_limit or 'none'}) "
+                     f"-> {icassp_full_manifest} (rows={rows_full}, took={(t2 - t1):.2f}s)")
         if synth_global_manifest and os.path.exists(synth_global_manifest):
             synth_filtered_manifest = os.path.join(manifests_dir, "synthetic.filtered.csv")
+            t0 = time.perf_counter()
             _ = filter_synthetic_manifest(synth_global_manifest, synth_filtered_manifest, synth_limit if synth_limit > 0 else None)
+            dt = time.perf_counter() - t0
+            rows = 0
+            try:
+                with open(synth_filtered_manifest, "r", newline="") as fp:
+                    rows = sum(1 for _ in fp) - 1
+            except Exception:
+                rows = -1
+            log.info(f"[manifest] Synthetic filtered (limit={synth_limit or 'none'}) -> {synth_filtered_manifest} "
+                     f"(rows={rows if rows >= 0 else 'unknown'}, took={dt:.2f}s)")
 
         e2_best_ckpt: str | None = None
         # Fast-dev toggle
         fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
+        if fast_dev:
+            log.info("[orchestrator] fast_dev enabled: will cap epochs/batches for quick smoke run")
         for name in exp_list:
             cfg_e = clone_cfg(config)
             # Merge experiment-specific config (required for trainer and any per-exp overrides)
@@ -197,6 +253,11 @@ def main(config: DictConfig) -> None:
                     cfg_e.callbacks.model_checkpoint_0.monitor = "val_loss"
             if "trainer" in cfg_e:
                 cfg_e.trainer.default_root_dir = os.path.join(exp_dir, name, "pl")
+                try:
+                    log.info(f"[trainer@{name}] devices={cfg_e.trainer.devices}, accelerator={cfg_e.trainer.accelerator}, "
+                             f"precision={cfg_e.trainer.precision}, max_epochs={cfg_e.trainer.max_epochs}")
+                except Exception:
+                    pass
                 if fast_dev:
                     cfg_e.trainer.max_epochs = 1
                     cfg_e.trainer.limit_train_batches = 4
@@ -225,21 +286,42 @@ def main(config: DictConfig) -> None:
                 if synth_filtered_manifest:
                     cfg_e.datamodule.synthetic_manifest_path = synth_filtered_manifest
 
+            # Summarize datamodule plan for this experiment
+            try:
+                dm = cfg_e.datamodule
+                plan = dict(
+                    use_synthetic_train=bool(dm.get("use_synthetic_train", False)),
+                    train_buildings=("len=" + str(len(dm.get("train_buildings", []))) if dm.get("train_buildings") else "None"),
+                    real_manifest_path=dm.get("real_manifest_path", None),
+                    synthetic_manifest_path=dm.get("synthetic_manifest_path", None),
+                    data_dir=dm.get("data_dir", None),
+                    synthetic_dir=dm.get("synthetic_dir", None),
+                )
+                log.info(f"[datamodule@{name}] plan={plan}")
+            except Exception:
+                pass
+
             if name == "e0":
                 # Train on train_small (ICASSR real only)
                 cfg_e.datamodule.use_synthetic_train = False
                 cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(split.train_small)
-                _ = train(cfg_e)
+                t0 = time.perf_counter()
+                best = train(cfg_e)
+                log.info(f"[train@{name}] finished in {(time.perf_counter()-t0):.2f}s; best_checkpoint={best}")
             elif name == "e1":
                 # Train on train_full (ICASSR real only)
                 cfg_e.datamodule.use_synthetic_train = False
                 cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(split.train_full)
-                _ = train(cfg_e)
+                t0 = time.perf_counter()
+                best = train(cfg_e)
+                log.info(f"[train@{name}] finished in {(time.perf_counter()-t0):.2f}s; best_checkpoint={best}")
             elif name == "e2":
                 # Pretrain on synthetic only; validation on real held-out buildings
                 cfg_e.datamodule.use_synthetic_train = True
                 cfg_e.datamodule.train_buildings = None
-                _ = train(cfg_e)
+                t0 = time.perf_counter()
+                best = train(cfg_e)
+                log.info(f"[train@{name}] finished in {(time.perf_counter()-t0):.2f}s; best_checkpoint={best}")
                 # Try to capture the best checkpoint path for downstream e3
                 ckpt_dir = os.path.join(exp_dir, "e2", "checkpoints")
                 e2_best_ckpt = None
@@ -250,6 +332,7 @@ def main(config: DictConfig) -> None:
                         e2_best_ckpt = files[0] if files else None
                     except Exception:
                         e2_best_ckpt = None
+                log.info(f"[e2] selected checkpoint for finetune: {e2_best_ckpt if e2_best_ckpt else 'NONE FOUND'} (dir={ckpt_dir})")
             elif name == "e3":
                 # Finetune on train_small using e2 checkpoints
                 ckpt_dir = os.path.join(exp_dir, "e2", "checkpoints")
@@ -269,6 +352,8 @@ def main(config: DictConfig) -> None:
                         f"Cause: no .ckpt found under {ckpt_dir}\n"
                         f"Run this first:\n  {cmd}"
                     )
+                else:
+                    log.info(f"[e3] using e2 checkpoint: {e2_best_ckpt}")
                 cfg_e.datamodule.use_synthetic_train = False
                 cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(split.train_small)
                 # Finetune knobs: enable weights-only load
@@ -277,7 +362,9 @@ def main(config: DictConfig) -> None:
                     ft["enable"] = True
                     ft["ckpt_path"] = e2_best_ckpt
                     cfg_e.algorithm.finetune = ft
-                _ = train(cfg_e)
+                t0 = time.perf_counter()
+                best = train(cfg_e)
+                log.info(f"[train@{name}] finished in {(time.perf_counter()-t0):.2f}s; best_checkpoint={best}")
             else:
                 log.warning(f"Unknown experiment '{name}' - skipping")
         return None
