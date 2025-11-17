@@ -616,26 +616,23 @@ def interpolate_difference(pl_init: np.ndarray, aux_sample: np.ndarray, method="
         np.ndarray: Updated pathloss map after interpolation-based correction.
     """
     # Identify valid measurement positions
-    try:
-        mask = aux_sample > 0
-        
-        coords = np.column_stack(np.nonzero(mask)).T  # (N, 2) -> (row, col)
-        diff_values = (aux_sample - pl_init)[mask]
-        
-        # Generate full grid
-        h, w = pl_init.shape
-        grid_x, grid_y = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
-        grid_points = np.column_stack([grid_x.ravel(), grid_y.ravel()])
-        
-        # Interpolate
-        interpolated_diff = griddata(coords, diff_values, grid_points, method=method, fill_value=0)
-        interpolated_diff = interpolated_diff.reshape(pl_init.shape)
-        
-        # Apply correction
-        corrected_map = pl_init + interpolated_diff
-        return corrected_map
-    except Exception as ex:
-        return pl_init
+    mask = aux_sample > 0
+    
+    coords = np.column_stack(np.nonzero(mask)).T  # (N, 2) -> (row, col)
+    diff_values = (aux_sample - pl_init)[mask]
+    
+    # Generate full grid
+    h, w = pl_init.shape
+    grid_x, grid_y = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
+    grid_points = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+    
+    # Interpolate
+    interpolated_diff = griddata(coords, diff_values, grid_points, method=method, fill_value=0)
+    interpolated_diff = interpolated_diff.reshape(pl_init.shape)
+    
+    # Apply correction
+    corrected_map = pl_init + interpolated_diff
+    return corrected_map
 
 
 def extrapolate_difference(pl_init: np.ndarray, aux_sample: np.ndarray, neighbors=10) -> np.ndarray:

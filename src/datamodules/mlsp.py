@@ -114,90 +114,82 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         if not os.path.isdir(data_dir):
             raise RuntimeError(f"data_dir does not exist or is not a directory: {data_dir}")
 
-        # Ensure manifest exists and is fresh; the helper handles signatures/regen
-        if manifest_path:
-            try:
-                from src.data_exploration.generate_manifest import ensure_manifest
-                _ = ensure_manifest(data_dir, manifest_path, freqs_mhz)
-            except Exception:
-                pass
+        # If a manifest path is provided, do not attempt any fallback or regeneration here.
+        # Reading the manifest is mandatory; failures must raise immediately.
 
         # Fast path: load synthetic manifest if present
-        if manifest_path and os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r", newline="") as fp:
-                    reader = csv.DictReader(fp)
-                    for row in reader:
-                        # Common fields
-                        try:
-                            b = int(row.get("building", 0))
-                            ant = int(row.get("antenna", 0))
-                        except Exception:
-                            b, ant = 0, 0
-                        # Resolve frequency index (1-based)
-                        f_idx_internal = None
-                        for key in ("freq_idx", "frequency_index"):
-                            if row.get(key) not in (None, ""):
-                                try:
-                                    f_idx_internal = int(row.get(key))
-                                except Exception:
-                                    f_idx_internal = None
-                                break
-                        if f_idx_internal is None:
-                            try:
-                                freq_mhz_val = float(row.get("frequency_MHz"))
-                                if freqs_mhz and len(freqs_mhz) > 0:
-                                    diffs = [abs(freq_mhz_val - float(m)) for m in freqs_mhz]
-                                    nearest = int(min(range(len(diffs)), key=lambda i: diffs[i]))
-                                    f_idx_internal = 1 + nearest
-                            except Exception:
-                                f_idx_internal = 1
-                        try:
-                            sp = int(row.get("sample_index", row.get("sampling_position", 0)))
-                        except Exception:
-                            sp = 0
-                        # Filter by requested frequencies if provided
-                        if freqs and f_idx_internal not in freqs:
-                            continue
-                        # Synthetic row
-                        npz_path = row.get("npz_file")
-                        json_path = row.get("json_file")
-                        if npz_path and json_path:
-                            sample_name = row.get("file_name") or (os.path.splitext(os.path.basename(npz_path))[0] if npz_path else None)
-                            inputs_list.append({
-                                "file_name": sample_name,
-                                "npz_file": npz_path,
-                                "json_file": json_path,
-                                "ids": (b, ant, f_idx_internal, sp),
-                            })
-                            continue
-                        # ICASSP row
-                        input_file = row.get("input_file")
-                        output_file = row.get("output_file")
-                        position_file = row.get("position_file")
-                        radiation_pattern_file = row.get("radiation_pattern_file")
-                        if input_file and position_file and radiation_pattern_file:
-                            sample_name = row.get("file_name") or os.path.basename(input_file)
-                            freq_mhz = float(row.get("freq_MHz", freqs_mhz[f_idx_internal - 1] if f_idx_internal else freqs_mhz[0]))
-                            inputs_list.append({
-                                "file_name": sample_name,
-                                "freq_MHz": freq_mhz,
-                                "input_file": input_file,
-                                "output_file": output_file or "",
-                                "position_file": position_file,
-                                "radiation_pattern_file": radiation_pattern_file,
-                                "sampling_position": sp,
-                                "ids": (b, ant, f_idx_internal, sp),
-                            })
-                return inputs_list
-            except Exception:
-                # fall back to filesystem scan
-                inputs_list = []
+        if manifest_path:
+            with open(manifest_path, "r", newline="") as fp:
+                reader = csv.DictReader(fp)
+                for row in reader:
+                    # Common fields
+                    b = int(row.get("building", 0))
+                    ant = int(row.get("antenna", 0))
+                    # Resolve frequency index (1-based)
+                    f_idx_internal = None
+                    for key in ("freq_idx", "frequency_index"):
+                        if row.get(key) not in (None, ""):
+                            f_idx_internal = int(row.get(key))
+                            break
+                    if f_idx_internal is None:
+                        freq_mhz_val = float(row.get("freq_MHz", row.get("frequency_MHz")))
+                        if freqs_mhz and len(freqs_mhz) > 0:
+                            diffs = [abs(freq_mhz_val - float(m)) for m in freqs_mhz]
+                            nearest = int(min(range(len(diffs)), key=lambda i: diffs[i]))
+                            f_idx_internal = 1 + nearest
+                        else:
+                            f_idx_internal = 1
+                    sp = int(row.get("sample_index", row.get("sampling_position", 0)))
+                    # Filter by requested frequencies if provided
+                    if freqs and f_idx_internal not in freqs:
+                        continue
+                    # Synthetic row
+                    npz_path = row.get("npz_file")
+                    json_path = row.get("json_file")
+                    if npz_path and json_path:
+                        sample_name = row.get("file_name") or (os.path.splitext(os.path.basename(npz_path))[0] if npz_path else None)
+                        inputs_list.append({
+                            "file_name": sample_name,
+                            "npz_file": npz_path,
+                            "json_file": json_path,
+                            "ids": (b, ant, f_idx_internal, sp),
+                        })
+                        continue
+                    # ICASSP row
+                    input_file = row.get("input_file")
+                    output_file = row.get("output_file")
+                    position_file = row.get("position_file")
+                    radiation_pattern_file = row.get("radiation_pattern_file")
+                    if input_file and position_file and radiation_pattern_file:
+                        sample_name = row.get("file_name") or os.path.basename(input_file)
+                        freq_mhz = float(row.get("freq_MHz", freqs_mhz[f_idx_internal - 1] if f_idx_internal else freqs_mhz[0]))
+                        inputs_list.append({
+                            "file_name": sample_name,
+                            "freq_MHz": freq_mhz,
+                            "input_file": input_file,
+                            "output_file": output_file or "",
+                            "position_file": position_file,
+                            "radiation_pattern_file": radiation_pattern_file,
+                            "sampling_position": sp,
+                            "ids": (b, ant, f_idx_internal, sp),
+                        })
+            return inputs_list
 
-        input_dir = os.path.join(data_dir, f"Inputs/{task}")
-        output_dir = os.path.join(data_dir, f"Outputs/{task}")
+        # Resolve ICASSP layout. Prefer Inputs/Task_2_ICASSP but fallback to Inputs/ if needed.
+        input_dir_task = os.path.join(data_dir, f"Inputs/{task}")
+        output_dir_task = os.path.join(data_dir, f"Outputs/{task}")
+        input_dir_flat = os.path.join(data_dir, "Inputs")
+        output_dir_flat = os.path.join(data_dir, "Outputs")
+        use_task_subdir = os.path.isdir(input_dir_task)
+        input_dir = input_dir_task if use_task_subdir else input_dir_flat
+        output_dir = output_dir_task if use_task_subdir else output_dir_flat
         positions_dir = os.path.join(data_dir, "Positions/")
         radiation_patterns_dir = os.path.join(data_dir, "Radiation_Patterns/")
+        if not os.path.isdir(input_dir):
+            log.warning(f"ICASSP input directory not found at expected locations. Tried: {input_dir_task} and {input_dir_flat}")
+        else:
+            chosen = "Inputs/{task}" if use_task_subdir else "Inputs"
+            log.debug(f"Using ICASSP layout rooted at '{chosen}' under {data_dir}")
         # Expect these directories to exist for the ICASSP train-style dataset
         
         for b in range(1, 26):  # 25 buildings
@@ -296,6 +288,18 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         return train_inputs, val_inputs
     
     def prepare_data(self) -> None:
+        def _summarize_counts(samples: list) -> tuple[int, dict]:
+            total = len(samples)
+            by_b: dict[int, int] = {}
+            for it in samples:
+                ids = _ids_of(it)
+                b = ids[0] if ids is not None else None
+                if b is None:
+                    continue
+                by_b[b] = by_b.get(b, 0) + 1
+            # keep only top 5 for logging
+            top5 = dict(sorted(by_b.items(), key=lambda kv: kv[1], reverse=True)[:5])
+            return total, top5
         def _ids_of(obj):
             return getattr(obj, 'ids', obj.get('ids') if isinstance(obj, dict) else None)
         def _sort_key(obj):
@@ -384,9 +388,15 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                         split_save_path=split_save_path if not self.val_buildings_override else None,
                         seed=self.train_subset_seed,
                     )
+                # Log pre-filter summary
+                t_total, t_top = _summarize_counts(train_inputs)
+                v_total, v_top = _summarize_counts(val_inputs)
+                log.info(f"[ICASSPS] initial train={t_total} (top5 per-building={t_top}), val={v_total} (top5={v_top})")
                 # Optional deterministic per-building cap for real training
                 if self.icassp_limit_per_building is not None and self.icassp_limit_per_building > 0:
                     train_inputs = _limit_per_building(train_inputs, self.icassp_limit_per_building)
+                    t_total_cap, t_top_cap = _summarize_counts(train_inputs)
+                    log.info(f"[ICASSPS] after per-building cap={self.icassp_limit_per_building}: train={t_total_cap} (top5={t_top_cap})")
 
             # Optional training building whitelist (real training only)
             if not self.use_synthetic_train and self.train_buildings:
@@ -394,12 +404,16 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 def _get_b(obj):
                     ids = _ids_of(obj)
                     return ids[0] if ids is not None else None
+                before_tb = len(train_inputs)
                 train_inputs = [f for f in train_inputs if _get_b(f) in tb]
+                after_tb = len(train_inputs)
+                log.info(f"[ICASSPS] applied train_buildings whitelist={sorted(tb)}: {before_tb} -> {after_tb}")
             # Optional deterministic train subset
             if self.train_subset_size is not None and self.train_subset_size > 0:
                 rng = random.Random(self.train_subset_seed)
                 rng.shuffle(train_inputs)
                 train_inputs = train_inputs[: self.train_subset_size]
+                log.info(f"[ICASSPS] after train_subset_size={self.train_subset_size}: train={len(train_inputs)}")
             
             train_augmentations = AugmentationPipeline(
                 [

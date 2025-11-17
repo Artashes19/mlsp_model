@@ -73,8 +73,6 @@ def train(config: DictConfig) -> str | None:
     # Train the model
     log.info("Starting training!")
     trainer.fit(algorithm, datamodule=datamodule, ckpt_path=config.ckpt_path)
-    
-    trainer.test(dataloaders=datamodule.test_dataloader())
 
     # Retrieve best checkpoint path if available
     best_path = None

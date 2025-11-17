@@ -289,6 +289,60 @@ def ensure_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], 
         return generate_icassp_manifest(root, out_csv, freqs_mhz, task=task)
     return -1
 
+# ===== FILTER HELPERS (for per-run manifests) =====
+
+def filter_icassp_manifest(src_csv: str, out_csv: str, allow_buildings: Sequence[int], limit_per_building: int | None) -> int:
+    """Write a filtered ICASSP manifest containing only rows for allow_buildings,
+    with an optional per-building limit. Returns number of rows written."""
+    if not src_csv or not os.path.exists(src_csv):
+        return -1
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+    counts: dict[int, int] = {}
+    kept = 0
+    with open(src_csv, "r", newline="") as fin, open(out_csv, "w", newline="") as fout:
+        rdr = csv.DictReader(fin)
+        fieldnames = rdr.fieldnames or [
+            "file_name","building","antenna","frequency_index","sample_index","freq_MHz","input_file","output_file","position_file","radiation_pattern_file","sampling_position"
+        ]
+        w = csv.DictWriter(fout, fieldnames=fieldnames)
+        w.writeheader()
+        allow = set(int(b) for b in allow_buildings)
+        for row in rdr:
+            try:
+                b = int(row.get("building"))
+            except Exception:
+                continue
+            if b not in allow:
+                continue
+            if limit_per_building and limit_per_building > 0:
+                c = counts.get(b, 0)
+                if c >= limit_per_building:
+                    continue
+                counts[b] = c + 1
+            kept += 1
+            w.writerow(row)
+    return kept
+
+
+def filter_synthetic_manifest(src_csv: str, out_csv: str, limit_total: int | None) -> int:
+    """Write a filtered synthetic manifest containing up to limit_total samples in order.
+    Returns number of rows written."""
+    if not src_csv or not os.path.exists(src_csv):
+        return -1
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+    kept = 0
+    with open(src_csv, "r", newline="") as fin, open(out_csv, "w", newline="") as fout:
+        rdr = csv.DictReader(fin)
+        fieldnames = rdr.fieldnames or ["file_name","npz_file","json_file","building","antenna","freq_idx","sample_index","frequency_MHz"]
+        w = csv.DictWriter(fout, fieldnames=fieldnames)
+        w.writeheader()
+        for row in rdr:
+            if limit_total and limit_total > 0 and kept >= limit_total:
+                break
+            w.writerow(row)
+            kept += 1
+    return kept
+
 def main():
     parser = argparse.ArgumentParser(description="Generate samples.csv manifest for synthetic dataset")
     parser.add_argument('--root', required=True, help='Root directory of the synthetic dataset')

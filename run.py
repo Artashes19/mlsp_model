@@ -1,5 +1,6 @@
 import logging
 import os
+import csv
 import random
 import sys
 import warnings
@@ -97,6 +98,47 @@ def main(config: DictConfig) -> None:
         def clone_cfg(cfg: DictConfig) -> DictConfig:
             return OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
 
+        # Prepare global manifests and per-experiments-set filtered manifests
+        from src.data_exploration.generate_manifest import (
+            ensure_icassp_manifest,
+            ensure_manifest as ensure_synth_manifest,
+            filter_icassp_manifest,
+            filter_synthetic_manifest,
+        )
+        run_dir_abs = os.path.realpath("./")
+        manifests_dir = os.path.join(run_dir_abs, "manifests")
+        os.makedirs(manifests_dir, exist_ok=True)
+        # Enforce required ICASSP root early (fail fast)
+        icassp_root = os.path.expanduser(str(config.datamodule.get("data_dir", "")))
+        if not icassp_root or not os.path.isdir(icassp_root):
+            raise RuntimeError(f"datamodule.data_dir must point to an existing ICASSP root. Got: {config.datamodule.get('data_dir')}")
+        # Global ICASSP manifest under ICASSP root
+        icassp_global_manifest = None
+        if icassp_root and os.path.isdir(icassp_root):
+            icassp_global_manifest = os.path.join(icassp_root, "icassp_manifest.csv")
+            _ = ensure_icassp_manifest(icassp_root, icassp_global_manifest, config.datamodule.get("freqs_mhz", []), task="Task_2_ICASSP")
+        # Global synthetic manifest under SYNTH root
+        synth_root = os.path.expanduser(str(config.datamodule.get("synthetic_dir", "")))
+        synth_global_manifest = None
+        if synth_root and os.path.isdir(synth_root):
+            synth_global_manifest = os.path.join(synth_root, "samples.csv")
+            _ = ensure_synth_manifest(synth_root, synth_global_manifest, config.datamodule.get("freqs_mhz", []))
+        # Build per-experiment-set filtered manifests
+        # Create ICASSP train_small and train_full manifests if possible
+        icassp_limit = int(config.datamodule.get("icassp_limit_per_building", 0) or 0)
+        synth_limit = int(config.datamodule.get("synthetic_limit", 0) or 0)
+        icassp_small_manifest = None
+        icassp_full_manifest = None
+        synth_filtered_manifest = None
+        if icassp_global_manifest and os.path.exists(icassp_global_manifest):
+            icassp_small_manifest = os.path.join(manifests_dir, "icassp_train_small.filtered.csv")
+            icassp_full_manifest = os.path.join(manifests_dir, "icassp_train_full.filtered.csv")
+            _ = filter_icassp_manifest(icassp_global_manifest, icassp_small_manifest, list(split.train_small), icassp_limit if icassp_limit > 0 else None)
+            _ = filter_icassp_manifest(icassp_global_manifest, icassp_full_manifest, list(split.train_full), icassp_limit if icassp_limit > 0 else None)
+        if synth_global_manifest and os.path.exists(synth_global_manifest):
+            synth_filtered_manifest = os.path.join(manifests_dir, "synthetic.filtered.csv")
+            _ = filter_synthetic_manifest(synth_global_manifest, synth_filtered_manifest, synth_limit if synth_limit > 0 else None)
+
         e2_best_ckpt: str | None = None
         # Fast-dev toggle
         fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
@@ -119,35 +161,23 @@ def main(config: DictConfig) -> None:
                         f"  python run.py exps={name} trainer.max_epochs=2 trainer.devices=[0]"
                     )
             # Common overrides
-            # datamodule: resolve validation/train buildings from split by role keys if provided
-            try:
-                val_role = None
-                train_role = None
-                # Accept keys under datamodule or at root for convenience
-                if "datamodule" in cfg_e:
-                    val_role = cfg_e.datamodule.get("icassp_val_buildings", None)
-                    train_role = cfg_e.datamodule.get("icassp_train_buildings", None)
-                if val_role is None:
-                    val_role = cfg_e.get("icassp_val_buildings", None)
-                if train_role is None:
-                    train_role = cfg_e.get("icassp_train_buildings", None)
-                # Validation buildings
-                if val_role:
-                    grp = getattr(split, str(val_role), None)
-                    if grp is None:
-                        raise RuntimeError(f"Unknown split key '{val_role}' requested for validation. Expected one of: train_small, train_full, validation")
-                    cfg_e.datamodule.val_buildings_override = list(grp)
-                else:
-                    cfg_e.datamodule.val_buildings_override = list(split.validation)
-                # Training buildings (only for real-data training)
-                train_from_role: list[int] | None = None
-                if train_role:
-                    grp = getattr(split, str(train_role), None)
-                    if grp is None:
-                        raise RuntimeError(f"Unknown split key '{train_role}' requested for training. Expected one of: train_small, train_full, validation")
-                    train_from_role = list(grp)
-            except Exception as e:
-                raise
+            # datamodule: resolve training buildings from split by role key if provided
+            val_role = None
+            train_role = None
+            if "datamodule" in cfg_e:
+                val_role = cfg_e.datamodule.get("icassp_val_buildings", None)
+                train_role = cfg_e.datamodule.get("icassp_train_buildings", None)
+            if val_role is None:
+                val_role = cfg_e.get("icassp_val_buildings", None)
+            if train_role is None:
+                train_role = cfg_e.get("icassp_train_buildings", None)
+            # Training buildings (only for real-data training)
+            train_from_role: list[int] | None = None
+            if train_role:
+                grp = getattr(split, str(train_role), None)
+                if grp is None:
+                    raise RuntimeError(f"Unknown split key '{train_role}' requested for training. Expected one of: train_small, train_full, validation")
+                train_from_role = list(grp)
             # Logging and checkpoints
             if "loggers" in cfg_e and "aim" in cfg_e.loggers:
                 cfg_e.loggers.aim.repo = os.path.join(exp_dir, "aim")
@@ -185,6 +215,15 @@ def main(config: DictConfig) -> None:
                     raise RuntimeError(
                         f"datamodule.synthetic_dir must point to an existing synthetic root for e2. Got: {cfg_e.datamodule.get('synthetic_dir')}"
                     )
+            # Wire per-experiment manifests when available
+            if name in ("e0", "e1", "e3"):
+                if icassp_small_manifest and name in ("e0", "e3"):
+                    cfg_e.datamodule.real_manifest_path = icassp_small_manifest
+                if icassp_full_manifest and name == "e1":
+                    cfg_e.datamodule.real_manifest_path = icassp_full_manifest
+            if name == "e2":
+                if synth_filtered_manifest:
+                    cfg_e.datamodule.synthetic_manifest_path = synth_filtered_manifest
 
             if name == "e0":
                 # Train on train_small (ICASSR real only)
@@ -274,11 +313,6 @@ def main(config: DictConfig) -> None:
                 seed=int(config.seed), n_buildings=25, train_small_n=tsn, train_full_n=tfn
             )
             write_split_json(exp_dir_single, split_single)
-        # Enforce validation to be exactly the held-out 5 buildings
-        try:
-            config.datamodule.val_buildings_override = list(split_single.validation)
-        except Exception:
-            pass
         # Optional: choose training buildings by declared split role
         split_role = str(config.get("split_role", "")).lower()
         train_buildings = None
