@@ -305,6 +305,13 @@ def main(config: DictConfig) -> None:
                              f"precision={cfg_e.trainer.precision}, max_epochs={cfg_e.trainer.max_epochs}")
                 except Exception:
                     pass
+                # Re-apply CLI-provided trainer overrides (e.g., max_epochs) after merging experiment config
+                try:
+                    if "trainer" in config and config.trainer is not None:
+                        if config.trainer.get("max_epochs", None) is not None:
+                            cfg_e.trainer.max_epochs = int(config.trainer.max_epochs)
+                except Exception:
+                    pass
                 if fast_dev:
                     cfg_e.trainer.max_epochs = 1
                     cfg_e.trainer.limit_train_batches = 4
