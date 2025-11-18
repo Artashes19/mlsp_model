@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from typing import List, Sequence
+from pandas.core.algorithms import searchsorted
 from tqdm import tqdm
 
 
@@ -105,45 +106,21 @@ def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
 
 
 def compute_dataset_signature(root: str) -> dict:
-    """Compute a fast signature of the dataset contents based on relative paths,
-    file sizes, and mtimes of paired npz+json files. Avoids hashing file bytes.
-    """
-    entries: List[tuple[str, int, int, int, int]] = []
-    root_abs = os.path.abspath(root)
-    for dirpath, dirnames, filenames in os.walk(root_abs):
-        # Collect candidate basenames from npz files only; require json to exist
-        for f in filenames:
-            if not f.endswith('.npz'):
-                continue
-            base = os.path.splitext(f)[0]
-            npz_path = os.path.join(dirpath, f)
-            json_path = os.path.join(dirpath, base + '.json')
-            if not os.path.exists(json_path):
-                continue
-            try:
-                npz_stat = os.stat(npz_path)
-                json_stat = os.stat(json_path)
-            except FileNotFoundError:
-                continue
-            rel = os.path.relpath(os.path.join(dirpath, base), root_abs)
-            entries.append(
-                (
-                    rel.replace('\\', '/'),
-                    int(npz_stat.st_size),
-                    int(npz_stat.st_mtime),
-                    int(json_stat.st_size),
-                    int(json_stat.st_mtime),
-                )
-            )
-    # Deterministic order
-    entries.sort(key=lambda x: x[0])
+    """Compute a simple signature of the ICASSP dataset layout."""
+    import re, hashlib, os
+    # lists all the names in the root directory
+    # checks if name is a valid sample name, s folloed by 6 digits
+    # if so, updates the hashlib signiture in the for loop, if not, skip
+    # return the number of samples and the sha256 hash - return {'root': root_abs, 'num_samples': count, 'sha256': h.hexdigest()}
+    root_abs = os.path.abspath(os.path.expanduser(root))
+    names = os.listdir(root_abs)
+    count = 0
     h = hashlib.sha256()
-    total = 0
-    for rel, ns, nm, js, jm in entries:
-        line = f"{rel}|{ns}|{nm}|{js}|{jm}\n".encode('utf-8')
-        h.update(line)
-        total += 1
-    return {'root': root_abs, 'num_pairs': total, 'sha256': h.hexdigest()}
+    for n in names:
+        if re.match(r'^s\d{6}$', n):
+            h.update(n.encode('utf-8'))
+            count += 1
+    return {'root': root_abs, 'num_pairs': count, 'sha256': h.hexdigest()}
 
 
 def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
@@ -196,24 +173,10 @@ def _icassp_expected_paths(root: str, task: str, b: int, ant: int, f: int, sp: i
 
 def compute_icassp_signature(root: str) -> dict:
     """Compute a simple signature of the ICASSP dataset layout."""
-    root_abs = os.path.abspath(os.path.expanduser(root))
-    h = hashlib.sha256()
-    total = 0
-    for dirpath, dirnames, filenames in os.walk(root_abs):
-        dirnames.sort()
-        filenames.sort()
-        h.update(dirpath.encode("utf-8"))
-        for f in filenames:
-            p = os.path.join(dirpath, f)
-            try:
-                st = os.stat(p)
-            except Exception:
-                continue
-            h.update(f.encode("utf-8"))
-            h.update(str(int(st.st_mtime)).encode("utf-8"))
-            h.update(str(int(st.st_size)).encode("utf-8"))
-            total += 1
-    return {"root": root_abs, "num_files": total, "sha256": h.hexdigest()}
+    results = compute_dataset_signature(root)
+    results['num_files'] = results.pop('num_pairs')
+    return results
+
 
 
 def generate_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], task: str = "Task_2_ICASSP") -> int:
