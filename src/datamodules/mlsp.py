@@ -6,8 +6,10 @@ import random
 from typing import Optional, Union
 
 import time
+import math
 import numpy as np
 from torch.utils.data import DataLoader, DistributedSampler
+import torch.distributed as dist
 
 from src.datamodules.datasets import PathlossDataset
 from src.datamodules.wair_d_base import WAIRDBaseDatamodule
@@ -89,6 +91,9 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.icassp_limit_per_building: Optional[int] = int(_lpb) if (_lpb is not None and str(_lpb).strip() != "") else None
         _slim = kwargs.pop("synthetic_limit", None)
         self.synthetic_limit: Optional[int] = int(_slim) if (_slim is not None and str(_slim).strip() != "") else None
+        # Per-epoch sample budget (None => full dataset per epoch)
+        _tspe = kwargs.pop("train_samples_per_epoch", None)
+        self.train_samples_per_epoch: Optional[int] = int(_tspe) if (_tspe is not None and str(_tspe).strip() != "") else None
         
         # Always use dense ground truth outputs for ICASSP train-style data (Task_2_ICASSP layout)
         # If explicit manifests are provided, skip enumerating the full ICASSP directory
@@ -601,3 +606,110 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
             dataloaders.append(DataLoader(self.icassp_val_set, **dl_kwargs))
         return dataloaders
+    
+    def train_dataloader(self) -> DataLoader:
+        # If not using per-epoch sample budget, fallback to base behavior
+        if self.train_samples_per_epoch is None or int(self.train_samples_per_epoch) <= 0:
+            return super().train_dataloader()
+        
+        # Determine rank/world size if DDP is active
+        def _dist_info():
+            if dist.is_available() and dist.is_initialized():
+                try:
+                    return dist.get_rank(), dist.get_world_size()
+                except Exception:
+                    return 0, 1
+            return 0, 1
+        rank, world_size = _dist_info()
+        
+        sampler = DistributedCyclicSampler(
+            self._train_set,
+            samples_per_epoch_total=int(self.train_samples_per_epoch),
+            seed=int(self.train_subset_seed or 0),
+            num_replicas=world_size,
+            rank=rank,
+        )
+        dl_kwargs = dict(
+            batch_size=self._batch_size,
+            num_workers=self._num_workers,
+            sampler=sampler,
+            shuffle=False,
+            collate_fn=self.collate_fn,
+            drop_last=self._drop_last,
+            pin_memory=True,
+        )
+        if self._num_workers and self._num_workers > 0:
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
+        try:
+            log.info(
+                f"[dataloader/train] size={len(self._train_set) if self._train_set is not None else 0}, "
+                f"batch_size={self._batch_size}, num_workers={self._num_workers}, "
+                f"sampler={type(sampler).__name__}, multi_gpu={self._multi_gpu}, "
+                f"samples_per_epoch_total={self.train_samples_per_epoch}"
+            )
+        except Exception:
+            pass
+        return DataLoader(self._train_set, **dl_kwargs)
+
+
+class DistributedCyclicSampler(DistributedSampler):
+    """
+    DDP-aware cyclic sampler that:
+      - Provides a continuous, non-resetting stream of indices across epochs
+      - Uses a single fixed random permutation (seeded) for determinism
+      - Partitions work equally across ranks each epoch
+      - Advances a shared base pointer by world_size * per_rank each epoch
+    """
+    def __init__(self, dataset, samples_per_epoch_total: int, seed: int = 0, num_replicas: Optional[int] = None, rank: Optional[int] = None):
+        if num_replicas is None:
+            if dist.is_available() and dist.is_initialized():
+                num_replicas = dist.get_world_size()
+            else:
+                num_replicas = 1
+        if rank is None:
+            if dist.is_available() and dist.is_initialized():
+                rank = dist.get_rank()
+            else:
+                rank = 0
+        # Initialize as a DistributedSampler to avoid Lightning replacing our sampler
+        super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=False, drop_last=False)
+        self._dataset_len = len(dataset)
+        self._samples_per_epoch_total = max(0, int(samples_per_epoch_total))
+        # Equalize steps across ranks for DDP; small overshoot vs total is acceptable
+        self._per_rank = int(math.ceil(self._samples_per_epoch_total / float(self.num_replicas))) if self.num_replicas > 0 else self._samples_per_epoch_total
+        # Fixed shuffled order for cycling
+        self._rng = np.random.RandomState(int(seed) if seed is not None else 0)
+        self._order = np.arange(self._dataset_len, dtype=np.int64)
+        if self._dataset_len > 0:
+            self._rng.shuffle(self._order)
+        # Global base pointer (for rank 0); ranks offset by +rank at iteration time
+        self._base_pos = 0
+    
+    def __iter__(self):
+        m = self._dataset_len
+        if m == 0 or self._per_rank == 0:
+            return iter(())
+        start = self._base_pos
+        # Yield this rank's strided slice
+        for i in range(self._per_rank):
+            gi = (start + i * self.num_replicas + self.rank) % m
+            yield int(self._order[gi])
+        # Advance global pointer by the total work done across all ranks
+        self._base_pos = (self._base_pos + (self._per_rank * self.num_replicas) % m) % m
+    
+    def __len__(self):
+        return self._per_rank
+    
+    def set_epoch(self, epoch: int):
+        # No-op: keep continuous stream; do not reshuffle/reset
+        return
+
+    @property
+    def position(self) -> int:
+        return self._base_pos
+
+    def set_position(self, pos: int):
+        if self._dataset_len == 0:
+            self._base_pos = 0
+        else:
+            self._base_pos = int(pos) % self._dataset_len
