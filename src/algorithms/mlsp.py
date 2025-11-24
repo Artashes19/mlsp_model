@@ -68,7 +68,8 @@ class MLSP(AlgorithmBase):
         self.training_step_outputs = []
         self.validation_step_outputs = defaultdict(list)
         self.test_step_outputs = defaultdict(list)
-        self.loss = nn.MSELoss()
+        # Default pointwise criterion (used only as a fallback – main loss is computed in get_metrics)
+        self.loss = nn.L1Loss()
 
         # Finetune configuration (optional)
         self._finetune_conf: DictConfig | dict | None = kwargs.get("finetune", None)
@@ -404,8 +405,15 @@ class MLSP(AlgorithmBase):
     
     def get_metrics(self, preds, targets, masks, weights):
         
+        # MSE (kept for logging / metrics)
         batch_se = se(preds, targets, masks, weights)
-        batch_mse = batch_se / masks.sum()
+        batch_mse = batch_se / (masks.sum() + 1e-8)
+        
+        # MAE (L1) – this is the primary training loss
+        abs_err = (preds - targets).abs() * masks
+        if weights is not None:
+            abs_err = abs_err * weights
+        batch_mae = abs_err.sum() / (masks.sum() + 1e-8)
         if torch.isnan(preds).any():
             logging.error(f"[Epoch {self.trainer.current_epoch}] NaNs detected in preds")
         if torch.isinf(preds).any():
@@ -419,7 +427,8 @@ class MLSP(AlgorithmBase):
         if self.use_sip2net:
             loss, _ = self.sip2net_criterion(preds, targets, masks, weights)
         else:
-            loss = batch_mse
+            # Switch primary objective to L1 (MAE)
+            loss = batch_mae
 
         # L2-SP regularization (optional)
         if bool(self._finetune_conf.get("enable", False)) and bool(self._finetune_conf.get("l2sp", {}).get("enable", False)):
@@ -430,6 +439,7 @@ class MLSP(AlgorithmBase):
         return {
             "loss": loss,
             "mse": batch_mse,
+            "mae": batch_mae,
         }
 
     # Override to support discriminative LR and warmup
