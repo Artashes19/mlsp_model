@@ -4,7 +4,7 @@ trainer:
   devices: [0]
   use_distributed_sampler: True
   precision: 16
-  max_epochs: 200
+  max_epochs: 300
 
 # @package _global_
 name: train
@@ -42,7 +42,7 @@ callbacks:
     _target_: pytorch_lightning.callbacks.EarlyStopping
     monitor: val_loss
     mode: min
-    patience: 30
+    patience: 100
     min_delta: 0.0
     verbose: false
     check_on_train_epoch_end: true
