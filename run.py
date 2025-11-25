@@ -73,34 +73,44 @@ def main(config: DictConfig) -> None:
         exp_list = [s.strip() for s in raw_exps.split(',') if s.strip()]
     if exp_list:
         # Resolve experiments root and exp_dir with strict rules:
-        # - If exp_dir IS PROVIDED: it must exist and contain split.json, else crash.
+        # - If exp_dir IS PROVIDED:
+        #     * If absolute: use it directly (do NOT create a new experiments root).
+        #     * If relative: resolve it under experiments_root, creating experiments_root if needed.
         # - If exp_dir IS NOT PROVIDED: create a NEW timestamped dir and create split.json there.
         experiments_root = config.get("experiments_root") or "experiments"
         log.info(f"[orchestrator] experiments_root={experiments_root}")
-        root_abs = ensure_experiments_dir(experiments_root)
         exp_dir_opt = config.get("exp_dir")
         if exp_dir_opt:
-            exp_dir = exp_dir_opt if os.path.isabs(exp_dir_opt) else os.path.join(root_abs, exp_dir_opt)
+            if os.path.isabs(exp_dir_opt):
+                exp_dir = exp_dir_opt
+            else:
+                root_abs = ensure_experiments_dir(experiments_root)
+                exp_dir = os.path.join(root_abs, exp_dir_opt)
             if not os.path.isdir(exp_dir):
                 raise RuntimeError(f"Experiment directory does not exist: {exp_dir}. Provide a valid exp_dir or omit it to create a new experiments set.")
             split = read_split_json(exp_dir)
             if split is None:
                 raise RuntimeError(f"Missing split.json in {exp_dir}. This experiments set is invalid. Create a new experiments set or generate the split explicitly.")
             else:
-                log.info(f"[split] loaded split.json from {exp_dir} "
-                         f"(seed={split.seed}, train_small={len(split.train_small)}, train_full={len(split.train_full)}, "
-                         f"validation={len(split.validation)})")
+                log.info(
+                    f"[split] loaded split.json from {exp_dir} "
+                    f"(seed={split.seed}, train_small={len(split.train_small)}, train_full={len(split.train_full)}, "
+                    f"validation={len(split.validation)})"
+                )
         else:
             # Create a NEW experiments set dir and write a split
+            root_abs = ensure_experiments_dir(experiments_root)
             exp_dir = ensure_exp_dir(None, root_dir=root_abs)
             split_cfg = config.get("split") or {}
             tsn = int(split_cfg.get("train_small_n", 7))
             tfn = int(split_cfg.get("train_full_n", 20))
             split = generate_building_split(seed=int(config.seed), n_buildings=25, train_small_n=tsn, train_full_n=tfn)
             write_split_json(exp_dir, split)
-            log.info(f"[split] created new experiments set at {exp_dir} "
-                     f"(seed={split.seed}, train_small={len(split.train_small)}, train_full={len(split.train_full)}, "
-                     f"validation={len(split.validation)})")
+            log.info(
+                f"[split] created new experiments set at {exp_dir} "
+                f"(seed={split.seed}, train_small={len(split.train_small)}, train_full={len(split.train_full)}, "
+                f"validation={len(split.validation)})"
+            )
 
         from omegaconf import OmegaConf
 
@@ -445,16 +455,20 @@ def main(config: DictConfig) -> None:
                 "Pass it via CLI (e.g., trainer.max_epochs=2 trainer.devices=[0]) or run with exps=e0 and an experiment config."
             )
         experiments_root = config.get("experiments_root") or "experiments"
-        root_abs = ensure_experiments_dir(experiments_root)
         exp_dir_opt = config.get("exp_dir")
         if exp_dir_opt:
-            exp_dir_single = exp_dir_opt if os.path.isabs(exp_dir_opt) else os.path.join(root_abs, exp_dir_opt)
+            if os.path.isabs(exp_dir_opt):
+                exp_dir_single = exp_dir_opt
+            else:
+                root_abs = ensure_experiments_dir(experiments_root)
+                exp_dir_single = os.path.join(root_abs, exp_dir_opt)
             if not os.path.isdir(exp_dir_single):
                 raise RuntimeError(f"Experiment directory does not exist: {exp_dir_single}. Provide a valid exp_dir or omit it to create a new experiments set.")
             split_single = read_split_json(exp_dir_single)
             if split_single is None:
                 raise RuntimeError(f"Missing split.json in {exp_dir_single}. This experiments set is invalid. Create a new experiments set or generate the split explicitly.")
         else:
+            root_abs = ensure_experiments_dir(experiments_root)
             exp_dir_single = ensure_exp_dir(None, root_dir=root_abs)
             split_cfg = config.get("split") or {}
             tsn = int(split_cfg.get("train_small_n", 7))
