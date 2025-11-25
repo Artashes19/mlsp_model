@@ -250,9 +250,10 @@ class MLSP(AlgorithmBase):
         if split_name == "val" and sample["task_idx"][0].item() not in [-1, -2]:
             # No evaluation for sanity check
             if self.trainer.sanity_checking:
+                inf = torch.Tensor([float("inf")])
                 return {
-                    "loss": torch.Tensor([float("inf")]),
-                    "mse": torch.Tensor([float("inf")]),
+                    "loss": inf,
+                    "rmse": inf,
                 }
             
             # Getting predictions
@@ -301,10 +302,11 @@ class MLSP(AlgorithmBase):
                 f"Submission from epoch {self.trainer.current_epoch}"
             )
             kaggle_mse = self._poll_submission_score(api, competition, submission)
+            kaggle_rmse = torch.Tensor([kaggle_mse]).sqrt()
             
             return {
-                "loss": torch.Tensor([kaggle_mse]),
-                "mse": torch.Tensor([kaggle_mse]),
+                "loss": kaggle_rmse,
+                "rmse": kaggle_rmse,
             }
         
         preds = self._network(inputs)
@@ -355,9 +357,11 @@ class MLSP(AlgorithmBase):
                     log.error(f"Error in validation sample {i}: {ex}")
                     continue
 
+            mean_mse = torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")])
+            rmse = torch.sqrt(mean_mse)
             return {
-                "loss": torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")]),
-                "mse": torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")]),
+                "loss": rmse,
+                "rmse": rmse,
             }
     
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
@@ -405,7 +409,7 @@ class MLSP(AlgorithmBase):
     
     def get_metrics(self, preds, targets, masks, weights):
         
-        # MSE (kept for logging / metrics)
+        # MSE (internal; used to derive RMSE)
         batch_se = se(preds, targets, masks, weights)
         batch_mse = batch_se / (masks.sum() + 1e-8)
         
@@ -436,9 +440,11 @@ class MLSP(AlgorithmBase):
             l2sp = self._l2sp_penalty()
             loss = loss + alpha * l2sp
         
+        rmse = torch.sqrt(batch_mse)
+        
         return {
             "loss": loss,
-            "mse": batch_mse,
+            "rmse": rmse,
             "mae": batch_mae,
         }
 
@@ -527,10 +533,18 @@ class MLSP(AlgorithmBase):
         for k in outputs[0].keys():
             combined_general_metrics[k] /= len(outputs)
 
-        # derive RMSE from MSE (tensors throughout in this codebase)
-        if "mse" in combined_general_metrics:
+        # Derive log2 versions of key metrics for logging
+        if "rmse" in combined_general_metrics or "mae" in combined_general_metrics:
             import torch as _torch
-            combined_general_metrics["rmse"] = _torch.sqrt(combined_general_metrics["mse"])    
+            eps = _torch.tensor(1e-8, dtype=_torch.float32)
+            if "rmse" in combined_general_metrics:
+                combined_general_metrics["log2_rmse"] = _torch.log2(
+                    combined_general_metrics["rmse"].to(dtype=_torch.float32) + eps
+                )
+            if "mae" in combined_general_metrics:
+                combined_general_metrics["log2_mae"] = _torch.log2(
+                    combined_general_metrics["mae"].to(dtype=_torch.float32) + eps
+                )
         
         # merge all
         epoch_metrics_sep = combined_general_metrics
