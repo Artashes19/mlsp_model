@@ -58,7 +58,7 @@ callbacks:
     _target_: pytorch_lightning.callbacks.EarlyStopping
     monitor: train_0_loss
     mode: min
-    patience: 100
+    patience: 30
     min_delta: 0.0
     verbose: false
     check_on_train_epoch_end: true
