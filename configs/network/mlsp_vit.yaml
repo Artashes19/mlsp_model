@@ -1,0 +1,5 @@
+_target_: src.networks.ViTModel
+
+encoder_name: mit_b2
+encoder_weights: imagenet
+in_chans: 6
