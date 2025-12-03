@@ -49,7 +49,7 @@ def aggregate_hist(hist_counts: np.ndarray | None, bin_edges: np.ndarray | None,
 
 def main():
     parser = argparse.ArgumentParser("Explore synthetic NPZ+JSON samples and save visualizations")
-    parser.add_argument('--data_dir', type=str, default='/auto/home/xoren/mlsp_wair_d/data/synthetic_train', help='Root of synthetic dataset')
+    parser.add_argument('--data_dir', type=str, default='/nfs/dgx/raid/iot/mlsp_wair_d_data/synthetic_train', help='Root of synthetic dataset')
     parser.add_argument('--num', type=int, default=1000, help='Number of random samples to analyze')
     parser.add_argument('--out_dir', type=str, default='~/synthetic_samples_exploration/', help='Where to save PNGs')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
