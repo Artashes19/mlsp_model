@@ -12,7 +12,6 @@ defaults:
   - scheduler: null
   - algorithm: mlsp
   - network: mlsp_unet
-  - callbacks: [ model_checkpoint_0 ]
   - loggers: [ aim ]
   - strategy: null
   - _self_

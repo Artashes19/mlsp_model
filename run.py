@@ -22,13 +22,49 @@ hydra.core.global_hydra.GlobalHydra.instance().clear()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def _setup_hydra_run_dir():
+    """
+    Pre-process command line args BEFORE Hydra runs.
+    If exp_dir is provided and exists, set hydra.run.dir to it so Hydra
+    doesn't create a new timestamped directory.
+    """
+    exp_dir = None
+    experiments_root = "experiments"  # default
+    
+    # Parse relevant args from command line
+    for arg in sys.argv[1:]:
+        if arg.startswith("exp_dir="):
+            exp_dir = arg.split("=", 1)[1]
+        elif arg.startswith("experiments_root="):
+            experiments_root = arg.split("=", 1)[1]
+        # Check if hydra.run.dir is already overridden
+        elif arg.startswith("hydra.run.dir=") or arg.startswith("+hydra.run.dir="):
+            return  # User already specified, don't override
+    
+    if not exp_dir:
+        return  # No exp_dir provided, let Hydra create new dir
+    
+    # Resolve exp_dir to absolute path
+    if os.path.isabs(exp_dir):
+        exp_dir_abs = exp_dir
+    else:
+        # Relative to experiments_root
+        exp_dir_abs = os.path.join(os.getcwd(), experiments_root, exp_dir)
+    
+    # Only override if the directory exists (resuming existing run)
+    if os.path.isdir(exp_dir_abs):
+        sys.argv.append(f"hydra.run.dir={exp_dir_abs}")
+
+
+_setup_hydra_run_dir()
+
+
 @hydra.main(config_path="configs", config_name="train", version_base="1.2")
 def main(config: DictConfig) -> None:
     from src import utils
     from src.train import train
     from src.experiments.splits import (
         ensure_experiments_dir,
-        ensure_exp_dir,
         generate_building_split,
         read_split_json,
         write_split_json,
@@ -99,8 +135,8 @@ def main(config: DictConfig) -> None:
                 )
         else:
             # Create a NEW experiments set dir and write a split
-            root_abs = ensure_experiments_dir(experiments_root)
-            exp_dir = ensure_exp_dir(None, root_dir=root_abs)
+            # Use experiments/ directly (no nested timestamp since Hydra run dir already has one)
+            exp_dir = ensure_experiments_dir(experiments_root)
             split_cfg = config.get("split") or {}
             tsn = int(split_cfg.get("train_small_n", 7))
             tfn = int(split_cfg.get("train_full_n", 20))
@@ -263,51 +299,8 @@ def main(config: DictConfig) -> None:
                         tgt = str(cb_conf.get("_target_", ""))
                     except Exception:
                         tgt = ""
-                    if "ModelCheckpoint" in tgt:
+                    if "ModelCheckpoint" in tgt or "ScheduledEpochModelCheckpoint" in tgt:
                         cfg_e.callbacks[cb_name].dirpath = ckpt_dir
-                # Track the canonical 'val_loss' metric
-                if "model_checkpoint_0" in cfg_e.callbacks:
-                    cfg_e.callbacks.model_checkpoint_0.monitor = "val_loss"
-                # Enforce checkpoint policy:
-                # - e2: keep best and add/save every epoch
-                # - others: best only (no save_last)
-                if name == "e2":
-                    # Ensure every-epoch checkpoint exists
-                    if "model_checkpoint_every" not in cfg_e.callbacks:
-                        from omegaconf import OmegaConf
-                        cfg_e.callbacks["model_checkpoint_every"] = OmegaConf.create(
-                            {
-                                "_target_": "pytorch_lightning.callbacks.ModelCheckpoint",
-                                "monitor": None,
-                                "mode": "min",
-                                "save_top_k": -1,
-                                "save_last": False,
-                                "verbose": False,
-                                "dirpath": ckpt_dir,
-                                "filename": "epoch_{epoch:04d}",
-                                "auto_insert_metric_name": False,
-                                "every_n_epochs": 1,
-                            }
-                        )
-                    # Best checkpoint: keep top-1 (save_last doesn't matter here)
-                    try:
-                        cfg_e.callbacks.model_checkpoint_0.save_top_k = 1
-                        cfg_e.callbacks.model_checkpoint_0.save_last = True
-                    except Exception:
-                        pass
-                else:
-                    # Best only: disable save_last and keep top-1
-                    for cb_name, cb_conf in list(cfg_e.callbacks.items()):
-                        try:
-                            tgt = str(cb_conf.get("_target_", ""))
-                        except Exception:
-                            tgt = ""
-                        if "ModelCheckpoint" in tgt:
-                            try:
-                                cfg_e.callbacks[cb_name].save_last = False
-                                cfg_e.callbacks[cb_name].save_top_k = 1
-                            except Exception:
-                                pass
             if "trainer" in cfg_e:
                 cfg_e.trainer.default_root_dir = os.path.join(exp_dir, name, "pl")
                 try:
@@ -468,8 +461,8 @@ def main(config: DictConfig) -> None:
             if split_single is None:
                 raise RuntimeError(f"Missing split.json in {exp_dir_single}. This experiments set is invalid. Create a new experiments set or generate the split explicitly.")
         else:
-            root_abs = ensure_experiments_dir(experiments_root)
-            exp_dir_single = ensure_exp_dir(None, root_dir=root_abs)
+            # Use experiments/ directly (no nested timestamp since Hydra run dir already has one)
+            exp_dir_single = ensure_experiments_dir(experiments_root)
             split_cfg = config.get("split") or {}
             tsn = int(split_cfg.get("train_small_n", 7))
             tfn = int(split_cfg.get("train_full_n", 20))
