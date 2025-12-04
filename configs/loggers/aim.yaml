@@ -1,4 +1,4 @@
 aim:
   _target_: aim.pytorch_lightning.AimLogger
-  repo: /nfs/dgx/raid/iot/mlsp_wair_d_data/runs
+  repo: ${oc.env:AIM_REPO}
   experiment: default

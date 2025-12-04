@@ -7,6 +7,7 @@ terminal_col: null
 terminal_row: 24
 
 defaults:
+  - trainer: default
   - datamodule: mlsp
   - optimizer: adam
   - scheduler: null
@@ -23,7 +24,7 @@ ckpt_path: null
 exps: ""  # e.g., "e1,e2,e3,e4"
 exp_dir: ""  # optional explicit experiments directory
 experiments_root: experiments
-experiments_config_dir: configs/experiments
+experiments_config_dir: null
 
 split:
   train_small_n: 7

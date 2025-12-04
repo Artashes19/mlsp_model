@@ -1,21 +1,21 @@
 _target_: src.schedulers.wsd_s.WSDScheduler
 
-warmup_steps: 1
+warmup_steps: 1000
 stable_steps:
-  - 3
-  - 4
-  - 8
-  - 16
-  - 32
-  - 64
-  - 128
+  - 3000
+  - 4000
+  - 8000
+  - 16000
+  - 32000
+  - 64000
+  - 128000
 decay_steps:
-  - 1
-  - 1
-  - 2
-  - 4
-  - 8
-  - 16
-  - 32
+  - 1000
+  - 1000
+  - 2000
+  - 4000
+  - 8000
+  - 16000
+  - 32000
 peak_lr: 0.0003
 last_epoch: -1

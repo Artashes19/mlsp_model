@@ -18,7 +18,7 @@ compiled:
   backend: inductor
   mode: null
   options: null
-  disable: False
+  disable: True
 
 finetune:
   enable: False

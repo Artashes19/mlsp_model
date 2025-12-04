@@ -197,23 +197,9 @@ def worker_initializer(cpu_list, index_counter):
     p.cpu_affinity([cpu_index])
 
 
-class BuildingShiftDistribution:
-    """
-    Randomly sampling from a distribution of building shifts with a given ECDF.
-    We interpolate the CDF from ECDF with linear interpolation, resulting constant interpolation in the PDF.
-    """
-    
-    def __init__(self, ecdf: dict[float, float]):
-        self.x_values = np.array(sorted(ecdf.keys()))
-        self.ecdf_values = np.array(sorted(ecdf.values()))
-    
-    def sample(self, size=1):
-        pdf_values = np.diff(self.ecdf_values)
-        # the index segment of the CDF to sample from
-        segment = np.random.choice(list(range(pdf_values.shape[0])), size, p=pdf_values / pdf_values.sum())
-        u = np.random.random(size)
-        # left and right endpoints of a segment
-        left = self.x_values[segment]
-        right = self.x_values[segment + 1]
-        # constant interpolation
-        return u * (right - left) + left
+def _count_rows(p):
+    try:
+        with open(p, "r", newline="") as fp:
+            return max(0, sum(1 for _ in fp) - 1)
+    except Exception:
+        return -1

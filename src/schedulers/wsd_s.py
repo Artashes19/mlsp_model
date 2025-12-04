@@ -4,7 +4,6 @@ from typing import Any
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
-
 Phase = dict[str, Any]
 
 
@@ -15,7 +14,7 @@ class WSDScheduler(_LRScheduler):
     between stable plateaus and decay ramps that connect the plateaus linearly.
     The final plateau is pinned at zero to ensure the schedule ends at the minimum LR.
     """
-
+    
     def __init__(
         self,
         optimizer: Optimizer,
@@ -47,7 +46,7 @@ class WSDScheduler(_LRScheduler):
             param_group["initial_lr"] = self._peak_lr
             param_group["lr"] = self._peak_lr * initial_factor
             self.base_lrs.append(self._peak_lr)
-
+    
     def get_lr(
         self,
     ) -> list[float]:
@@ -56,13 +55,13 @@ class WSDScheduler(_LRScheduler):
             base_lr * factor
             for base_lr in self.base_lrs
         ]
-
+    
     @property
     def total_steps(
         self,
     ) -> int:
         return self._total_steps
-
+    
     def _factor_for_step(
         self,
         step: int,
@@ -80,7 +79,7 @@ class WSDScheduler(_LRScheduler):
                     step=step,
                 )
         return 0.0
-
+    
     def _factor_for_phase(
         self,
         phase: Phase,
@@ -106,7 +105,7 @@ class WSDScheduler(_LRScheduler):
                 step=step,
             )
         raise RuntimeError(f"Unsupported phase kind {phase_kind}")
-
+    
     def _interpolate(
         self,
         start_factor: float,
@@ -121,7 +120,7 @@ class WSDScheduler(_LRScheduler):
         offset = step - start_step
         ratio = offset / (length - 1)
         return start_factor + (end_factor - start_factor) * ratio
-
+    
     def _build_phases(
         self,
     ) -> list[Phase]:
@@ -158,7 +157,7 @@ class WSDScheduler(_LRScheduler):
                 )
                 cursor += decay_length
         return phases
-
+    
     def _validate_inputs(
         self,
         warmup_steps: int,
@@ -176,4 +175,3 @@ class WSDScheduler(_LRScheduler):
             raise ValueError("decay_steps must contain only positive durations")
         if peak_lr <= 0.0:
             raise ValueError("peak_lr must be positive")
-
