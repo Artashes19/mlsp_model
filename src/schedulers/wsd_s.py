@@ -23,7 +23,10 @@ class WSDScheduler(_LRScheduler):
         decay_steps: Sequence[int],
         peak_lr: float,
         last_epoch: int,
+        interval: str | None = None,
+        frequency: int | None = None,
     ):
+        self._last_lr = None
         self._validate_inputs(
             warmup_steps=warmup_steps,
             stable_steps=stable_steps,
@@ -36,15 +39,15 @@ class WSDScheduler(_LRScheduler):
         self._peak_lr = float(peak_lr)
         self._phases = self._build_phases()
         self._total_steps = self._phases[-1]["end"] if self._phases else 0
+        self._first_step_call = True
         super().__init__(
             optimizer=optimizer,
             last_epoch=last_epoch,
         )
         self.base_lrs = []
-        initial_factor = self._factor_for_step(step=self.last_epoch)
         for param_group in self.optimizer.param_groups:
             param_group["initial_lr"] = self._peak_lr
-            param_group["lr"] = self._peak_lr * initial_factor
+            param_group["lr"] = 0.0
             self.base_lrs.append(self._peak_lr)
     
     def get_lr(
@@ -55,6 +58,23 @@ class WSDScheduler(_LRScheduler):
             base_lr * factor
             for base_lr in self.base_lrs
         ]
+    
+    def step(
+        self,
+        epoch: int | None = None,
+    ) -> None:
+        if self._first_step_call:
+            self._first_step_call = False
+            lrs = [0]
+        else:
+            if epoch is None:
+                self.last_epoch += 1
+            else:
+                self.last_epoch = epoch
+            lrs = self.get_lr()
+        for param_group, lr in zip(self.optimizer.param_groups, lrs):
+            param_group["lr"] = lr
+        self._last_lr = lrs
     
     @property
     def total_steps(

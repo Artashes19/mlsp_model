@@ -35,8 +35,10 @@ datamodule:
   train_subset_size: null
   split_save_path: ./splits/e2.pkl
   icassp_val_subsample_ratio: 1.0
+  num_workers: 64
+  batch_size: 50
   # Optional: number of training samples per epoch (null => full dataset)
-  train_samples_per_epoch: 16000
+  train_samples_per_epoch: 6250
 
 callbacks:
   model_checkpoint_0:
@@ -58,7 +60,7 @@ callbacks:
     dirpath: e2/checkpoints/every
     filename: epoch_{epoch:04d}_every
     auto_insert_metric_name: false
-    schedule_epochs: [ 4, 9, 19, 39, 79, 159, 319 ]
+    schedule_epochs: [ 9, 19 ]
 
 loggers:
   aim:
@@ -70,25 +72,17 @@ scheduler:
   wsd_s:
     _target_: src.schedulers.wsd_s.WSDScheduler
 
-    warmup_steps: 1000
+    warmup_steps: 125
     stable_steps:
-      - 3000
-      - 4000
-      - 8000
-      - 16000
-      - 32000
-      - 64000
-      - 128000
+      - 1000
+      - 1000
     decay_steps:
-      - 1000
-      - 1000
-      - 2000
-      - 4000
-      - 8000
-      - 16000
-      - 32000
+      - 125
+      - 250
     peak_lr: 0.0003
     last_epoch: -1
+    interval: step
+    frequency: 1
 
 hydra:
   sweeper: null

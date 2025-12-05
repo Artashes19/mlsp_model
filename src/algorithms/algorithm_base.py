@@ -93,6 +93,13 @@ class AlgorithmBase(pl.LightningModule):
                     )
                 scheduler_conf = scheduler_conf[scheduler_keys[0]]
             
+            interval = scheduler_conf.get("interval", None)
+            if "interval" in scheduler_conf:
+                del scheduler_conf["interval"]
+            frequency = scheduler_conf.get("frequency", None)
+            if "frequency" in scheduler_conf:
+                del scheduler_conf["frequency"]
+            
             scheduler: LRScheduler = hydra.utils.instantiate(
                 scheduler_conf,
                 optimizer=optimizer,
@@ -101,6 +108,10 @@ class AlgorithmBase(pl.LightningModule):
             
             if monitor:
                 sch_opt["monitor"] = monitor
+            if interval is not None:
+                sch_opt["interval"] = interval
+            if frequency is not None:
+                sch_opt["frequency"] = frequency
             
             ret_opt.update({"lr_scheduler": sch_opt})
             try:

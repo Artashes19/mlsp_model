@@ -18,4 +18,6 @@ decay_steps:
   - 16000
   - 32000
 peak_lr: 0.0003
+interval: step
+frequency: 1
 last_epoch: -1
