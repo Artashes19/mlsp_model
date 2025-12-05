@@ -83,10 +83,19 @@ class AlgorithmBase(pl.LightningModule):
             # Get monitor if exists, else None
             monitor = scheduler_conf.get("monitor", None)
             if "monitor" in scheduler_conf:
-                del scheduler_conf.monitor
+                del scheduler_conf["monitor"]
+            
+            if "_target_" not in scheduler_conf:
+                scheduler_keys = list(scheduler_conf.keys())
+                if len(scheduler_keys) != 1:
+                    raise RuntimeError(
+                        "Scheduler configuration must contain exactly one target definition."
+                    )
+                scheduler_conf = scheduler_conf[scheduler_keys[0]]
             
             scheduler: LRScheduler = hydra.utils.instantiate(
-                scheduler_conf, optimizer=optimizer
+                scheduler_conf,
+                optimizer=optimizer,
             )
             sch_opt = {"scheduler": scheduler}
             
@@ -135,8 +144,10 @@ class AlgorithmBase(pl.LightningModule):
                 )
                 t1.record()
                 torch.cuda.synchronize()
-                log.info(f"[compile] done; elapsed={t0.elapsed_time(t1)/1000.0:.3f}s "
-                         f"(fullgraph={self._compile.fullgraph}, backend={self._compile.backend}, mode={self._compile.mode})")
+                log.info(
+                    f"[compile] done; elapsed={t0.elapsed_time(t1) / 1000.0:.3f}s "
+                    f"(fullgraph={self._compile.fullgraph}, backend={self._compile.backend}, mode={self._compile.mode})"
+                )
             
             self.__first_step = False
         else:
@@ -225,7 +236,7 @@ class AlgorithmBase(pl.LightningModule):
             first_idx = sorted(self.validation_step_outputs.keys())[0]
             outputs = self.validation_step_outputs[first_idx]
             self._epoch_end(outputs, split_name="val")
-
+        
         self.validation_step_outputs.clear()
     
     def on_test_epoch_end(self) -> None:
