@@ -6,7 +6,7 @@ class ViTModel(nn.Module):
     def __init__(
         self, 
         encoder_name="mit_b2", 
-        encoder_weights="imagenet", 
+        encoder_weights=None, 
         in_chans=6, 
         **kwargs
     ):
