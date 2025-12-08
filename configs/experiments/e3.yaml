@@ -41,11 +41,11 @@ algorithm:
     freeze_encoder_epochs: 5
     discriminative_lr:
       enable: true
-      encoder_lr_factor: 0.1
+      encoder_lr_factor: 0.2
     warmup:
       enable: true
       warmup_epochs: 5
-      warmup_factor: 0.1
+      warmup_factor: 0.2
     bn_recalibration:
       enable: true
       num_batches: 200
