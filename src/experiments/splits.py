@@ -3,20 +3,22 @@ import os
 import random
 import time
 from collections import namedtuple
-from typing import Optional, Set
+from typing import Optional
 
 # Define the Split structure matching run.py usage
 Split = namedtuple("Split", ["seed", "train_small", "train_full", "validation"])
 
-def ensure_experiments_dir(root_name: str = "experiments") -> str:
+
+def ensure_experiments_dir(root_name: str = "exps") -> str:
     """
-    Ensures the root experiments directory exists (e.g., /path/to/repo/experiments).
+    Ensures the root exps directory exists (e.g., /path/to/repo/exps).
     Returns absolute path.
     """
     # Assuming run.py is in root, we go relative to CWD or find git root
     root_abs = os.path.abspath(root_name)
     os.makedirs(root_abs, exist_ok=True)
     return root_abs
+
 
 def ensure_exp_dir(exp_dir_name: Optional[str], root_dir: str) -> str:
     """
@@ -33,10 +35,11 @@ def ensure_exp_dir(exp_dir_name: Optional[str], root_dir: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
+
 def generate_building_split(
-    seed: int, 
-    n_buildings: int = 25, 
-    train_small_n: int = 7, 
+    seed: int,
+    n_buildings: int = 25,
+    train_small_n: int = 7,
     train_full_n: int = 20
 ) -> Split:
     """
@@ -72,6 +75,7 @@ def generate_building_split(
         validation=validation
     )
 
+
 def write_split_json(exp_dir: str, split: Split) -> None:
     """Saves the split to split.json in the experiment dir."""
     path = os.path.join(exp_dir, "split.json")
@@ -83,6 +87,7 @@ def write_split_json(exp_dir: str, split: Split) -> None:
     }
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
+
 
 def read_split_json(exp_dir: str) -> Optional[Split]:
     """Reads split.json if it exists."""
@@ -102,4 +107,3 @@ def read_split_json(exp_dir: str) -> Optional[Split]:
         )
     except Exception:
         return None
-

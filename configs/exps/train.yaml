@@ -9,7 +9,6 @@ terminal_row: 24
 # Multi-experiment orchestrator controls
 defaults:
   - exps: [ e0, e1, e2, e3 ]  # e.g., "e1,e2,e3,e4"
-  - _self_
 
 exp_dir: ""  # optional explicit exps directory
 experiments_root: exps
@@ -19,6 +18,10 @@ split:
   train_small_n: 7
   train_full_n: 20
   validation_n: 5
+
+data:
+  real_dir: ${datamodule.data_dir}
+  synthetic_dir: ""
 
 # Developer convenience: cap training for quick smoke tests
 fast_dev: false

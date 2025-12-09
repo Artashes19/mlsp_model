@@ -1,0 +1,42 @@
+e3:
+  split_role: train_small
+
+  defaults:
+    - trainer: default
+    - datamodule: mlsp
+    - optimizer: adam
+    - scheduler: wsd_s_finetune
+    - algorithm: mlsp
+    - network: mlsp_unet
+    - callbacks: [ model_checkpoint_0, early_stopping ]
+    - loggers: [ aim ]
+    - strategy: null
+    - _self_
+
+  datamodule:
+    name: finetune_train_small
+    icassp_train_buildings: train_small
+    icassp_val_buildings: validation  # resolved from split.json by orchestrator
+    split_save_path: ./splits/e3.pkl
+    train_samples_per_epoch: 1000
+
+  callbacks:
+    model_checkpoint_0:
+      dirpath: runs/e3/checkpoints/hard
+
+  loggers:
+    aim:
+      experiment: default_e3
+
+  algorithm:
+    finetune:
+      enable: True
+      freeze_encoder_epochs: 5
+      discriminative_lr:
+        enable: True
+      warmup:
+        enable: true
+      bn_recalibration:
+        enable: true
+      l2sp:
+        enable: true
