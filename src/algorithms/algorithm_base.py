@@ -246,7 +246,7 @@ class AlgorithmBase(pl.LightningModule):
         if len(self.validation_step_outputs) > 0:
             first_idx = sorted(self.validation_step_outputs.keys())[0]
             outputs = self.validation_step_outputs[first_idx]
-            self._epoch_end(outputs, split_name="val")
+            self._epoch_end(outputs, split_name=f"val_{first_idx}")
         
         self.validation_step_outputs.clear()
     
