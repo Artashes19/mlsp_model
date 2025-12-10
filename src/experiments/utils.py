@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import time
+import time
 from typing import Optional
 
 from omegaconf import DictConfig
@@ -83,7 +83,7 @@ def create_exp_manifest(config: DictConfig, split, exp_list):
             icassp_root = os.path.expanduser(str(config["exps"][exp]["datamodule"].get("data_dir", "")))
             if not icassp_root or not os.path.isdir(icassp_root):
                 raise RuntimeError(
-                    f"datamodule.data_dir must point to an existing ICASSP root. Got: {config.datamodule.get('data_dir')}"
+                    f"datamodule.data_dir must point to an existing ICASSP root. Got: {config['exps'][exp].get('data_dir')}"
                 )
             # Global ICASSP manifest under ICASSP root
             icassp_global_manifest = None

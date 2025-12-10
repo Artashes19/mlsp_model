@@ -28,9 +28,13 @@ def train_prep(config: DictConfig, project_root: str):
     raw_exps = config.get("exps", "")
     exp_list = [str(x).strip() for x in raw_exps if str(x).strip()]
     
+    for exp in exp_list:
+        cfg_e = clone_cfg(config["exps"][exp])
+        config["exps"][exp] = load_experiment_config(cfg_e, config_root=os.path.join(project_root, "configs/exps"))
+    
     split, exp_dir = exp_root_prep(config)
     icassp_small_manifest, icassp_val_manifest, icassp_full_manifest, synth_filtered_manifest = create_exp_manifest(
-        config, split, exp_dir
+        config, split, exp_list
     )
     
     e2_best_ckpt: str | None = None
@@ -40,7 +44,6 @@ def train_prep(config: DictConfig, project_root: str):
         log.info("[orchestrator] fast_dev enabled: will cap epochs/batches for quick smoke run")
     for exp in exp_list:
         cfg_e = clone_cfg(config["exps"][exp])
-        cfg_e = load_experiment_config(cfg_e, config_root=os.path.join(project_root, "configs/exps"))
         # Merge experiment-specific config (required for trainer and any per-exp overrides)
         exp_cfg_dir_opt = (
             config.get("experiments_config_dir") or

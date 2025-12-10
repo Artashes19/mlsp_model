@@ -1,6 +1,7 @@
 e2:
   # training uses synthetic only; validation uses ICASSP via data_dir
   split_role: train_full
+  ckpt_path: null
 
   defaults:
     - trainer: default
@@ -31,5 +32,3 @@ e2:
   loggers:
     aim:
       experiment: default_e2
-
-  ckpt_path: null

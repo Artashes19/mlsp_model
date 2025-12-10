@@ -1,5 +1,6 @@
 e3:
   split_role: train_small
+  ckpt_path: null
 
   defaults:
     - trainer: default
