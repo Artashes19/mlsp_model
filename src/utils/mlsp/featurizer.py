@@ -664,14 +664,19 @@ def featurizer(sample: RadarSample) -> torch.Tensor:
         sample.y_ant
     )
     # Build input tensor with a zero auxiliary channel to keep network input stable
-    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask]
-    input_tensor = torch.zeros((6, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
+    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, floor_plan]
+    input_tensor = torch.zeros((7, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
     input_tensor[0] = reflectance
     input_tensor[1] = transmittance
     input_tensor[2] = distance
     input_tensor[3] = antenna_gain
     input_tensor[4] = torch.full((sample.H, sample.W), sample.freq_MHz, dtype=torch.float32, device=torch.device('cpu'))
     input_tensor[5] = sample.mask
+    
+    if sample.floor_plan is not None:
+        input_tensor[6] = sample.floor_plan
+    else:
+        input_tensor[6] = ((reflectance > 0) | (transmittance > 0)).float()
     
     input_tensor = normalize_input(input_tensor)
     

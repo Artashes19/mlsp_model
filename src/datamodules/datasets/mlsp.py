@@ -88,6 +88,13 @@ class PathlossDataset(Dataset):
             value=0
         ).squeeze(0)  # (new_H, new_W)
         
+        if sample.floor_plan is not None:
+            sample.floor_plan = F.pad(
+                sample.floor_plan.unsqueeze(0),
+                (pad_left, pad_right, pad_top, pad_bottom),
+                value=0
+            ).squeeze(0)
+
         sample.x_ant += pad_left
         sample.y_ant += pad_top
         _, new_H, new_W = sample.input_img.shape
