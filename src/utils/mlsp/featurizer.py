@@ -513,7 +513,7 @@ def normalize_input(input_tensor):
     normalized[3] = normalized[3] / min_antenna_gain
     normalized[4] = torch.log10(normalized[4]) - 1.9  # "magic shift"
     # normalized[7] = (normalized[7] - 87) / 160.0
-    # normalized[8] = (normalized[7] - 87) / 160.0
+    normalized[7] = (normalized[7] - 87) / 160.0
     # normalized[9] = (normalized[7] - 87) / 160.0
     # normalized[5] = normalized[5] / 100.0  # this feature mask has values < 300
     return normalized
@@ -650,7 +650,25 @@ def extrapolate_difference(pl_init: np.ndarray, aux_sample: np.ndarray, neighbor
     return pl_init + extrapolated_diff
 
 
-def featurizer(sample: RadarSample) -> torch.Tensor:
+def get_fspl(sample: RadarSample) -> torch.Tensor:
+    radiation_pattern = sample.radiation_pattern
+    antenna_gain = calculate_antenna_gain(
+        radiation_pattern,
+        sample.W,
+        sample.H,
+        sample.azimuth,
+        sample.x_ant,
+        sample.y_ant
+    )
+    fspl = calculate_fspl(
+        dist_m=sample.input_img[2],
+        freq_MHz=sample.freq_MHz,
+        antenna_gain=antenna_gain
+    )
+    return fspl
+
+
+def featurizer(sample: RadarSample, approximation_feature_func=get_fspl) -> torch.Tensor:
     reflectance = sample.input_img[0]  # First channel
     transmittance = sample.input_img[1]  # Second channel
     distance = sample.input_img[2]  # Third channel
@@ -664,8 +682,8 @@ def featurizer(sample: RadarSample) -> torch.Tensor:
         sample.y_ant
     )
     # Build input tensor with a zero auxiliary channel to keep network input stable
-    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, floor_plan]
-    input_tensor = torch.zeros((7, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
+    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, floor_plan, approximation_feature]
+    input_tensor = torch.zeros((8, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
     input_tensor[0] = reflectance
     input_tensor[1] = transmittance
     input_tensor[2] = distance
@@ -677,6 +695,9 @@ def featurizer(sample: RadarSample) -> torch.Tensor:
         input_tensor[6] = sample.floor_plan
     else:
         input_tensor[6] = ((reflectance > 0) | (transmittance > 0)).float()
+
+    if approximation_feature_func is not None:
+        input_tensor[7] = approximation_feature_func(sample)
     
     input_tensor = normalize_input(input_tensor)
     

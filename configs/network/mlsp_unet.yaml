@@ -1,5 +1,5 @@
 _target_: src.networks.UNetModel
 
-n_channels: 7
+n_channels: 8
 use_aspp: False
 resnet_size: 34

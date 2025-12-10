@@ -2,5 +2,5 @@ _target_: src.networks.ViTModel
 
 encoder_name: mit_b2
 encoder_weights: null
-in_chans: 7
+in_chans: 8
 
