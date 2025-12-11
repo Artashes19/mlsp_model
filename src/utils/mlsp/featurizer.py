@@ -514,6 +514,7 @@ def normalize_input(input_tensor):
     normalized[4] = torch.log10(normalized[4]) - 1.9  # "magic shift"
     # normalized[7] = (normalized[7] - 87) / 160.0
     normalized[7] = (normalized[7] - 87) / 160.0
+    normalized[8] = (normalized[8] - 87) / 160.0
     # normalized[9] = (normalized[7] - 87) / 160.0
     # normalized[5] = normalized[5] / 100.0  # this feature mask has values < 300
     return normalized
@@ -668,7 +669,12 @@ def get_fspl(sample: RadarSample) -> torch.Tensor:
     return fspl
 
 
-def featurizer(sample: RadarSample, approximation_feature_func=get_fspl) -> torch.Tensor:
+def featurizer(
+    sample: RadarSample,
+    approximation_feature_func=get_fspl,
+    sparse_prob: float = 1.0/3.0,
+    sparse_range: tuple[float, float] = (0.0, 0.01)
+) -> torch.Tensor:
     reflectance = sample.input_img[0]  # First channel
     transmittance = sample.input_img[1]  # Second channel
     distance = sample.input_img[2]  # Third channel
@@ -682,8 +688,8 @@ def featurizer(sample: RadarSample, approximation_feature_func=get_fspl) -> torc
         sample.y_ant
     )
     # Build input tensor with a zero auxiliary channel to keep network input stable
-    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, floor_plan, approximation_feature]
-    input_tensor = torch.zeros((8, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
+    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, floor_plan, approximation_feature, sparse_measurements]
+    input_tensor = torch.zeros((9, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
     input_tensor[0] = reflectance
     input_tensor[1] = transmittance
     input_tensor[2] = distance
@@ -698,6 +704,28 @@ def featurizer(sample: RadarSample, approximation_feature_func=get_fspl) -> torc
 
     if approximation_feature_func is not None:
         input_tensor[7] = approximation_feature_func(sample)
+        
+    # Sparse measurements channel
+    if random.random() < sparse_prob and sample.output_img is not None:
+        sparsity = random.uniform(sparse_range[0], sparse_range[1])
+        # Only sample from valid mask region
+        valid_indices = torch.nonzero(sample.mask)
+        if valid_indices.numel() > 0:
+            num_samples = int(valid_indices.size(0) * sparsity)
+            if num_samples > 0:
+                perm = torch.randperm(valid_indices.size(0))
+                selected_indices = valid_indices[perm[:num_samples]]
+                
+                # Get ground truth values (handling potential shape mismatch if output_img is (C,H,W))
+                output_img = sample.output_img
+                if output_img.ndim == 3:
+                    output_img = output_img.squeeze(0)
+                
+                sparse_channel = torch.zeros((sample.H, sample.W), dtype=torch.float32)
+                rows = selected_indices[:, 0]
+                cols = selected_indices[:, 1]
+                sparse_channel[rows, cols] = output_img[rows, cols]
+                input_tensor[8] = sparse_channel
     
     input_tensor = normalize_input(input_tensor)
     

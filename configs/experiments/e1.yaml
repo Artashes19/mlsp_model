@@ -34,6 +34,10 @@ datamodule:
   split_save_path: ./splits/e1.pkl
   icassp_val_subsample_ratio: 1.0
 
+  # Sparse measurement controls
+  sparse_prob: 0.333333333333
+  sparse_range: [ 0.0, 0.01 ]
+
 callbacks:
   best_checkpoint:
     _target_: pytorch_lightning.callbacks.ModelCheckpoint

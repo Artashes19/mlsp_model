@@ -49,6 +49,8 @@ class PathlossDataset(Dataset):
         self.reps_per_epoch = reps_per_epoch
         self.augment_val = augment_val
         
+        self.sparse_prob = float(kwargs["sparse_prob"])
+        self.sparse_range = eval(kwargs["sparse_range"])
         self.target_size = IMG_TARGET_SIZE
     
     def __len__(self):
@@ -262,7 +264,11 @@ class PathlossDataset(Dataset):
 
         output_tensor = sample.output_img if sample.output_img is not None else None
 
-        input_tensor = featurizer(sample=sample)
+        input_tensor = featurizer(
+            sample=sample,
+            sparse_prob=self.sparse_prob,
+            sparse_range=self.sparse_range
+        )
         mask = sample.mask
         # Store original dimensions for algorithm to use
         # Return only lightweight metadata to minimize batch transfer overhead
