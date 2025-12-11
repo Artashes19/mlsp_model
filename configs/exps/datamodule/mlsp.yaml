@@ -57,3 +57,5 @@ synthetic_manifest_path: null
 icassp_limit_per_building: null
 synthetic_limit: null
 train_samples_per_epoch: null
+use_synthetic_val: False
+synthetic_val_samples_per_epoch: 1000
