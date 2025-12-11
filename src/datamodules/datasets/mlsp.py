@@ -50,7 +50,22 @@ class PathlossDataset(Dataset):
         self.augment_val = augment_val
         
         self.sparse_prob = float(kwargs["sparse_prob"])
-        self.sparse_range = eval(kwargs["sparse_range"])
+        
+        # Ensure sparse_range is a list/tuple of floats
+        sparse_range_val = kwargs["sparse_range"]
+        if isinstance(sparse_range_val, str):
+            # Parse string representation if it comes as a string (e.g. "[0.0, 0.01]")
+            try:
+                cleaned = sparse_range_val.strip("[]()")
+                self.sparse_range = [float(x.strip()) for x in cleaned.split(",")]
+            except ValueError:
+                raise ValueError(f"Could not parse sparse_range string: {sparse_range_val}")
+        else:
+            self.sparse_range = sparse_range_val
+            
+        if not isinstance(self.sparse_range, (list, tuple)) or len(self.sparse_range) != 2:
+            raise ValueError(f"sparse_range must be a list/tuple of 2 floats, got {self.sparse_range}")
+            
         self.target_size = IMG_TARGET_SIZE
     
     def __len__(self):
