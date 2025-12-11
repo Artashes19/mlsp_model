@@ -3,7 +3,7 @@ monitor: null
 save_top_k: -1
 save_last: true
 verbose: false
-dirpath: /checkpoints/every
+dirpath: checkpoints/every
 filename: epoch_{epoch:04d}_every
 auto_insert_metric_name: false
 schedule_epochs: [ 9, 19, 39, 79, 159, 319, 639 ]

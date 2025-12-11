@@ -28,6 +28,8 @@ e2:
   callbacks:
     model_checkpoint_0:
       dirpath: e2/checkpoints/hard
+    model_checkpoint_every:
+      dirpath: e2/checkpoints/every
 
   loggers:
     aim:
