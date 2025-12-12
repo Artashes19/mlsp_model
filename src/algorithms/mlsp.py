@@ -314,57 +314,57 @@ class MLSP(AlgorithmBase):
         
         preds = self._network(inputs)
         
-        if split_name == "train":
-            # weights = (inputs[:, -1] == 0) * 9 + 1
-            weights = torch.ones_like(inputs[:, -1])
-            return self.get_metrics(preds, targets, masks, weights)
-        else:
-            mses = []
-            for i in range(targets.shape[0]):
-                input_i = inputs[i]
-                targets_i = targets[i]
-                pred_i = preds[i]
-                sample_i = {k: sample[k][i] for k in sample.keys()}
-                
-                # Use pixel_size for exact reverse scaling (no floating point errors)
-                original_pixel_size = 0.25  # Known constant
-                current_pixel_size = sample_i["pixel_size"]
-                reverse_scale_factor = original_pixel_size / current_pixel_size
-                
-                # Get exact original dimensions
-                current_h, current_w = 640, 640  # Normalized size
-                old_h = int(current_h * reverse_scale_factor)
-                old_w = int(current_w * reverse_scale_factor)
-                
-                # Calculate pre-padding dimensions (before padding to 640x640)
-                scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
-                resized_w = int(old_w * scale_factor_forward)
-                
-                try:
-                    # Cut prediction to remove padding (640x640 → 640xresized_w)
-                    pred_cut = pred_i.squeeze(0)[:, :resized_w]
-                    
-                    # Resize prediction back to exact original dimensions
-                    pred_final = resize_linear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-                    
-                    # Target is also in normalized 640x640 space - apply same processing
-                    target_normalized = targets_i.squeeze(0)  # [640, 640]
-                    target_cut = target_normalized[:, :resized_w]
-                    target_final = resize_linear(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-                    
-                    mse = torch.mean((pred_final - target_final) ** 2)
-                    mses.append(mse)
-                
-                except Exception as ex:
-                    log.error(f"Error in validation sample {i}: {ex}")
-                    continue
-            
-            mean_mse = torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")])
-            rmse = torch.sqrt(mean_mse)
-            return {
-                "loss": rmse,
-                "rmse": rmse,
-            }
+        # if split_name == "train":
+        # weights = (inputs[:, -1] == 0) * 9 + 1
+        weights = torch.ones_like(inputs[:, -1])
+        return self.get_metrics(preds, targets, masks, weights)
+        # else:
+        #     mses = []
+        #     for i in range(targets.shape[0]):
+        #         input_i = inputs[i]
+        #         targets_i = targets[i]
+        #         pred_i = preds[i]
+        #         sample_i = {k: sample[k][i] for k in sample.keys()}
+        #
+        #         # Use pixel_size for exact reverse scaling (no floating point errors)
+        #         original_pixel_size = 0.25  # Known constant
+        #         current_pixel_size = sample_i["pixel_size"]
+        #         reverse_scale_factor = original_pixel_size / current_pixel_size
+        #
+        #         # Get exact original dimensions
+        #         current_h, current_w = targets.shape[1:]  # Normalized size
+        #         old_h = int(current_h * reverse_scale_factor)
+        #         old_w = int(current_w * reverse_scale_factor)
+        #
+        #         # Calculate pre-padding dimensions (before padding to 640x640)
+        #         scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
+        #         resized_w = int(old_w * scale_factor_forward)
+        #
+        #         try:
+        #             # Cut prediction to remove padding (640x640 → 640xresized_w)
+        #             pred_cut = pred_i.squeeze(0)[:, :resized_w]
+        #
+        #             # Resize prediction back to exact original dimensions
+        #             pred_final = resize_linear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+        #
+        #             # Target is also in normalized 640x640 space - apply same processing
+        #             target_normalized = targets_i.squeeze(0)  # [640, 640]
+        #             target_cut = target_normalized[:, :resized_w]
+        #             target_final = resize_linear(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+        #
+        #             mse = torch.mean((pred_final - target_final) ** 2)
+        #             mses.append(mse)
+        #
+        #         except Exception as ex:
+        #             log.error(f"Error in validation sample {i}: {ex}")
+        #             continue
+        #
+        #     mean_mse = torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")])
+        #     rmse = torch.sqrt(mean_mse)
+        #     return {
+        #         "loss": rmse,
+        #         "rmse": rmse,
+        #     }
     
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
