@@ -1,5 +1,5 @@
-import os
 import json
+import os
 from typing import Optional, Union
 
 import numpy as np
@@ -15,7 +15,7 @@ from src.utils.mlsp.featurizer import featurizer
 from src.utils.mlsp.types import RadarSampleInputs
 
 INITIAL_PIXEL_SIZE = 0.25
-IMG_TARGET_SIZE = 640
+IMG_TARGET_SIZE = 256
 
 
 class PathlossDataset(Dataset):
@@ -101,7 +101,7 @@ class PathlossDataset(Dataset):
         data = np.load(npz_path)
         with open(json_path, "r") as f:
             meta = json.load(f)
-
+        
         # Enforce presence of required fields; mask optional, pathloss required for supervision
         required_keys = ["reflectance", "transmittance", "pathloss"]
         missing = [k for k in required_keys if k not in data]
@@ -124,9 +124,9 @@ class PathlossDataset(Dataset):
                 raise RuntimeError(
                     f"Array '{arr_name}' shape {arr.shape} != reflectance shape {(H, W)} in {npz_path}"
                 )
-
+        
         H, W = reflectance.shape
-
+        
         # Enforce required JSON fields
         if "antenna" not in meta or not isinstance(meta["antenna"], dict):
             raise RuntimeError(f"Missing 'antenna' object in JSON {json_path}")
@@ -137,30 +137,30 @@ class PathlossDataset(Dataset):
             raise RuntimeError(f"Missing 'frequency_MHz' in JSON {json_path}")
         if "pixel_size_m" not in meta:
             raise RuntimeError(f"Missing 'pixel_size_m' in JSON {json_path}")
-
+        
         x_ant = float(ant["x_px"])  # will raise if not numeric
         y_ant = float(ant["y_px"])  # will raise if not numeric
         pixel_size = float(meta["pixel_size_m"])  # will raise if not numeric
-
+        
         yy, xx = np.meshgrid(np.arange(H, dtype=np.float32), np.arange(W, dtype=np.float32), indexing="ij")
         dist_px = np.hypot(xx - x_ant, yy - y_ant)
         dist_m = (dist_px * pixel_size).astype(np.float32)
-
+        
         input_img = torch.zeros((3, H, W), dtype=torch.float32)
         input_img[0] = torch.from_numpy(reflectance)
         input_img[1] = torch.from_numpy(transmittance)
         input_img[2] = torch.from_numpy(dist_m)
-
+        
         output_img = torch.from_numpy(pathloss)
-
+        
         freq_MHz = float(meta["frequency_MHz"])  # required above
         radiation_pattern = torch.ones(360, dtype=torch.float32)
-
+        
         if self.pl_clip is not None and not self.inference:
             pl_clip = torch.tensor(self.pl_clip, dtype=torch.float32)
         else:
             pl_clip = float("inf")
-
+        
         sample = RadarSample(
             file_name=file_name,
             task_idx=self.task_idx,
@@ -184,7 +184,7 @@ class PathlossDataset(Dataset):
     
     def read_sample_icassp(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
         if isinstance(inputs, RadarSampleInputs):
-            inputs = inputs.asdict() 
+            inputs = inputs.asdict()
         file_name = inputs["file_name"]
         freq_MHz = inputs["freq_MHz"]
         input_file = inputs["input_file"]
@@ -192,7 +192,7 @@ class PathlossDataset(Dataset):
         position_file = inputs["position_file"]
         sampling_position = inputs["sampling_position"]
         radiation_pattern_file = inputs["radiation_pattern_file"]
-
+        
         input_img = read_image(input_file).float()
         C, H, W = input_img.shape
         
@@ -244,17 +244,17 @@ class PathlossDataset(Dataset):
         sample = self.read_sample(inp)
         
         orig_h, orig_w = sample.H, sample.W
-
+        
         sample = normalize_size(sample=sample, target_size=self.target_size)
-
+        
         if (
             self.training or
             (self.augment_val and sample.output_img != "")
         ) and self.augmentations is not None:
             sample = self.augmentations(sample)
-
+        
         output_tensor = sample.output_img if sample.output_img is not None else None
-
+        
         input_tensor = featurizer(sample=sample)
         mask = sample.mask
         # Store original dimensions for algorithm to use

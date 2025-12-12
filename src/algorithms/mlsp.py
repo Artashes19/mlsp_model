@@ -105,7 +105,7 @@ class MLSP(AlgorithmBase):
         reverse_scale_factor = original_pixel_size / current_pixel_size
         
         # Get exact original dimensions
-        current_h, current_w = 640, 640  # Normalized size
+        current_h, current_w = targets.shape[1:]  # Normalized size
         old_h = int(current_h * reverse_scale_factor)
         old_w = int(current_w * reverse_scale_factor)
         
