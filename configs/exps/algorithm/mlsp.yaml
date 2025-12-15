@@ -30,11 +30,6 @@ finetune:
   discriminative_lr:
     enable: False
     encoder_lr_factor: 0.1
-  # Warmup schedule (linear warmup of lr from warmup_factor*base to base over warmup_epochs)
-  warmup:
-    enable: False
-    warmup_epochs: 5
-    warmup_factor: 0.1
   # BatchNorm recalibration on target data before training
   bn_recalibration:
     enable: False

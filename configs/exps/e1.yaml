@@ -1,7 +1,8 @@
 e1:
   split_role: train_full
   ckpt_path: null
-
+  load_weights_only: False
+  
   defaults:
     - trainer: default
     - datamodule: mlsp

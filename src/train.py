@@ -5,6 +5,7 @@ import time
 from typing import Iterable, Optional
 
 import hydra
+import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Callback, Trainer
 from pytorch_lightning.loggers import Logger
@@ -151,8 +152,7 @@ def train_prep(config: DictConfig, project_root: str):
             pass
         
         if exp == "e0":
-            # Train on train_small (ICASSR real only)
-            cfg_e.datamodule.use_synthetic_train = False
+            # Train on train_small (ICASSP real only)
             cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
                 split.train_small
             )
@@ -160,8 +160,7 @@ def train_prep(config: DictConfig, project_root: str):
             best = train(cfg_e)
             log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
         elif exp == "e1":
-            # Train on train_full (ICASSR real only)
-            cfg_e.datamodule.use_synthetic_train = False
+            # Train on train_full (ICASSP real only)
             cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
                 split.train_full
             )
@@ -170,55 +169,15 @@ def train_prep(config: DictConfig, project_root: str):
             log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
         elif exp == "e2":
             # Pretrain on synthetic only; validation on real held-out buildings
-            cfg_e.datamodule.use_synthetic_train = True
-            cfg_e.datamodule.train_buildings = None
             t0 = time.perf_counter()
             best = train(cfg_e)
             log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
             # Try to capture the best checkpoint path for downstream e3
-            ckpt_dir = os.path.join(exp_dir, "e2", "checkpoints")
-            e2_best_ckpt = None
-            if os.path.isdir(ckpt_dir):
-                try:
-                    files = [os.path.join(ckpt_dir, f) for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
-                    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-                    e2_best_ckpt = files[0] if files else None
-                except Exception:
-                    e2_best_ckpt = None
-            log.info(
-                f"[e2] selected checkpoint for finetune: {e2_best_ckpt if e2_best_ckpt else 'NONE FOUND'} (dir={ckpt_dir})"
-            )
         elif exp == "e3":
             # Finetune on train_small using e2 checkpoints
-            ckpt_dir = os.path.join(exp_dir, "e2", "checkpoints")
-            # If not recorded from this run, try filesystem
-            if not e2_best_ckpt:
-                if os.path.isdir(ckpt_dir):
-                    try:
-                        files = [os.path.join(ckpt_dir, f) for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
-                        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-                        e2_best_ckpt = files[0] if files else None
-                    except Exception:
-                        e2_best_ckpt = None
-            if not e2_best_ckpt:
-                cmd = f"timeout 60 python3 run.py exps=e2 exp_dir={os.path.basename(exp_dir)}"
-                raise RuntimeError(
-                    f"e3 requires a pretrained checkpoint from e2.\n"
-                    f"Cause: no .ckpt found under {ckpt_dir}\n"
-                    f"Run this first:\n  {cmd}"
-                )
-            else:
-                log.info(f"[e3] using e2 checkpoint: {os.path.abspath(e2_best_ckpt)}")
-            cfg_e.datamodule.use_synthetic_train = False
             cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
                 split.train_small
             )
-            # Finetune knobs: enable weights-only load
-            if "algorithm" in cfg_e:
-                ft = cfg_e.algorithm.get("finetune", {}) or {}
-                ft["enable"] = True
-                ft["ckpt_path"] = os.path.abspath(e2_best_ckpt)
-                cfg_e.algorithm.finetune = ft
             t0 = time.perf_counter()
             best = train(cfg_e)
             log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
@@ -250,7 +209,7 @@ def train(config: DictConfig) -> str | None:
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
     ft_conf = config.algorithm.get("finetune", None)
     if ft_conf and bool(ft_conf.get("enable", False)):
-        ckpt_ft = os.path.abspath(str(ft_conf.get("ckpt_path", "")))
+        ckpt_ft = os.path.abspath(str(config.get("ckpt_path", "")))
         if not ckpt_ft:
             raise RuntimeError("Finetune is enabled but no ckpt_path was provided.")
         if not os.path.isfile(ckpt_ft):
@@ -329,6 +288,12 @@ def train(config: DictConfig) -> str | None:
         )
     except Exception:
         pass
+    
+    if config["ckpt_path"] is not None and config["load_weights_only"]:
+        log.info(f"Loading weights from {config['ckpt_path']}")
+        ckpt = torch.load(config["ckpt_path"])
+        algorithm.load_state_dict(ckpt['state_dict'])
+        config["ckpt_path"] = None
     
     log_hyperparameters(config=config, algorithm=algorithm, trainer=trainer)
     

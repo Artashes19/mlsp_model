@@ -6,14 +6,15 @@ import time
 from collections import defaultdict
 from typing import Any
 
+import hydra
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from kaggle import KaggleApi
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from PIL import Image
+from torch.optim.lr_scheduler import LRScheduler
 from tqdm import tqdm
 
 from src.algorithms.algorithm_base import AlgorithmBase
@@ -105,7 +106,7 @@ class MLSP(AlgorithmBase):
         reverse_scale_factor = original_pixel_size / current_pixel_size
         
         # Get exact original dimensions
-        current_h, current_w = targets.shape[1:]  # Normalized size
+        current_h, current_w = 640, 640  # Normalized size
         old_h = int(current_h * reverse_scale_factor)
         old_w = int(current_w * reverse_scale_factor)
         
@@ -314,57 +315,8 @@ class MLSP(AlgorithmBase):
         
         preds = self._network(inputs)
         
-        # if split_name == "train":
-        # weights = (inputs[:, -1] == 0) * 9 + 1
         weights = torch.ones_like(inputs[:, -1])
         return self.get_metrics(preds, targets, masks, weights)
-        # else:
-        #     mses = []
-        #     for i in range(targets.shape[0]):
-        #         input_i = inputs[i]
-        #         targets_i = targets[i]
-        #         pred_i = preds[i]
-        #         sample_i = {k: sample[k][i] for k in sample.keys()}
-        #
-        #         # Use pixel_size for exact reverse scaling (no floating point errors)
-        #         original_pixel_size = 0.25  # Known constant
-        #         current_pixel_size = sample_i["pixel_size"]
-        #         reverse_scale_factor = original_pixel_size / current_pixel_size
-        #
-        #         # Get exact original dimensions
-        #         current_h, current_w = targets.shape[1:]  # Normalized size
-        #         old_h = int(current_h * reverse_scale_factor)
-        #         old_w = int(current_w * reverse_scale_factor)
-        #
-        #         # Calculate pre-padding dimensions (before padding to 640x640)
-        #         scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
-        #         resized_w = int(old_w * scale_factor_forward)
-        #
-        #         try:
-        #             # Cut prediction to remove padding (640x640 → 640xresized_w)
-        #             pred_cut = pred_i.squeeze(0)[:, :resized_w]
-        #
-        #             # Resize prediction back to exact original dimensions
-        #             pred_final = resize_linear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-        #
-        #             # Target is also in normalized 640x640 space - apply same processing
-        #             target_normalized = targets_i.squeeze(0)  # [640, 640]
-        #             target_cut = target_normalized[:, :resized_w]
-        #             target_final = resize_linear(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-        #
-        #             mse = torch.mean((pred_final - target_final) ** 2)
-        #             mses.append(mse)
-        #
-        #         except Exception as ex:
-        #             log.error(f"Error in validation sample {i}: {ex}")
-        #             continue
-        #
-        #     mean_mse = torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")])
-        #     rmse = torch.sqrt(mean_mse)
-        #     return {
-        #         "loss": rmse,
-        #         "rmse": rmse,
-        #     }
     
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
@@ -453,77 +405,107 @@ class MLSP(AlgorithmBase):
         }
     
     # Override to support discriminative LR and warmup
-    def configure_optimizers(self):
+    def configure_optimizers(
+        self,
+    ) -> dict:
         if not bool(self._finetune_conf.get("enable", False)):
             return super().configure_optimizers()
         
-        # Base optimizer settings
-        base_conf = self._optimizer_conf
-        try:
-            base_lr = float(base_conf.get("lr", 3e-4))  # OmegaConf-like access
-        except Exception:
-            base_lr = 3e-4
+        optimizer_conf: DictConfig = OmegaConf.create(self._optimizer_conf)
+        base_lr: float = float(optimizer_conf["lr"]) if "lr" in optimizer_conf else 3e-4
         
-        discr_conf = self._finetune_conf.get("discriminative_lr", {})
-        use_discr = bool(discr_conf.get("enable", False))
-        enc_factor = float(discr_conf.get("encoder_lr_factor", 0.1))
+        discr_conf: dict = self._finetune_conf.get("discriminative_lr", {})
+        use_discr: bool = bool(discr_conf.get("enable", False))
+        enc_factor: float = float(discr_conf.get("encoder_lr_factor", 0.1))
         
-        # Build param groups
-        params_encoder = []
-        params_other = []
-        for name, p in self._network.named_parameters():
-            if not p.requires_grad:
+        params_encoder: list[nn.Parameter] = []
+        params_other: list[nn.Parameter] = []
+        for name, parameter in self._network.named_parameters():
+            if not parameter.requires_grad:
                 continue
             if ".encoder." in name or name.startswith("unet.encoder") or name.startswith("encoder."):
-                params_encoder.append(p)
+                params_encoder.append(parameter)
             else:
-                params_other.append(p)
+                params_other.append(parameter)
         
-        try:
-            num_enc = sum(p.numel() for p in params_encoder)
-            num_oth = sum(p.numel() for p in params_other)
-            log.info(
-                f"[finetune] param groups: encoder_params={len(params_encoder)} ({num_enc} weights), "
-                f"other_params={len(params_other)} ({num_oth} weights), "
-                f"discriminative_lr={'on' if use_discr else 'off'} (encoder_lr_factor={enc_factor})"
-            )
-        except Exception:
-            pass
+        num_enc: int = sum(parameter.numel() for parameter in params_encoder)
+        num_oth: int = sum(parameter.numel() for parameter in params_other)
+        log.info(
+            f"[finetune] param groups: encoder_params={len(params_encoder)} ({num_enc} weights), "
+            f"other_params={len(params_other)} ({num_oth} weights), "
+            f"discriminative_lr={'on' if use_discr else 'off'} (encoder_lr_factor={enc_factor})"
+        )
         
         if use_discr:
-            param_groups = [
-                {"params": params_encoder, "lr": base_lr * enc_factor},
-                {"params": params_other, "lr": base_lr},
+            param_groups: list[dict] = [
+                {
+                    "params": params_encoder,
+                    "lr": base_lr,
+                    "lr_scale": enc_factor,
+                },
+                {
+                    "params": params_other,
+                    "lr": base_lr,
+                    "lr_scale": 1.0,
+                },
             ]
         else:
-            param_groups = [{"params": params_encoder + params_other, "lr": base_lr}]
+            combined_params: list[nn.Parameter] = params_encoder + params_other
+            param_groups = [
+                {
+                    "params": combined_params,
+                    "lr": base_lr,
+                    "lr_scale": 1.0,
+                }
+            ]
         
-        optimizer = optim.Adam(param_groups)
+        optimizer = hydra.utils.instantiate(
+            optimizer_conf,
+            params=param_groups,
+            _convert_="all"
+        )
         
-        # Warmup scheduler (epoch-based)
-        warm_conf = self._finetune_conf.get("warmup", {})
-        use_warm = bool(warm_conf.get("enable", False))
-        if use_warm:
-            warm_epochs = int(warm_conf.get("warmup_epochs", 5))
-            warm_factor = float(warm_conf.get("warmup_factor", 0.1))
-            log.info(f"[finetune] warmup enabled: epochs={warm_epochs}, factor={warm_factor}")
+        ret_opt: dict = {
+            "optimizer": optimizer,
+        }
+        
+        if self._scheduler_conf is not None:
+            scheduler_conf: DictConfig = OmegaConf.create(self._scheduler_conf)
+            monitor = scheduler_conf.get("monitor", None)
+            if "monitor" in scheduler_conf:
+                del scheduler_conf["monitor"]
             
-            def lr_lambda(epoch):
-                if epoch >= warm_epochs:
-                    return 1.0
-                return warm_factor + (1.0 - warm_factor) * (epoch / max(1, warm_epochs))
+            if "_target_" not in scheduler_conf:
+                scheduler_keys: list[str] = list(scheduler_conf.keys())
+                if len(scheduler_keys) != 1:
+                    raise RuntimeError(
+                        "Scheduler configuration must contain exactly one target definition."
+                    )
+                scheduler_conf = scheduler_conf[scheduler_keys[0]]
             
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "epoch",
-                    "monitor": None,
-                },
+            interval = scheduler_conf.get("interval", None)
+            if "interval" in scheduler_conf:
+                del scheduler_conf["interval"]
+            frequency = scheduler_conf.get("frequency", None)
+            if "frequency" in scheduler_conf:
+                del scheduler_conf["frequency"]
+            
+            scheduler: LRScheduler = hydra.utils.instantiate(
+                scheduler_conf,
+                optimizer=optimizer,
+            )
+            sch_opt: dict = {
+                "scheduler": scheduler,
             }
-        else:
-            return {"optimizer": optimizer}
+            if monitor is not None:
+                sch_opt["monitor"] = monitor
+            if interval is not None:
+                sch_opt["interval"] = interval
+            if frequency is not None:
+                sch_opt["frequency"] = frequency
+            ret_opt["lr_scheduler"] = sch_opt
+        
+        return ret_opt
     
     def _calculate_epoch_metrics(self, outputs: list[Any]) -> dict:
         # init combined metrics with zero values

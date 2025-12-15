@@ -44,19 +44,24 @@ class WSDScheduler(_LRScheduler):
             optimizer=optimizer,
             last_epoch=last_epoch,
         )
-        self.base_lrs = []
-        for param_group in self.optimizer.param_groups:
-            param_group["initial_lr"] = self._peak_lr
-            param_group["lr"] = 0.0
-            self.base_lrs.append(self._peak_lr)
     
     def get_lr(
         self,
     ) -> list[float]:
-        factor = self._factor_for_step(step=self.last_epoch)
+        factor = self._factor_for_step(
+            step=self.last_epoch,
+        )
+        peak_value: float = self._peak_lr * factor
+        group_scales: list[float] = []
+        for param_group in self.optimizer.param_groups:
+            scale_value = param_group.get(
+                "lr_scale",
+                1.0,
+            )
+            group_scales.append(float(scale_value))
         return [
-            base_lr * factor
-            for base_lr in self.base_lrs
+            peak_value * scale
+            for scale in group_scales
         ]
     
     def step(
@@ -65,7 +70,10 @@ class WSDScheduler(_LRScheduler):
     ) -> None:
         if self._first_step_call:
             self._first_step_call = False
-            lrs = [0]
+            lrs = [
+                0.0
+                for _ in self.optimizer.param_groups
+            ]
         else:
             if epoch is None:
                 self.last_epoch += 1
