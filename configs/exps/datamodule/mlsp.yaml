@@ -42,9 +42,9 @@ walls_aug_p: 0.0
 transmittance_range: [ 2, 18 ]
 angle_range: [ 0, 0 ]
 scale_range: [ 1.0, 1.0 ]
-flip_vertical: False
-flip_horizontal: False
-cardinal_rotation: False
+flip_vertical: True
+flip_horizontal: True
+cardinal_rotation: True
 
 # Experiment controls (optional)
 train_buildings: null
