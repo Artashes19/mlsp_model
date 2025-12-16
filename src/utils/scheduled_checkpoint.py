@@ -15,6 +15,8 @@ class ScheduledEpochModelCheckpoint(ModelCheckpoint):
         # Disable base-class monitoring logic; we control saving explicitly.
         kwargs.setdefault("monitor", None)
         kwargs.setdefault("save_last", False)
+        # Force saving on train epoch end
+        kwargs.setdefault("save_on_train_epoch_end", True)
         super().__init__(**kwargs)
         self._schedule = {int(e) for e in (schedule_epochs or [])}
 
@@ -34,6 +36,12 @@ class ScheduledEpochModelCheckpoint(ModelCheckpoint):
 
     def on_train_epoch_end(self, trainer, pl_module, *args, **kwargs) -> None:
         if self._should_save_epoch(trainer):
-            return super().on_train_epoch_end(trainer, pl_module, *args, **kwargs)
+            # Explicitly trigger checkpoint save with proper epoch formatting
+            epoch = trainer.current_epoch
+            # Format filename ourselves to avoid Lightning's "epoch=X" format
+            filename = self.filename.format(epoch=epoch)
+            filepath = os.path.join(self.dirpath, f"{filename}.ckpt")
+            self._save_checkpoint(trainer, filepath)
+            self._last_global_step_saved = trainer.global_step
 
 

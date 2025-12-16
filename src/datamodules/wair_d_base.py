@@ -40,7 +40,7 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
             pin_memory=True,
         )
         if self._num_workers and self._num_workers > 0:
-            dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=2)
         try:
             logging.getLogger(__name__).info(
                 f"[dataloader/train] size={len(self._train_set) if self._train_set is not None else 0}, "
@@ -63,7 +63,7 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
             pin_memory=True,
         )
         if self._num_workers and self._num_workers > 0:
-            dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=2)
         try:
             logging.getLogger(__name__).info(
                 f"[dataloader/val] size={len(self._val_set) if self._val_set is not None else 0}, "
@@ -86,7 +86,7 @@ class WAIRDBaseDatamodule(pl.LightningDataModule):
             pin_memory=True,
         )
         if self._num_workers and self._num_workers > 0:
-            dl_kwargs.update(persistent_workers=True, prefetch_factor=8)
+            dl_kwargs.update(persistent_workers=True, prefetch_factor=2)
         try:
             logging.getLogger(__name__).info(
                 f"[dataloader/test] size={len(self._test_set) if self._test_set is not None else 0}, "
