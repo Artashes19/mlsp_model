@@ -1,19 +1,20 @@
 import logging
 import os
+import re
 import shutil
 import time
 from collections import defaultdict
-from copy import deepcopy
-import re
 from typing import Any
 
+import hydra
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 from kaggle import KaggleApi
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from PIL import Image
+from torch.optim.lr_scheduler import LRScheduler
 from tqdm import tqdm
 
 from src.algorithms.algorithm_base import AlgorithmBase
@@ -70,7 +71,7 @@ class MLSP(AlgorithmBase):
         self.test_step_outputs = defaultdict(list)
         # Default pointwise criterion (used only as a fallback – main loss is computed in get_metrics)
         self.loss = nn.L1Loss()
-
+        
         # Finetune configuration (optional)
         self._finetune_conf: DictConfig | dict | None = kwargs.get("finetune", None)
         if self._finetune_conf is None:
@@ -79,52 +80,53 @@ class MLSP(AlgorithmBase):
                 "enable": False
             }
         try:
-            log.info(f"[finetune] enable={bool(self._finetune_conf.get('enable', False))}, "
-                     f"ckpt_path={self._finetune_conf.get('ckpt_path', None)}, "
-                     f"freeze_encoder_epochs={int(self._finetune_conf.get('freeze_encoder_epochs', 0))}, "
-                     f"discriminative_lr={self._finetune_conf.get('discriminative_lr', {})}, "
-                     f"warmup={self._finetune_conf.get('warmup', {})}, "
-                     f"bn_recalibration={self._finetune_conf.get('bn_recalibration', {})}, "
-                     f"l2sp={self._finetune_conf.get('l2sp', {})}")
+            log.info(
+                f"[finetune] enable={bool(self._finetune_conf.get('enable', False))}, "
+                f"ckpt_path={self._finetune_conf.get('ckpt_path', None)}, "
+                f"freeze_encoder_epochs={int(self._finetune_conf.get('freeze_encoder_epochs', 0))}, "
+                f"discriminative_lr={self._finetune_conf.get('discriminative_lr', {})}, "
+                f"warmup={self._finetune_conf.get('warmup', {})}, "
+                f"bn_recalibration={self._finetune_conf.get('bn_recalibration', {})}, "
+                f"l2sp={self._finetune_conf.get('l2sp', {})}"
+            )
         except Exception:
             pass
-
+        
         # Placeholders for finetune utilities
         self._pretrained_weights: dict[str, torch.Tensor] | None = None
         self._freeze_encoder_epochs: int = int(self._finetune_conf.get("freeze_encoder_epochs", 0))
         self._encoder_frozen: bool = False
-        
     
     def pred(self, batch):
         inputs, targets, masks, sample = batch
-
+        
         # Use pixel_size for exact reverse scaling (no floating point errors)
         original_pixel_size = 0.25  # Known constant
         current_pixel_size = sample["pixel_size"]
         reverse_scale_factor = original_pixel_size / current_pixel_size
-
+        
         # Get exact original dimensions
         current_h, current_w = 640, 640  # Normalized size
         old_h = int(current_h * reverse_scale_factor)
         old_w = int(current_w * reverse_scale_factor)
-
+        
         # Calculate pre-padding dimensions
         scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
         resized_w = int(old_w * scale_factor_forward)
-
+        
         pred = self.network(inputs.cuda(self._gpu).unsqueeze(0)).squeeze(0)
-
+        
         # Cut prediction to remove padding (640x640 → 640xresized_w)
         pred_cut = pred[:, :resized_w]
-
+        
         # Resize prediction back to exact original dimensions
         pred_final = resize_linear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
         pred = pred_final.detach().cpu().numpy()
-
+        
         return {
             "pred": pred
         }
-
+    
     # -------------------- Finetune helpers --------------------
     def _load_weights_only(self, ckpt_path: str) -> None:
         """Load only network weights from a PL checkpoint, ignore optimizer/scheduler."""
@@ -148,13 +150,13 @@ class MLSP(AlgorithmBase):
         self._network.load_state_dict(remapped, strict=False)
         self._network.to(device)
         log.info(f"Loaded weights-only from {ckpt_path}")
-
+    
     def _capture_pretrained_reference(self) -> None:
         self._pretrained_weights = {
             name: p.detach().clone().cpu()
             for name, p in self._network.named_parameters()
         }
-
+    
     @staticmethod
     def _name_matches(name: str, include_patterns: list[str] | None, exclude_patterns: list[str] | None) -> bool:
         def any_match(patterns: list[str] | None) -> bool:
@@ -168,12 +170,13 @@ class MLSP(AlgorithmBase):
                     if pat in name:
                         return True
             return False
+        
         if include_patterns and not any_match(include_patterns):
             return False
         if exclude_patterns and any_match(exclude_patterns):
             return False
         return True
-
+    
     def _l2sp_penalty(self) -> torch.Tensor:
         if self._pretrained_weights is None:
             return torch.tensor(0.0, device=next(self._network.parameters()).device)
@@ -195,7 +198,7 @@ class MLSP(AlgorithmBase):
         if penalty is None:
             penalty = torch.tensor(0.0, device=next(self._network.parameters()).device)
         return penalty
-
+    
     def _set_encoder_trainable(self, requires_grad: bool) -> None:
         net = self._network
         encoder = getattr(net, "unet", None)
@@ -210,7 +213,7 @@ class MLSP(AlgorithmBase):
             p.requires_grad = requires_grad
         self._encoder_frozen = not requires_grad
         log.info(f"Encoder trainable={requires_grad}")
-
+    
     def on_fit_start(self) -> None:
         # Optional BN recalibration
         bn_conf = self._finetune_conf.get("bn_recalibration", {}) if self._finetune_conf else {}
@@ -221,7 +224,8 @@ class MLSP(AlgorithmBase):
                 self._network.train()
                 dl = self.trainer.datamodule.train_dataloader()
                 processed = 0
-                device = self._gpu if self._gpu is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+                device = self._gpu if self._gpu is not None else (
+                    torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
                 for batch in dl:
                     with torch.no_grad():
                         x = batch[0].to(device)
@@ -232,11 +236,11 @@ class MLSP(AlgorithmBase):
                 log.info(f"BN recalibrated on {processed} batches")
             except Exception as ex:
                 log.warning(f"BN recalibration skipped due to error: {ex}")
-
+        
         # Initial freeze if configured
         if bool(self._finetune_conf.get("enable", False)) and self._freeze_encoder_epochs > 0:
             self._set_encoder_trainable(False)
-
+    
     def on_train_epoch_start(self) -> None:
         # Unfreeze after configured epochs
         if bool(self._finetune_conf.get("enable", False)) and self._encoder_frozen:
@@ -310,59 +314,9 @@ class MLSP(AlgorithmBase):
             }
         
         preds = self._network(inputs)
-
         
-        if split_name == "train":
-            # weights = (inputs[:, -1] == 0) * 9 + 1
-            weights = torch.ones_like(inputs[:, -1])
-            return self.get_metrics(preds, targets, masks, weights)
-        else:
-            mses = []
-            for i in range(targets.shape[0]):
-                input_i = inputs[i]
-                targets_i = targets[i]
-                pred_i = preds[i]
-                sample_i = {k: sample[k][i] for k in sample.keys()}
-
-                # Use pixel_size for exact reverse scaling (no floating point errors)
-                original_pixel_size = 0.25  # Known constant
-                current_pixel_size = sample_i["pixel_size"]
-                reverse_scale_factor = original_pixel_size / current_pixel_size
-
-                # Get exact original dimensions
-                current_h, current_w = 640, 640  # Normalized size
-                old_h = int(current_h * reverse_scale_factor)
-                old_w = int(current_w * reverse_scale_factor)
-
-                # Calculate pre-padding dimensions (before padding to 640x640)
-                scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
-                resized_w = int(old_w * scale_factor_forward)
-
-                try:
-                    # Cut prediction to remove padding (640x640 → 640xresized_w)
-                    pred_cut = pred_i.squeeze(0)[:, :resized_w]
-
-                    # Resize prediction back to exact original dimensions
-                    pred_final = resize_linear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-
-                    # Target is also in normalized 640x640 space - apply same processing
-                    target_normalized = targets_i.squeeze(0)  # [640, 640]
-                    target_cut = target_normalized[:, :resized_w]
-                    target_final = resize_linear(target_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-
-                    mse = torch.mean((pred_final - target_final) ** 2)
-                    mses.append(mse)
-
-                except Exception as ex:
-                    log.error(f"Error in validation sample {i}: {ex}")
-                    continue
-
-            mean_mse = torch.mean(torch.Tensor(mses)) if mses else torch.Tensor([float("inf")])
-            rmse = torch.sqrt(mean_mse)
-            return {
-                "loss": rmse,
-                "rmse": rmse,
-            }
+        weights = torch.ones_like(inputs[:, -1])
+        return self.get_metrics(preds, targets, masks, weights)
     
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
@@ -433,9 +387,11 @@ class MLSP(AlgorithmBase):
         else:
             # Switch primary objective to L1 (MAE)
             loss = batch_mae
-
+        
         # L2-SP regularization (optional)
-        if bool(self._finetune_conf.get("enable", False)) and bool(self._finetune_conf.get("l2sp", {}).get("enable", False)):
+        if bool(self._finetune_conf.get("enable", False)) and bool(
+            self._finetune_conf.get("l2sp", {}).get("enable", False)
+        ):
             alpha = float(self._finetune_conf.get("l2sp", {}).get("alpha", 1e-4))
             l2sp = self._l2sp_penalty()
             loss = loss + alpha * l2sp
@@ -447,78 +403,109 @@ class MLSP(AlgorithmBase):
             "rmse": rmse,
             "mae": batch_mae,
         }
-
+    
     # Override to support discriminative LR and warmup
-    def configure_optimizers(self):
+    def configure_optimizers(
+        self,
+    ) -> dict:
         if not bool(self._finetune_conf.get("enable", False)):
             return super().configure_optimizers()
-
-        # Base optimizer settings
-        import torch.optim as optim
-        base_conf = self._optimizer_conf
-        try:
-            base_lr = float(base_conf.get("lr", 3e-4))  # OmegaConf-like access
-        except Exception:
-            base_lr = 3e-4
-
-        discr_conf = self._finetune_conf.get("discriminative_lr", {})
-        use_discr = bool(discr_conf.get("enable", False))
-        enc_factor = float(discr_conf.get("encoder_lr_factor", 0.1))
-
-        # Build param groups
-        params_encoder = []
-        params_other = []
-        for name, p in self._network.named_parameters():
-            if not p.requires_grad:
+        
+        optimizer_conf: DictConfig = OmegaConf.create(self._optimizer_conf)
+        base_lr: float = float(optimizer_conf["lr"]) if "lr" in optimizer_conf else 3e-4
+        
+        discr_conf: dict = self._finetune_conf.get("discriminative_lr", {})
+        use_discr: bool = bool(discr_conf.get("enable", False))
+        enc_factor: float = float(discr_conf.get("encoder_lr_factor", 0.1))
+        
+        params_encoder: list[nn.Parameter] = []
+        params_other: list[nn.Parameter] = []
+        for name, parameter in self._network.named_parameters():
+            if not parameter.requires_grad:
                 continue
             if ".encoder." in name or name.startswith("unet.encoder") or name.startswith("encoder."):
-                params_encoder.append(p)
+                params_encoder.append(parameter)
             else:
-                params_other.append(p)
-
-        try:
-            num_enc = sum(p.numel() for p in params_encoder)
-            num_oth = sum(p.numel() for p in params_other)
-            log.info(f"[finetune] param groups: encoder_params={len(params_encoder)} ({num_enc} weights), "
-                     f"other_params={len(params_other)} ({num_oth} weights), "
-                     f"discriminative_lr={'on' if use_discr else 'off'} (encoder_lr_factor={enc_factor})")
-        except Exception:
-            pass
-
+                params_other.append(parameter)
+        
+        num_enc: int = sum(parameter.numel() for parameter in params_encoder)
+        num_oth: int = sum(parameter.numel() for parameter in params_other)
+        log.info(
+            f"[finetune] param groups: encoder_params={len(params_encoder)} ({num_enc} weights), "
+            f"other_params={len(params_other)} ({num_oth} weights), "
+            f"discriminative_lr={'on' if use_discr else 'off'} (encoder_lr_factor={enc_factor})"
+        )
+        
         if use_discr:
-            param_groups = [
-                {"params": params_encoder, "lr": base_lr * enc_factor},
-                {"params": params_other, "lr": base_lr},
+            param_groups: list[dict] = [
+                {
+                    "params": params_encoder,
+                    "lr": base_lr,
+                    "lr_scale": enc_factor,
+                },
+                {
+                    "params": params_other,
+                    "lr": base_lr,
+                    "lr_scale": 1.0,
+                },
             ]
         else:
-            param_groups = [{"params": params_encoder + params_other, "lr": base_lr}]
-
-        optimizer = optim.Adam(param_groups)
-
-        # Warmup scheduler (epoch-based)
-        warm_conf = self._finetune_conf.get("warmup", {})
-        use_warm = bool(warm_conf.get("enable", False))
-        if use_warm:
-            warm_epochs = int(warm_conf.get("warmup_epochs", 5))
-            warm_factor = float(warm_conf.get("warmup_factor", 0.1))
-            log.info(f"[finetune] warmup enabled: epochs={warm_epochs}, factor={warm_factor}")
-
-            def lr_lambda(epoch):
-                if epoch >= warm_epochs:
-                    return 1.0
-                return warm_factor + (1.0 - warm_factor) * (epoch / max(1, warm_epochs))
-
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "epoch",
-                    "monitor": None,
-                },
+            combined_params: list[nn.Parameter] = params_encoder + params_other
+            param_groups = [
+                {
+                    "params": combined_params,
+                    "lr": base_lr,
+                    "lr_scale": 1.0,
+                }
+            ]
+        
+        optimizer = hydra.utils.instantiate(
+            optimizer_conf,
+            params=param_groups,
+            _convert_="all"
+        )
+        
+        ret_opt: dict = {
+            "optimizer": optimizer,
+        }
+        
+        if self._scheduler_conf is not None:
+            scheduler_conf: DictConfig = OmegaConf.create(self._scheduler_conf)
+            monitor = scheduler_conf.get("monitor", None)
+            if "monitor" in scheduler_conf:
+                del scheduler_conf["monitor"]
+            
+            if "_target_" not in scheduler_conf:
+                scheduler_keys: list[str] = list(scheduler_conf.keys())
+                if len(scheduler_keys) != 1:
+                    raise RuntimeError(
+                        "Scheduler configuration must contain exactly one target definition."
+                    )
+                scheduler_conf = scheduler_conf[scheduler_keys[0]]
+            
+            interval = scheduler_conf.get("interval", None)
+            if "interval" in scheduler_conf:
+                del scheduler_conf["interval"]
+            frequency = scheduler_conf.get("frequency", None)
+            if "frequency" in scheduler_conf:
+                del scheduler_conf["frequency"]
+            
+            scheduler: LRScheduler = hydra.utils.instantiate(
+                scheduler_conf,
+                optimizer=optimizer,
+            )
+            sch_opt: dict = {
+                "scheduler": scheduler,
             }
-        else:
-            return {"optimizer": optimizer}
+            if monitor is not None:
+                sch_opt["monitor"] = monitor
+            if interval is not None:
+                sch_opt["interval"] = interval
+            if frequency is not None:
+                sch_opt["frequency"] = frequency
+            ret_opt["lr_scheduler"] = sch_opt
+        
+        return ret_opt
     
     def _calculate_epoch_metrics(self, outputs: list[Any]) -> dict:
         # init combined metrics with zero values
@@ -532,10 +519,11 @@ class MLSP(AlgorithmBase):
         # compute means of metrics
         for k in outputs[0].keys():
             combined_general_metrics[k] /= len(outputs)
-
+        
         # Derive log2 versions of key metrics for logging
         if "rmse" in combined_general_metrics or "mae" in combined_general_metrics:
             import torch as _torch
+            
             eps = _torch.tensor(1e-8, dtype=_torch.float32)
             if "rmse" in combined_general_metrics:
                 combined_general_metrics["log2_rmse"] = _torch.log2(

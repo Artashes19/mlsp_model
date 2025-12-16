@@ -1,37 +1,24 @@
 # @package _global_
 name: train
-seed: 0
+seed: 42
 print_config: True
 ignore_warnings: True
 terminal_col: null
 terminal_row: 24
 
+# Multi-experiment orchestrator controls
 defaults:
-  - datamodule: mlsp
-  - optimizer: adam
-  - scheduler: null
-  - algorithm: mlsp
-  - network: mlsp_unet
-  - loggers: [ aim ]
-  - strategy: null
+  - exps: [ e0, e1, e2, e3 ]  # e.g., "e1,e2,e3,e4"
   - _self_
 
-ckpt_path: null
-
-# Multi-experiment orchestrator controls
-exps: ""  # e.g., "e1,e2,e3,e4"
-exp_dir: ""  # optional explicit experiments directory
-experiments_root: experiments
-experiments_config_dir: configs/experiments
+exp_dir: ""  # optional explicit exps directory
+experiments_root: exps
+experiments_config_dir: null
 
 split:
   train_small_n: 7
   train_full_n: 20
   validation_n: 5
-
-data:
-  real_dir: ${datamodule.data_dir}
-  synthetic_dir: ""
 
 # Developer convenience: cap training for quick smoke tests
 fast_dev: false

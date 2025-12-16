@@ -1,0 +1,37 @@
+e2:
+  # training uses synthetic only; validation uses ICASSP via data_dir
+  split_role: train_full
+  ckpt_path: null
+  load_weights_only: False
+
+  defaults:
+    - trainer: default
+    - datamodule: mlsp
+    - optimizer: adam
+    - scheduler: wsd_s_pretraining
+    - algorithm: mlsp
+    - network: mlsp_unet
+    - callbacks: [ model_checkpoint_0, model_checkpoint_every ]
+    - loggers: [ aim ]
+    - strategy: null
+    - _self_
+
+  datamodule:
+    name: synth_only_pretrain
+    icassp_train_buildings: null
+    icassp_val_buildings: validation  # resolved from split.json by orchestrator
+    split_save_path: ./splits/e2.pkl
+    # Optional: number of training samples per epoch (null => full dataset)
+    train_samples_per_epoch: 6250
+    use_synthetic_train: True
+    synthetic_dir: ${oc.env:SYNTHETIC_TRAIN_DIR}
+
+  callbacks:
+    model_checkpoint_0:
+      dirpath: e2/checkpoints/hard
+    model_checkpoint_every:
+      dirpath: e2/checkpoints/every
+
+  loggers:
+    aim:
+      experiment: default_e2

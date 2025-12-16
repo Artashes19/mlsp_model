@@ -1,22 +1,189 @@
+import json
 import logging
 import os
-import json
 import time
 from typing import Iterable, Optional
 
 import hydra
+import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Callback, Trainer
 from pytorch_lightning.loggers import Logger
 from pytorch_lightning.strategies import ParallelStrategy
-import torch
 
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.algorithms.mlsp import MLSP
 from src.datamodules.wair_d_base import WAIRDBaseDatamodule
-from src.utils import EpochCounter, log_hyperparameters
+from src.experiments import create_exp_manifest, exp_root_prep
+from src.utils import EpochCounter, load_experiment_config, log_hyperparameters
 
 log = logging.getLogger(__name__)
+
+
+def clone_cfg(cfg: DictConfig) -> DictConfig:
+    return OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+
+
+def train_prep(config: DictConfig, project_root: str):
+    # Orchestrated multi-experiment run
+    raw_exps = config.get("exps", "")
+    exp_list = [str(x).strip() for x in raw_exps if str(x).strip()]
+    
+    for exp in exp_list:
+        cfg_e = clone_cfg(config["exps"][exp])
+        config["exps"][exp] = load_experiment_config(cfg_e, config_root=os.path.join(project_root, "configs/exps"))
+    
+    split, exp_dir = exp_root_prep(config)
+    icassp_small_manifest, icassp_val_manifest, icassp_full_manifest, synth_filtered_manifest = create_exp_manifest(
+        config, split, exp_list
+    )
+    
+    e2_best_ckpt: str | None = None
+    # Fast-dev toggle
+    fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
+    if fast_dev:
+        log.info("[orchestrator] fast_dev enabled: will cap epochs/batches for quick smoke run")
+    for exp in exp_list:
+        cfg_e = clone_cfg(config["exps"][exp])
+        # Merge experiment-specific config (required for trainer and any per-exp overrides)
+        exp_cfg_dir_opt = (
+            config.get("experiments_config_dir") or
+            os.path.join(project_root, "configs/exps")
+        )
+        repo_root = os.path.dirname(os.path.abspath(__file__))
+        exp_cfg_dir = exp_cfg_dir_opt if os.path.isabs(exp_cfg_dir_opt) else os.path.join(
+            repo_root, exp_cfg_dir_opt
+        )
+        exp_cfg_path = os.path.join(exp_cfg_dir, f"{exp}.yaml")
+        if os.path.isfile(exp_cfg_path):
+            exp_cfg = OmegaConf.load(exp_cfg_path)
+            cfg_e = OmegaConf.merge(cfg_e, exp_cfg)
+        else:
+            # If no experiment config file, require trainer to be provided explicitly
+            if "trainer" not in cfg_e or not cfg_e.get("trainer"):
+                raise RuntimeError(
+                    f"Missing experiment config for '{exp}' at {exp_cfg_path} and no trainer provided.\n"
+                    f"Provide a per-experiment config file or pass trainer via CLI, e.g.:\n"
+                    f"  python run.py exps={exp} trainer.max_epochs=2 trainer.devices=[0]"
+                )
+        # Common overrides
+        # datamodule: resolve training buildings from split by role key if provided
+        val_role = None
+        train_role = None
+        if "datamodule" in cfg_e:
+            val_role = cfg_e.datamodule.get("icassp_val_buildings", None)
+            train_role = cfg_e.datamodule.get("icassp_train_buildings", None)
+        if val_role is None:
+            val_role = cfg_e.get("icassp_val_buildings", None)
+        if train_role is None:
+            train_role = cfg_e.get("icassp_train_buildings", None)
+        # Training buildings (only for real-data training)
+        train_from_role: list[int] | None = None
+        if train_role:
+            grp = getattr(split, str(train_role), None)
+            if grp is None:
+                raise RuntimeError(
+                    f"Unknown split key '{train_role}' requested for training. Expected one of: train_small, train_full, validation"
+                )
+            train_from_role = list(grp)
+        
+        # Normalize checkpoint dirs for all ModelCheckpoint callbacks
+        if "trainer" in cfg_e:
+            try:
+                log.info(
+                    f"[trainer@{exp}] devices={cfg_e.trainer.devices}, accelerator={cfg_e.trainer.accelerator}, "
+                    f"precision={cfg_e.trainer.precision}, max_epochs={cfg_e.trainer.max_epochs}"
+                )
+            except Exception:
+                pass
+            
+            if fast_dev:
+                cfg_e.trainer.max_epochs = 1
+                cfg_e.trainer.limit_train_batches = 4
+                cfg_e.trainer.limit_val_batches = 2
+        
+        # Enforce required data roots (no fallbacks)
+        data_dir_req = cfg_e.datamodule.get("data_dir")
+        data_dir_req = os.path.expanduser(str(data_dir_req)) if data_dir_req is not None else ""
+        if not data_dir_req or not os.path.isdir(data_dir_req):
+            raise RuntimeError(
+                f"datamodule.data_dir must point to an existing ICASSP root. Got: {cfg_e.datamodule.get('data_dir')}"
+            )
+        if exp == "e2":
+            synth_dir_req = cfg_e.datamodule.get("synthetic_dir")
+            synth_dir_req = os.path.expanduser(str(synth_dir_req)) if synth_dir_req is not None else ""
+            if not synth_dir_req or not os.path.isdir(synth_dir_req):
+                raise RuntimeError(
+                    f"datamodule.synthetic_dir must point to an existing synthetic root for e2. Got: {cfg_e.datamodule.get('synthetic_dir')}"
+                )
+        # Wire per-experiment manifests when available
+        # New explicit train/val manifests: no runtime splitting
+        if exp in ("e0", "e3"):
+            if icassp_small_manifest:
+                cfg_e.datamodule.train_manifest_path = icassp_small_manifest
+            if icassp_val_manifest:
+                cfg_e.datamodule.val_manifest_path = icassp_val_manifest
+        elif exp == "e1":
+            if icassp_full_manifest:
+                cfg_e.datamodule.train_manifest_path = icassp_full_manifest
+            if icassp_val_manifest:
+                cfg_e.datamodule.val_manifest_path = icassp_val_manifest
+        elif exp == "e2":
+            if synth_filtered_manifest:
+                cfg_e.datamodule.synthetic_manifest_path = synth_filtered_manifest
+            if icassp_val_manifest:
+                cfg_e.datamodule.val_manifest_path = icassp_val_manifest
+        
+        # Summarize datamodule plan for this experiment
+        try:
+            dm = cfg_e.datamodule
+            plan = dict(
+                use_synthetic_train=bool(dm.get("use_synthetic_train", False)),
+                train_buildings=(
+                    "len=" + str(len(dm.get("train_buildings", []))) if dm.get("train_buildings") else "None"),
+                train_manifest_path=dm.get("train_manifest_path", None),
+                val_manifest_path=dm.get("val_manifest_path", None),
+                synthetic_manifest_path=dm.get("synthetic_manifest_path", None),
+                data_dir=dm.get("data_dir", None),
+                synthetic_dir=dm.get("synthetic_dir", None),
+            )
+            log.info(f"[datamodule@{exp}] plan={plan}")
+        except Exception:
+            pass
+        
+        if exp == "e0":
+            # Train on train_small (ICASSP real only)
+            cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
+                split.train_small
+            )
+            t0 = time.perf_counter()
+            best = train(cfg_e)
+            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
+        elif exp == "e1":
+            # Train on train_full (ICASSP real only)
+            cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
+                split.train_full
+            )
+            t0 = time.perf_counter()
+            best = train(cfg_e)
+            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
+        elif exp == "e2":
+            # Pretrain on synthetic only; validation on real held-out buildings
+            t0 = time.perf_counter()
+            best = train(cfg_e)
+            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
+            # Try to capture the best checkpoint path for downstream e3
+        elif exp == "e3":
+            # Finetune on train_small using e2 checkpoints
+            cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
+                split.train_small
+            )
+            t0 = time.perf_counter()
+            best = train(cfg_e)
+            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
+        else:
+            log.warning(f"Unknown experiment '{exp}' - skipping")
+    return None
 
 
 def train(config: DictConfig) -> str | None:
@@ -42,7 +209,7 @@ def train(config: DictConfig) -> str | None:
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
     ft_conf = config.algorithm.get("finetune", None)
     if ft_conf and bool(ft_conf.get("enable", False)):
-        ckpt_ft = os.path.abspath(str(ft_conf.get("ckpt_path", "")))
+        ckpt_ft = os.path.abspath(str(config.get("ckpt_path", "")))
         if not ckpt_ft:
             raise RuntimeError("Finetune is enabled but no ckpt_path was provided.")
         if not os.path.isfile(ckpt_ft):
@@ -54,7 +221,9 @@ def train(config: DictConfig) -> str | None:
             strict=False,
             out_norm=float(config.algorithm.get("out_norm")),
             use_sip2net=bool(config.algorithm.get("use_sip2net", False)),
-            sip2net_params=(OmegaConf.to_container(config.algorithm.get("sip2net_params"), resolve=True) if "sip2net_params" in config.algorithm else {}),
+            sip2net_params=(OmegaConf.to_container(
+                config.algorithm.get("sip2net_params"), resolve=True
+            ) if "sip2net_params" in config.algorithm else {}),
             compiled=compiled_obj,
             optimizer_conf=(OmegaConf.to_yaml(config.optimizer) if "optimizer" in config else None),
             scheduler_conf=(OmegaConf.to_yaml(config.scheduler) if "scheduler" in config else None),
@@ -112,11 +281,19 @@ def train(config: DictConfig) -> str | None:
         config.trainer, callbacks=callbacks, logger=loggers, strategy=strategy or "auto", _convert_="partial"
     )
     try:
-        log.info(f"[trainer] devices={config.trainer.devices}, accelerator={config.trainer.accelerator}, "
-                 f"precision={config.trainer.precision}, max_epochs={config.trainer.max_epochs}, "
-                 f"default_root_dir={getattr(trainer, 'default_root_dir', None)}")
+        log.info(
+            f"[trainer] devices={config.trainer.devices}, accelerator={config.trainer.accelerator}, "
+            f"precision={config.trainer.precision}, max_epochs={config.trainer.max_epochs}, "
+            f"default_root_dir={getattr(trainer, 'default_root_dir', None)}"
+        )
     except Exception:
         pass
+    
+    if config["ckpt_path"] is not None and config["load_weights_only"]:
+        log.info(f"Loading weights from {config['ckpt_path']}")
+        ckpt = torch.load(config["ckpt_path"])
+        algorithm.load_state_dict(ckpt['state_dict'])
+        config["ckpt_path"] = None
     
     log_hyperparameters(config=config, algorithm=algorithm, trainer=trainer)
     
@@ -125,7 +302,7 @@ def train(config: DictConfig) -> str | None:
     fit_t0 = time.time()
     trainer.fit(algorithm, datamodule=datamodule, ckpt_path=config.ckpt_path)
     log.info(f"Finished training in {time.time() - fit_t0:.2f}s")
-
+    
     # Retrieve best checkpoint path if available
     best_path = None
     try:
@@ -136,7 +313,7 @@ def train(config: DictConfig) -> str | None:
                 break
     except Exception:
         best_path = None
-
+    
     # Persist simple results.json into experiment dir if default_root_dir hints at it
     try:
         duration_sec = time.time() - start_time
@@ -149,7 +326,6 @@ def train(config: DictConfig) -> str | None:
                 pass
         # Determine destination: parent of default_root_dir if endswith '/pl', else default_root_dir
         droot = getattr(trainer, 'default_root_dir', None) or None
-        out_dir = None
         if isinstance(droot, str) and droot:
             parent = os.path.dirname(droot.rstrip('/'))
             out_dir = parent if os.path.basename(droot.rstrip('/')) == 'pl' else droot
@@ -162,16 +338,18 @@ def train(config: DictConfig) -> str | None:
                     te_n = len(datamodule.test_set) if datamodule.test_set is not None else 0
                 except Exception:
                     tr_n = va_n = te_n = 0
-                json.dump({
-                    'best_checkpoint': best_path,
-                    'duration_sec': duration_sec,
-                    'metrics': metrics,
-                    'dataset': {
-                        'train_size': tr_n,
-                        'val_size': va_n,
-                        'test_size': te_n,
-                    }
-                }, fp, indent=2)
+                json.dump(
+                    {
+                        'best_checkpoint': best_path,
+                        'duration_sec': duration_sec,
+                        'metrics': metrics,
+                        'dataset': {
+                            'train_size': tr_n,
+                            'val_size': va_n,
+                            'test_size': te_n,
+                        }
+                    }, fp, indent=2
+                )
     except Exception:
         pass
     return best_path

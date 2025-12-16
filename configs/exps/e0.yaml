@@ -1,0 +1,31 @@
+e0:
+  split_role: train_small
+  ckpt_path: null
+  load_weights_only: False
+
+  defaults:
+    - trainer: default
+    - datamodule: mlsp
+    - optimizer: adam
+    - scheduler: wsd_s_finetune
+    - algorithm: mlsp
+    - network: mlsp_unet
+    - callbacks: [ model_checkpoint_0, early_stopping ]
+    - loggers: [ aim ]
+    - strategy: null
+    - _self_
+
+  datamodule:
+    name: icassp_train_small
+    icassp_train_buildings: train_small
+    icassp_val_buildings: validation  # resolved from split.json by orchestrator
+    split_save_path: ./splits/e0.pkl
+    train_samples_per_epoch: 1000
+
+  callbacks:
+    model_checkpoint_0:
+      dirpath: runs/e0/checkpoints/hard
+
+  loggers:
+    aim:
+      experiment: default_e0

@@ -1,10 +1,10 @@
 _target_: src.datamodules.MLSPDatamodule
 
 name: icassp_task1
-batch_size: 32
-num_workers: 4
+batch_size: 50
+num_workers: 64
 
-data_dir: ${oc.env:ICASSPS_ROOT}
+data_dir: ${oc.env:ICASSP_ORIG_PATH}
 mlsp_task1: True
 inference: False
 
@@ -19,13 +19,17 @@ kaggle_task2_path: ""
 kaggle_freqs_mhz: [ 868, 2400 ]
 
 # ICASSP train data validation
-icassp_train_path: ""
+icassp_train_path: null
+icassp_train_buildings: train_small
+icassp_val_buildings: null
+train_subset_size: null
+split_save_path: null
 
 # Validation dataloader names for AIM logging (in order of creation)
-validation_names: ["real_val", "icassp_val"]
+validation_names: [ "real_val", "icassp_val" ]
 
 # ICASSP validation subsampling ratio (0.0-1.0) for faster validation
-icassp_val_subsample_ratio: 0.25
+icassp_val_subsample_ratio: 1.0
 reps_per_epoch: 1
 mlsp_task_idx: 1
 use_fspl: True
@@ -52,3 +56,6 @@ real_manifest_path: null
 synthetic_manifest_path: null
 icassp_limit_per_building: null
 synthetic_limit: null
+train_samples_per_epoch: null
+use_synthetic_val: False
+synthetic_val_samples_per_epoch: 1000

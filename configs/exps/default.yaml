@@ -1,0 +1,14 @@
+default:
+  split_role: train_small
+
+  defaults:
+    - trainer: default
+    - datamodule: mlsp
+    - optimizer: adam
+    - scheduler: null
+    - algorithm: mlsp
+    - network: mlsp_unet
+    - callbacks: [ model_checkpoint_0 ]
+    - loggers: [ aim ]
+    - strategy: null
+    - _self_
