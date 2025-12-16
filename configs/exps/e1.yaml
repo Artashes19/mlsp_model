@@ -9,11 +9,14 @@ e1:
     - optimizer: adam
     - scheduler: wsd_s_finetune
     - algorithm: mlsp
-    - network: mlsp_unet
+    - network: mlsp_vit
     - callbacks: [ model_checkpoint_0, early_stopping ]
     - loggers: [ aim ]
     - strategy: null
     - _self_
+
+  trainer:
+    devices: [ 1 ]
 
   datamodule:
     name: icassp_train_full
