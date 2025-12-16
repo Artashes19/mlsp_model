@@ -61,7 +61,8 @@ class PathlossDataset(Dataset):
             except ValueError:
                 raise ValueError(f"Could not parse sparse_range string: {sparse_range_val}")
         else:
-            self.sparse_range = sparse_range_val
+            # Convert from omegaconf.ListConfig or other iterables to a plain list
+            self.sparse_range = list(sparse_range_val)
             
         if not isinstance(self.sparse_range, (list, tuple)) or len(self.sparse_range) != 2:
             raise ValueError(f"sparse_range must be a list/tuple of 2 floats, got {self.sparse_range}")
