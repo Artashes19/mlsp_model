@@ -204,21 +204,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                      f"(elapsed={dt:.2f}s)")
             return inputs_list
 
-        # Resolve ICASSP layout. Prefer Inputs/Task_2_ICASSP but fallback to Inputs/ if needed.
-        input_dir_task = os.path.join(data_dir, f"Inputs/{task}")
-        output_dir_task = os.path.join(data_dir, f"Outputs/{task}")
-        input_dir_flat = os.path.join(data_dir, "Inputs")
-        output_dir_flat = os.path.join(data_dir, "Outputs")
-        use_task_subdir = os.path.isdir(input_dir_task)
-        input_dir = input_dir_task if use_task_subdir else input_dir_flat
-        output_dir = output_dir_task if use_task_subdir else output_dir_flat
+        # ICASSP layout: Inputs/{task}/ and Outputs/{task}/
+        input_dir = os.path.join(data_dir, f"Inputs/{task}")
+        output_dir = os.path.join(data_dir, f"Outputs/{task}")
         positions_dir = os.path.join(data_dir, "Positions/")
         radiation_patterns_dir = os.path.join(data_dir, "Radiation_Patterns/")
         if not os.path.isdir(input_dir):
-            log.warning(f"ICASSP input directory not found at expected locations. Tried: {input_dir_task} and {input_dir_flat}")
-        else:
-            chosen = "Inputs/{task}" if use_task_subdir else "Inputs"
-            log.debug(f"Using ICASSP layout rooted at '{chosen}' under {data_dir}")
+            log.warning(f"ICASSP input directory not found: {input_dir}")
         # Expect these directories to exist for the ICASSP train-style dataset
         
         for b in range(1, 26):  # 25 buildings
