@@ -3,6 +3,7 @@ _target_: src.datamodules.MLSPDatamodule
 name: icassp_task1
 batch_size: 32
 num_workers: 4
+drop_last: True
 
 data_dir: ${oc.env:ICASSPS_ROOT}
 mlsp_task1: True

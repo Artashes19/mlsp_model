@@ -22,8 +22,12 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load .env file (same as run.py)
+from dotenv import load_dotenv
+load_dotenv(PROJECT_ROOT / ".env")
+
 from src.utils.mlsp.types import RadarSample
-from src.utils.mlsp.featurizer import featurizer, normalize_input, get_fspl, calculate_antenna_gain
+from src.utils.mlsp.featurizer import featurizer, normalize_input
 
 # Normalization constants from featurizer
 NORM_OFFSET = 87.0
@@ -40,7 +44,8 @@ def create_mock_sample(
     reflectance_value: float = 1.0,
     transmittance_value: float = 0.5,
     output_value: float = 80.0,  # dB pathloss
-    mask_value: float = 1.0,
+    valid_h: int = None,  # Height of valid (non-padded) region, None = full H
+    valid_w: int = None,  # Width of valid (non-padded) region, None = full W
 ) -> RadarSample:
     """
     Create a fully controlled mock RadarSample for testing.
@@ -51,15 +56,29 @@ def create_mock_sample(
     - Square structure: reflectance=1 in [20:80, 20:80], transmittance=0.5 in [30:70, 30:70]
     - Distance increases linearly from antenna
     - Uniform output pathloss
-    - Full valid mask
+    - Realistic mask: 1 in valid region, 0 in padded region (simulates padding to square)
+    
+    Args:
+        valid_h: Height of the valid (non-padded) region. If None, uses full H.
+        valid_w: Width of the valid (non-padded) region. If None, uses full W.
     """
-    # Reflectance: outer square wall
+    # Default valid region to full size if not specified
+    if valid_h is None:
+        valid_h = H
+    if valid_w is None:
+        valid_w = W
+    
+    # Reflectance: outer square wall (scaled to valid region)
     reflectance = torch.zeros((H, W), dtype=torch.float32)
-    reflectance[20:80, 20:80] = reflectance_value
+    r_y1, r_y2 = int(0.2 * valid_h), int(0.8 * valid_h)
+    r_x1, r_x2 = int(0.2 * valid_w), int(0.8 * valid_w)
+    reflectance[r_y1:r_y2, r_x1:r_x2] = reflectance_value
     
     # Transmittance: inner square (subset of reflectance region)
     transmittance = torch.zeros((H, W), dtype=torch.float32)
-    transmittance[30:70, 30:70] = transmittance_value
+    t_y1, t_y2 = int(0.3 * valid_h), int(0.7 * valid_h)
+    t_x1, t_x2 = int(0.3 * valid_w), int(0.7 * valid_w)
+    transmittance[t_y1:t_y2, t_x1:t_x2] = transmittance_value
     
     # Distance map: Euclidean distance from antenna in meters
     yy, xx = torch.meshgrid(
@@ -76,8 +95,10 @@ def create_mock_sample(
     # Output: uniform pathloss for simplicity (real data would have gradients)
     output_img = torch.full((H, W), output_value, dtype=torch.float32)
     
-    # Mask: all valid
-    mask = torch.full((H, W), mask_value, dtype=torch.float32)
+    # Mask: 1 in valid region, 0 in padded region (realistic padding mask)
+    # Simulates images resized to 640xN or Nx640 then padded to square
+    mask = torch.zeros((H, W), dtype=torch.float32)
+    mask[:valid_h, :valid_w] = 1.0
     
     # Radiation pattern: uniform (isotropic antenna)
     radiation_pattern = torch.zeros(360, dtype=torch.float32)
@@ -219,6 +240,12 @@ class TestFeaturizerLogic(unittest.TestCase):
         non_zero_region = ch1[30:70, 30:70]
         print(f"  Transmittance region: mean={non_zero_region.mean():.4f}")
         print(f"  Expected for 127.5: {expected_mid:.4f}")
+        
+        # Verify the transmittance values are normalized correctly
+        self.assertTrue(
+            torch.allclose(non_zero_region, torch.tensor(expected_mid), atol=0.01),
+            f"Transmittance normalization mismatch: got {non_zero_region.mean():.4f}, expected {expected_mid:.4f}"
+        )
     
     def test_distance_channel(self):
         """Test channel 2 (distance) - log transformation."""
@@ -247,12 +274,14 @@ class TestFeaturizerLogic(unittest.TestCase):
         self.assertGreater(corner_val, 0.5, "Corner distance should be positive")
     
     def test_mask_channel(self):
-        """Test channel 5 (mask) - should be binary."""
+        """Test channel 5 (mask) - should be binary with realistic padding."""
         print("\n" + "="*60)
         print("[TEST] Mask Channel (Ch5)")
         print("="*60)
         
-        sample = create_mock_sample(mask_value=1.0)
+        # Create sample with realistic padding: 100x100 image with 100x80 valid region
+        # (simulates Nx640 image padded to 640x640)
+        sample = create_mock_sample(H=100, W=100, valid_h=100, valid_w=80)
         output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
         
         ch5 = output[5]
@@ -260,11 +289,23 @@ class TestFeaturizerLogic(unittest.TestCase):
         
         print(f"  Unique mask values: {unique_vals.tolist()}")
         
-        # Mask should remain unchanged (not normalized)
+        # Mask should be binary 0/1
         self.assertTrue(
             all(v in [0.0, 1.0] for v in unique_vals.tolist()),
             "Mask should be binary 0/1"
         )
+        
+        # Verify mask has both 0 and 1 values (valid region + padded region)
+        self.assertEqual(len(unique_vals), 2, "Mask should have both 0 and 1 values")
+        
+        # Verify valid region is 1, padded region is 0
+        valid_region = ch5[:100, :80]
+        padded_region = ch5[:, 80:]
+        self.assertTrue((valid_region == 1.0).all(), "Valid region should be all 1s")
+        self.assertTrue((padded_region == 0.0).all(), "Padded region should be all 0s")
+        
+        print(f"  Valid region (100x80): all 1s ✓")
+        print(f"  Padded region (100x20): all 0s ✓")
     
     def test_floor_plan_generation(self):
         """Test channel 6 (floor plan) - auto-generated from reflectance/transmittance."""
@@ -590,6 +631,419 @@ class TestEdgeCases(unittest.TestCase):
             "Zero sparsity should result in no measurements"
         )
         print("  Zero sparsity correctly produces no measurements ✓")
+
+
+class TestFeaturizerWithRealData(unittest.TestCase):
+    """
+    Tests for the featurizer function using real ICASSP and synthetic data.
+    These tests require the environment variables ICASSP_ORIG_PATH and SYNTHETIC_TRAIN_DIR to be set.
+    """
+    
+    _test_manifests_dir = None
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.output_dir = PROJECT_ROOT / "tests" / "test_outputs"
+        cls.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Import Hydra utilities for loading configs
+        from hydra import compose, initialize_config_dir
+        from hydra.core.global_hydra import GlobalHydra
+        import hydra as hydra_module
+        cls.hydra_module = hydra_module
+        cls.compose = compose
+        cls.initialize_config_dir = initialize_config_dir
+        cls.GlobalHydra = GlobalHydra
+        
+        # Import dataset for reading samples
+        from src.datamodules.datasets.mlsp import PathlossDataset
+        cls.PathlossDataset = PathlossDataset
+        
+        # Generate test manifests
+        cls._setup_test_manifests()
+    
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up test manifests after all tests complete."""
+        cls._cleanup_test_manifests()
+    
+    @classmethod
+    def _setup_test_manifests(cls):
+        """Generate fresh manifest files for testing."""
+        import tempfile
+        import shutil
+        
+        from src.data_exploration.generate_manifest import (
+            ensure_icassp_manifest,
+            ensure_manifest as ensure_synth_manifest,
+            filter_icassp_manifest,
+            filter_synthetic_manifest,
+        )
+        from src.experiments.splits import generate_building_split
+        
+        # Create temp directory for test manifests
+        cls._test_manifests_dir = Path(tempfile.mkdtemp(prefix="test_featurizer_manifests_"))
+        print(f"[TEST SETUP] Creating test manifests in {cls._test_manifests_dir}")
+        
+        # Generate a building split
+        split = generate_building_split(seed=123, n_buildings=25, train_small_n=7, train_full_n=20)
+        
+        # Get data directories from environment
+        icassp_root = os.environ.get("ICASSP_ORIG_PATH", "")
+        synth_root = os.environ.get("SYNTHETIC_TRAIN_DIR", "") or os.environ.get("SYNTH_ROOT", "")
+        freqs_mhz = [868, 1800, 3500]
+        
+        # Generate/ensure global ICASSP manifest
+        if icassp_root and os.path.isdir(icassp_root):
+            icassp_global_manifest = os.path.join(icassp_root, "icassp_manifest.csv")
+            ensure_icassp_manifest(icassp_root, icassp_global_manifest, freqs_mhz, task="Task_2_ICASSP")
+            
+            # Create filtered manifests
+            filter_icassp_manifest(
+                icassp_global_manifest,
+                str(cls._test_manifests_dir / "icassp_train_small.filtered.csv"),
+                list(split.train_small),
+                None
+            )
+            filter_icassp_manifest(
+                icassp_global_manifest,
+                str(cls._test_manifests_dir / "icassp_train_full.filtered.csv"),
+                list(split.train_full),
+                None
+            )
+            filter_icassp_manifest(
+                icassp_global_manifest,
+                str(cls._test_manifests_dir / "icassp_validation.filtered.csv"),
+                list(split.validation),
+                None
+            )
+            print(f"[TEST SETUP] Created ICASSP manifests")
+        else:
+            print(f"[TEST SETUP] ICASSP_ORIG_PATH not set or invalid: {icassp_root}")
+            cls._test_manifests_dir = None
+            return
+        
+        # Generate synthetic manifest if available
+        if synth_root and os.path.isdir(synth_root):
+            synth_global_manifest = os.path.join(synth_root, "samples.csv")
+            ensure_synth_manifest(synth_root, synth_global_manifest, freqs_mhz)
+            filter_synthetic_manifest(
+                synth_global_manifest,
+                str(cls._test_manifests_dir / "synthetic.filtered.csv"),
+                None
+            )
+            print(f"[TEST SETUP] Created synthetic manifest")
+    
+    @classmethod
+    def _cleanup_test_manifests(cls):
+        """Remove the temporary test manifests directory."""
+        import shutil
+        if cls._test_manifests_dir and cls._test_manifests_dir.exists():
+            print(f"[TEST TEARDOWN] Removing test manifests from {cls._test_manifests_dir}")
+            shutil.rmtree(cls._test_manifests_dir)
+            cls._test_manifests_dir = None
+    
+    def _get_config(self, experiment_name: str):
+        """
+        Load experiment config the same way run.py does:
+        1. Load base train.yaml config via Hydra
+        2. Convert to container to remove struct mode (like run.py clone_cfg)
+        3. Merge experiment-specific config on top
+        4. Wire up manifest paths from test manifests
+        """
+        from omegaconf import OmegaConf
+        from hydra import compose
+        from hydra.core.global_hydra import GlobalHydra
+        
+        # Check if manifests were set up
+        if self._test_manifests_dir is None or not self._test_manifests_dir.exists():
+            raise RuntimeError("Test manifests not set up. Check ICASSP_ORIG_PATH environment variable.")
+        
+        GlobalHydra.instance().clear()
+        config_dir = str(PROJECT_ROOT / "configs")
+        self.initialize_config_dir(config_dir=config_dir, version_base=None)
+        
+        # Load base config (train.yaml)
+        cfg = compose(config_name="train")
+        
+        # Convert to container and recreate to remove struct mode (same as run.py clone_cfg)
+        cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+        
+        # Merge experiment-specific config on top (same as run.py)
+        exp_cfg_path = PROJECT_ROOT / "configs" / "experiments" / f"{experiment_name}.yaml"
+        if exp_cfg_path.exists():
+            exp_cfg = OmegaConf.load(exp_cfg_path)
+            cfg = OmegaConf.merge(cfg, exp_cfg)
+        
+        # Wire up manifest paths from test manifests
+        manifests_dir = self._test_manifests_dir
+        
+        if experiment_name == "e0":
+            cfg.datamodule.train_manifest_path = str(manifests_dir / "icassp_train_small.filtered.csv")
+        elif experiment_name == "e1":
+            cfg.datamodule.train_manifest_path = str(manifests_dir / "icassp_train_full.filtered.csv")
+        elif experiment_name == "e2":
+            cfg.datamodule.synthetic_manifest_path = str(manifests_dir / "synthetic.filtered.csv")
+        
+        cfg.datamodule.val_manifest_path = str(manifests_dir / "icassp_validation.filtered.csv")
+        
+        return cfg
+    
+    def _create_datamodule(self, experiment_name: str):
+        """Create and setup a datamodule from experiment config."""
+        cfg = self._get_config(experiment_name)
+        dm = self.hydra_module.utils.instantiate(cfg.datamodule)
+        dm.setup(stage="fit")
+        return dm, cfg
+    
+    def _get_raw_sample_from_datamodule(self, dm, idx: int = 0):
+        """
+        Get a raw RadarSample from the datamodule's dataset before featurization.
+        This accesses the internal read_sample method to get the sample before
+        it goes through the featurizer in __getitem__.
+        """
+        dataset = dm.train_dataloader().dataset
+        inputs = dataset.inputs_list[idx % len(dataset.inputs_list)]
+        sample = dataset.read_sample(inputs)
+        return sample, dataset
+    
+    def test_featurizer_with_icassp_data(self):
+        """Test featurizer with real ICASSP data (e0 config)."""
+        print("\n" + "="*60)
+        print("[TEST] Featurizer with Real ICASSP Data")
+        print("="*60)
+        
+        try:
+            dm, cfg = self._create_datamodule("e0")
+        except Exception as e:
+            self.skipTest(f"Could not load e0 config (ICASSP data): {e}")
+        
+        # Get multiple raw samples
+        n_samples = min(3, len(dm.train_dataloader().dataset))
+        
+        for i in range(n_samples):
+            print(f"\n  Sample {i+1}/{n_samples}:")
+            sample, dataset = self._get_raw_sample_from_datamodule(dm, idx=i)
+            
+            print(f"    File: {sample.file_name}")
+            print(f"    Dimensions: {sample.H}x{sample.W}")
+            print(f"    Antenna position: ({sample.x_ant:.1f}, {sample.y_ant:.1f})")
+            print(f"    Frequency: {sample.freq_MHz} MHz")
+            print(f"    Input shape: {sample.input_img.shape}")
+            
+            # Run through featurizer
+            sparse_prob = float(cfg.datamodule.sparse_prob)
+            sparse_range = list(cfg.datamodule.sparse_range)
+            
+            output = featurizer(
+                sample,
+                sparse_prob=sparse_prob,
+                sparse_range=sparse_range
+            )
+            
+            # Verify output
+            self.assertEqual(output.shape[0], 9, "Should have 9 channels")
+            self.assertEqual(output.shape[1], sample.H, "Height should match")
+            self.assertEqual(output.shape[2], sample.W, "Width should match")
+            self.assertFalse(torch.isnan(output).any(), "Output should not contain NaN")
+            self.assertFalse(torch.isinf(output).any(), "Output should not contain Inf")
+            
+            print(f"    Output shape: {output.shape} ✓")
+            print(f"    No NaN/Inf values ✓")
+            
+            # Check channel ranges
+            for ch in range(9):
+                ch_data = output[ch]
+                print(f"    Ch{ch}: min={ch_data.min():.4f}, max={ch_data.max():.4f}")
+            
+            # Check mask channel is binary
+            mask_ch = output[5]
+            unique_mask = torch.unique(mask_ch)
+            self.assertTrue(
+                all(v in [0.0, 1.0] for v in unique_mask.tolist()),
+                f"Mask channel should be binary, got {unique_mask.tolist()}"
+            )
+            print(f"    Mask channel is binary ✓")
+            
+            # Save visualization for first sample
+            if i == 0:
+                save_featurizer_output_visualization(
+                    output, sample, self.output_dir, f"icassp_real_sample_{i}"
+                )
+    
+    def test_featurizer_with_synthetic_data(self):
+        """Test featurizer with real synthetic data (e2 config)."""
+        print("\n" + "="*60)
+        print("[TEST] Featurizer with Real Synthetic Data")
+        print("="*60)
+        
+        try:
+            dm, cfg = self._create_datamodule("e2")
+        except Exception as e:
+            self.skipTest(f"Could not load e2 config (synthetic data): {e}")
+        
+        # Get multiple raw samples
+        n_samples = min(3, len(dm.train_dataloader().dataset))
+        
+        for i in range(n_samples):
+            print(f"\n  Sample {i+1}/{n_samples}:")
+            sample, dataset = self._get_raw_sample_from_datamodule(dm, idx=i)
+            
+            print(f"    File: {sample.file_name}")
+            print(f"    Dimensions: {sample.H}x{sample.W}")
+            print(f"    Antenna position: ({sample.x_ant:.1f}, {sample.y_ant:.1f})")
+            print(f"    Frequency: {sample.freq_MHz} MHz")
+            print(f"    Pixel size: {sample.pixel_size} m")
+            print(f"    Input shape: {sample.input_img.shape}")
+            
+            # Run through featurizer
+            sparse_prob = float(cfg.datamodule.sparse_prob)
+            sparse_range = list(cfg.datamodule.sparse_range)
+            
+            output = featurizer(
+                sample,
+                sparse_prob=sparse_prob,
+                sparse_range=sparse_range
+            )
+            
+            # Verify output
+            self.assertEqual(output.shape[0], 9, "Should have 9 channels")
+            self.assertEqual(output.shape[1], sample.H, "Height should match")
+            self.assertEqual(output.shape[2], sample.W, "Width should match")
+            self.assertFalse(torch.isnan(output).any(), "Output should not contain NaN")
+            self.assertFalse(torch.isinf(output).any(), "Output should not contain Inf")
+            
+            print(f"    Output shape: {output.shape} ✓")
+            print(f"    No NaN/Inf values ✓")
+            
+            # Check channel ranges
+            for ch in range(9):
+                ch_data = output[ch]
+                print(f"    Ch{ch}: min={ch_data.min():.4f}, max={ch_data.max():.4f}")
+            
+            # Check mask channel is binary
+            mask_ch = output[5]
+            unique_mask = torch.unique(mask_ch)
+            self.assertTrue(
+                all(v in [0.0, 1.0] for v in unique_mask.tolist()),
+                f"Mask channel should be binary, got {unique_mask.tolist()}"
+            )
+            print(f"    Mask channel is binary ✓")
+            
+            # Save visualization for first sample
+            if i == 0:
+                save_featurizer_output_visualization(
+                    output, sample, self.output_dir, f"synthetic_real_sample_{i}"
+                )
+    
+    def test_sparse_correspondence_with_real_data(self):
+        """Test that sparse measurements match ground truth on real data."""
+        print("\n" + "="*60)
+        print("[TEST] Sparse Correspondence with Real Data")
+        print("="*60)
+        
+        try:
+            dm, cfg = self._create_datamodule("e0")
+        except Exception as e:
+            self.skipTest(f"Could not load e0 config: {e}")
+        
+        sample, _ = self._get_raw_sample_from_datamodule(dm, idx=0)
+        
+        print(f"  Testing with: {sample.file_name}")
+        
+        # Force sparse measurements
+        output = featurizer(sample, sparse_prob=1.0, sparse_range=[0.05, 0.05])
+        
+        ch8 = output[8]
+        bg_val = (0.0 - NORM_OFFSET) / NORM_SCALE
+        
+        # Find sparse measurement locations
+        is_meas = torch.abs(ch8 - bg_val) > 1e-5
+        n_meas = is_meas.sum().item()
+        
+        print(f"  Number of sparse measurements: {n_meas}")
+        
+        if n_meas > 0 and sample.output_img is not None:
+            # Denormalize sparse values
+            sparse_denorm = ch8 * NORM_SCALE + NORM_OFFSET
+            
+            # Get ground truth at measurement locations
+            gt = sample.output_img
+            if gt.ndim == 3:
+                gt = gt.squeeze(0)
+            
+            gt_at_meas = gt[is_meas]
+            sp_at_meas = sparse_denorm[is_meas]
+            
+            diff = (sp_at_meas - gt_at_meas).abs()
+            max_diff = diff.max().item()
+            mean_diff = diff.mean().item()
+            
+            print(f"  Max difference: {max_diff:.6f}")
+            print(f"  Mean difference: {mean_diff:.6f}")
+            
+            # Sparse values should exactly match ground truth
+            self.assertLess(max_diff, 0.1, "Sparse values should match GT")
+            print(f"  Sparse-GT correspondence verified ✓")
+        else:
+            self.skipTest("No sparse measurements or no ground truth to compare")
+    
+    def test_channel_statistics_real_data(self):
+        """Compute and verify channel statistics across multiple real samples."""
+        print("\n" + "="*60)
+        print("[TEST] Channel Statistics on Real Data")
+        print("="*60)
+        
+        try:
+            dm, cfg = self._create_datamodule("e0")
+        except Exception as e:
+            self.skipTest(f"Could not load e0 config: {e}")
+        
+        n_samples = min(10, len(dm.train_dataloader().dataset))
+        
+        # Collect statistics
+        channel_mins = [[] for _ in range(9)]
+        channel_maxs = [[] for _ in range(9)]
+        channel_means = [[] for _ in range(9)]
+        
+        sparse_prob = float(cfg.datamodule.sparse_prob)
+        sparse_range = list(cfg.datamodule.sparse_range)
+        
+        for i in range(n_samples):
+            sample, _ = self._get_raw_sample_from_datamodule(dm, idx=i)
+            output = featurizer(sample, sparse_prob=sparse_prob, sparse_range=sparse_range)
+            
+            for ch in range(9):
+                ch_data = output[ch]
+                channel_mins[ch].append(ch_data.min().item())
+                channel_maxs[ch].append(ch_data.max().item())
+                channel_means[ch].append(ch_data.mean().item())
+        
+        channel_names = [
+            "Reflectance", "Transmittance", "Distance", "Antenna Gain",
+            "Frequency", "Mask", "Floor Plan", "Approx FSPL", "Sparse"
+        ]
+        
+        print(f"\n  Statistics across {n_samples} samples:")
+        print(f"  {'Channel':<15} {'Min Range':<20} {'Max Range':<20} {'Mean Range':<20}")
+        print("  " + "-"*75)
+        
+        for ch in range(9):
+            min_range = f"[{min(channel_mins[ch]):.3f}, {max(channel_mins[ch]):.3f}]"
+            max_range = f"[{min(channel_maxs[ch]):.3f}, {max(channel_maxs[ch]):.3f}]"
+            mean_range = f"[{min(channel_means[ch]):.3f}, {max(channel_means[ch]):.3f}]"
+            print(f"  {channel_names[ch]:<15} {min_range:<20} {max_range:<20} {mean_range:<20}")
+        
+        # Basic sanity checks
+        # Mask channel should have max=1.0 for all samples (assuming valid data)
+        self.assertTrue(all(m <= 1.0 for m in channel_maxs[5]), "Mask max should be <= 1.0")
+        self.assertTrue(all(m >= 0.0 for m in channel_mins[5]), "Mask min should be >= 0.0")
+        
+        # Floor plan should be in [0, 1]
+        self.assertTrue(all(m <= 1.0 for m in channel_maxs[6]), "Floor plan max should be <= 1.0")
+        self.assertTrue(all(m >= 0.0 for m in channel_mins[6]), "Floor plan min should be >= 0.0")
+        
+        print("\n  Channel statistics verified ✓")
 
 
 if __name__ == "__main__":

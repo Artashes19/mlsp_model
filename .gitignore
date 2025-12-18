@@ -61,3 +61,5 @@ cache/
 
 # Aim
 .aim/
+
+test_outputs/
