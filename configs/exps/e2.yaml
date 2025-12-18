@@ -10,7 +10,7 @@ e2:
     - optimizer: adam
     - scheduler: wsd_s_pretraining
     - algorithm: mlsp
-    - network: mlsp_vit
+    - network: mlsp_segformer
     - callbacks: [ model_checkpoint_0, model_checkpoint_every ]
     - loggers: [ aim ]
     - strategy: null

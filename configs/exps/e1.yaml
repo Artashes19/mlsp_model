@@ -9,7 +9,7 @@ e1:
     - optimizer: adam
     - scheduler: wsd_s_finetune
     - algorithm: mlsp
-    - network: mlsp_vit
+    - network: mlsp_segformer
     - callbacks: [ model_checkpoint_0, early_stopping ]
     - loggers: [ aim ]
     - strategy: null
