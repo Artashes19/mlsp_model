@@ -3,3 +3,4 @@ _target_: src.networks.SegFormerModel
 encoder_name: mit_b2
 encoder_weights: null
 in_chans: 6
+patch_size: 8
