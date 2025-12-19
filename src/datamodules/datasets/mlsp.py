@@ -49,6 +49,24 @@ class PathlossDataset(Dataset):
         self.reps_per_epoch = reps_per_epoch
         self.augment_val = augment_val
         
+        self.sparse_prob = float(kwargs["sparse_prob"])
+        
+        # Ensure sparse_range is a list/tuple of floats
+        sparse_range_val = kwargs["sparse_range"]
+        if isinstance(sparse_range_val, str):
+            # Parse string representation if it comes as a string (e.g. "[0.0, 0.01]")
+            try:
+                cleaned = sparse_range_val.strip("[]()")
+                self.sparse_range = [float(x.strip()) for x in cleaned.split(",")]
+            except ValueError:
+                raise ValueError(f"Could not parse sparse_range string: {sparse_range_val}")
+        else:
+            # Convert from omegaconf.ListConfig or other iterables to a plain list
+            self.sparse_range = list(sparse_range_val)
+            
+        if not isinstance(self.sparse_range, (list, tuple)) or len(self.sparse_range) != 2:
+            raise ValueError(f"sparse_range must be a list/tuple of 2 floats, got {self.sparse_range}")
+            
         self.target_size = IMG_TARGET_SIZE
     
     def __len__(self):
@@ -88,6 +106,13 @@ class PathlossDataset(Dataset):
             value=0
         ).squeeze(0)  # (new_H, new_W)
         
+        if sample.floor_plan is not None:
+            sample.floor_plan = F.pad(
+                sample.floor_plan.unsqueeze(0),
+                (pad_left, pad_right, pad_top, pad_bottom),
+                value=0
+            ).squeeze(0)
+
         sample.x_ant += pad_left
         sample.y_ant += pad_top
         _, new_H, new_W = sample.input_img.shape
@@ -255,7 +280,11 @@ class PathlossDataset(Dataset):
         
         output_tensor = sample.output_img if sample.output_img is not None else None
         
-        input_tensor = featurizer(sample=sample)
+        input_tensor = featurizer(
+            sample=sample,
+            sparse_prob=self.sparse_prob,
+            sparse_range=self.sparse_range
+        )
         mask = sample.mask
         # Store original dimensions for algorithm to use
         # Return only lightweight metadata to minimize batch transfer overhead

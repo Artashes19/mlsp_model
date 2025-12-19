@@ -77,6 +77,11 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     sample.input_img[0:1, :new_h, :new_w] = reflectance_resized
     sample.input_img[1:2, :new_h, :new_w] = transmittance_resized
     
+    if sample.floor_plan is not None:
+        floor_plan_resized = resize_nearest(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
+        sample.floor_plan = torch.zeros((target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
+        sample.floor_plan[:new_h, :new_w] = floor_plan_resized
+
     if sample.output_img != "":
         resized_output = resize_linear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
         padded_output = torch.zeros((target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
@@ -171,6 +176,11 @@ class GeometricAugmentation(BaseAugmentation):
             rot_output = rotate_db(out_expanded, angle).squeeze(0)
             sample.output_img = rot_output
         
+        if sample.floor_plan is not None:
+            fp_expanded = sample.floor_plan.unsqueeze(0)
+            rot_fp = rotate_nearest(fp_expanded, angle).squeeze(0)
+            sample.floor_plan = rot_fp
+
         if sample.mask is not None:
             mask_expanded = sample.mask.unsqueeze(0)
             rot_mask = rotate_nearest(mask_expanded, angle).squeeze(0)
@@ -194,6 +204,12 @@ class GeometricAugmentation(BaseAugmentation):
         if flip_v:
             sample.input_img = TF.vflip(sample.input_img)
         
+        if sample.floor_plan is not None:
+            if flip_h:
+                sample.floor_plan = TF.hflip(sample.floor_plan)
+            if flip_v:
+                sample.floor_plan = TF.vflip(sample.floor_plan)
+
         if sample.output_img is not None:
             output_expanded = sample.output_img.unsqueeze(0)
             if flip_h:
@@ -239,6 +255,8 @@ class GeometricAugmentation(BaseAugmentation):
         sample.x_ant, sample.y_ant = new_x, new_y
         if sample.output_img is not None:
             sample.output_img = torch.rot90(sample.output_img, k, (0, 1))
+        if sample.floor_plan is not None:
+            sample.floor_plan = torch.rot90(sample.floor_plan, k, (0, 1))
         if sample.mask is not None:
             sample.mask = torch.rot90(sample.mask, k, (0, 1))
         

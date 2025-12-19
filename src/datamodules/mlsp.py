@@ -101,6 +101,10 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.use_synthetic_val = use_synthetic_val
         self.synthetic_val_samples_per_epoch = synthetic_val_samples_per_epoch
         
+        # Sparse measurement probability controls - strictly from config
+        self.sparse_prob = kwargs.pop("sparse_prob")
+        self.sparse_range = kwargs.pop("sparse_range")
+        
         # Always use dense ground truth outputs for ICASSP train-style data (Task_2_ICASSP layout)
         # If explicit manifests are provided, skip enumerating the full ICASSP directory
         if not self.train_manifest_path and not self.val_manifest_path:
@@ -222,24 +226,14 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 f"(elapsed={dt:.2f}s)"
             )
             return inputs_list
-        
-        # Resolve ICASSP layout. Prefer Inputs/Task_2_ICASSP but fallback to Inputs/ if needed.
-        input_dir_task = os.path.join(data_dir, f"Inputs/{task}")
-        output_dir_task = os.path.join(data_dir, f"Outputs/{task}")
-        input_dir_flat = os.path.join(data_dir, "Inputs")
-        output_dir_flat = os.path.join(data_dir, "Outputs")
-        use_task_subdir = os.path.isdir(input_dir_task)
-        input_dir = input_dir_task if use_task_subdir else input_dir_flat
-        output_dir = output_dir_task if use_task_subdir else output_dir_flat
+
+        # ICASSP layout: Inputs/{task}/ and Outputs/{task}/
+        input_dir = os.path.join(data_dir, f"Inputs/{task}")
+        output_dir = os.path.join(data_dir, f"Outputs/{task}")
         positions_dir = os.path.join(data_dir, "Positions/")
         radiation_patterns_dir = os.path.join(data_dir, "Radiation_Patterns/")
         if not os.path.isdir(input_dir):
-            log.warning(
-                f"ICASSP input directory not found at expected locations. Tried: {input_dir_task} and {input_dir_flat}"
-            )
-        else:
-            chosen = "Inputs/{task}" if use_task_subdir else "Inputs"
-            log.debug(f"Using ICASSP layout rooted at '{chosen}' under {data_dir}")
+            log.warning(f"ICASSP input directory not found: {input_dir}")
         # Expect these directories to exist for the ICASSP train-style dataset
         
         for b in range(1, 26):  # 25 buildings
@@ -421,7 +415,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 "reps_per_epoch",
                 "augment_val",
             }
-            return {k: v for k, v in src_kwargs.items() if k in allowed}
+            # Add sparse controls to dataset kwargs
+            base = {k: v for k, v in src_kwargs.items() if k in allowed}
+            base.update({
+                "sparse_prob": self.sparse_prob,
+                "sparse_range": self.sparse_range
+            })
+            return base
         
         if self.inference:
             self._test_set = PathlossDataset(

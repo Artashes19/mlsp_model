@@ -35,6 +35,10 @@ mlsp_task_idx: 1
 use_fspl: True
 use_transmittance_loss: True
 
+# Sparse measurement controls
+sparse_prob: 0.333333333333
+sparse_range: [ 0.0, 0.01 ]
+
 # Data augmentation parameters
 augment_val: False
 aug_p: 0.0
