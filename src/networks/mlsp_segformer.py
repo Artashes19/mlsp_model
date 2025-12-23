@@ -12,16 +12,10 @@ class SegFormerModel(nn.Module):
         encoder_name: str,
         encoder_weights: str | None,
         in_chans: int,
-        patch_size: int,
         **kwargs: Any,
     ) -> None:
         super().__init__()
-        
-        encoder_entry = smp.encoders.encoders[encoder_name]
-        encoder_params = dict(encoder_entry.get("params", {}))
-        encoder_params["patch_size"] = patch_size
-        encoder_entry["params"] = encoder_params
-        
+                
         self.unet = smp.Unet(
             encoder_name=encoder_name,
             encoder_weights=encoder_weights,
