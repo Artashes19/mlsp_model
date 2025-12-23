@@ -1,7 +1,7 @@
 _target_: src.networks.ViTModel
 
 image_size: 256
-in_chans: 6
+in_chans: 9
 patch_size: 16
 embed_dim: 384
 decoder_channels:

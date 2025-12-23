@@ -9,7 +9,7 @@ e3:
     - optimizer: adam
     - scheduler: wsd_s_finetune
     - algorithm: mlsp
-    - network: mlsp_segformer
+    - network: mlsp_unet
     - callbacks: [ model_checkpoint_0, early_stopping ]
     - loggers: [ aim ]
     - strategy: null
@@ -28,7 +28,7 @@ e3:
 
   loggers:
     aim:
-      experiment: default_e3
+      experiment: v1_e3
 
   algorithm:
     finetune:
