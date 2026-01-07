@@ -119,7 +119,14 @@ def train_epoch(
 
 
 @torch.no_grad()
-def validate(model: nn.Module, loader: DataLoader, device: torch.device, metric_scale: float) -> Tuple[float, float]:
+def validate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    metric_scale: float,
+    amp_dtype: torch.dtype = torch.bfloat16,
+    amp_enabled: bool = True,
+) -> Tuple[float, float]:
     """Validate model. Returns (rmse_db, l1_loss)."""
     model.eval()
     total_rmse, total_l1 = 0.0, 0.0
@@ -134,7 +141,10 @@ def validate(model: nn.Module, loader: DataLoader, device: torch.device, metric_
             pad = torch.zeros(x.shape[0], model_in_ch - x.shape[1], x.shape[2], x.shape[3], device=device)
             x = torch.cat([x, pad], dim=1)
         
-        pred = model(x)
+        # Use autocast for Flash Attention speedup
+        with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=amp_enabled and device.type == 'cuda'):
+            pred = model(x)
+        
         pred = torch.clamp(pred, 0.0, 1.0)
         
         total_rmse += rmse(pred * metric_scale, y * metric_scale, mask).item()
@@ -242,7 +252,7 @@ def main() -> None:
         )
         
         # Validate
-        val_rmse, val_l1 = validate(model, loader_val, device, y_db_max)
+        val_rmse, val_l1 = validate(model, loader_val, device, y_db_max, amp_dtype=amp_dtype, amp_enabled=amp_enabled)
         
         # Log
         print(f"Epoch {epoch:03d} | Train L1: {train_loss:.4f} | Val RMSE: {val_rmse:.2f} dB | Val L1: {val_l1:.4f}")

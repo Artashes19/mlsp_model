@@ -8,7 +8,7 @@ expand: 2.66
 use_checkpoint: false
 ln_eps: 1e-5
 window0: null       # disable windowed attention at level 0 (use SRA instead)
-sra0_enabled: true
+sra0_enabled: false
 sra0_stride: 4
 
 

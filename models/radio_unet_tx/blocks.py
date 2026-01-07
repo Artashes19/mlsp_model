@@ -181,39 +181,28 @@ class EfficientGlobalAttention(nn.Module):
         Hk, Wk = k.shape[2], k.shape[3]
         Tk = Hk * Wk
 
-        # Try PyTorch fused SDPA (Flash/MemEff) when available on CUDA
-        use_sdpa = x.is_cuda
-        if use_sdpa:
-            try:
-                # Reshape to [B, h, T, d]
-                def to_bhtd_q(t: torch.Tensor) -> torch.Tensor:
-                    return t.view(B, h, d, H, W).permute(0, 1, 3, 4, 2).contiguous().view(B, h, Tq, d)
+        # Use PyTorch SDPA on CUDA (auto-selects Flash/MemEff based on dtype)
+        # Flash Attention requires FP16/BF16 - use torch.amp.autocast in training
+        if x.is_cuda:
+            # Reshape to [B, h, T, d]
+            def to_bhtd_q(t: torch.Tensor) -> torch.Tensor:
+                return t.view(B, h, d, H, W).permute(0, 1, 3, 4, 2).contiguous().view(B, h, Tq, d)
 
-                def to_bhtd_kv(t: torch.Tensor) -> torch.Tensor:
-                    return t.view(B, h, d, Hk, Wk).permute(0, 1, 3, 4, 2).contiguous().view(B, h, Tk, d)
+            def to_bhtd_kv(t: torch.Tensor) -> torch.Tensor:
+                return t.view(B, h, d, Hk, Wk).permute(0, 1, 3, 4, 2).contiguous().view(B, h, Tk, d)
 
-                q_bhtd = to_bhtd_q(q)
-                k_bhtd = to_bhtd_kv(k)
-                v_bhtd = to_bhtd_kv(v)
+            q_bhtd = to_bhtd_q(q)
+            k_bhtd = to_bhtd_kv(k)
+            v_bhtd = to_bhtd_kv(v)
 
-                # Enable Flash / MemEff kernels where possible
-                try:
-                    from torch.nn.attention import sdpa_kernel
-                    sdpa_ctx = sdpa_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=False)
-                except Exception:
-                    sdpa_ctx = torch.backends.cuda.sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=False)
+            # SDPA auto-selects best backend (Flash for FP16/BF16, else fallback)
+            out_bhtd = F.scaled_dot_product_attention(q_bhtd, k_bhtd, v_bhtd, dropout_p=0.0, is_causal=False)
+            
+            # Back to [B, C, H, W]
+            out = out_bhtd.view(B, h, H, W, d).permute(0, 1, 4, 2, 3).contiguous().view(B, C, H, W)
+            return self.proj(out)
 
-                with sdpa_ctx:
-                    out_bhtd = F.scaled_dot_product_attention(q_bhtd, k_bhtd, v_bhtd, dropout_p=0.0, is_causal=False)
-                
-                # Back to [B, C, H, W]
-                out = out_bhtd.view(B, h, H, W, d).permute(0, 1, 4, 2, 3).contiguous().view(B, C, H, W)
-                return self.proj(out)
-            except Exception:
-                # Fall back to streaming path below
-                pass
-
-        # Fallback: streaming softmax attention on CPU/FP32 or if SDPA unavailable
+        # Fallback: streaming softmax attention on CPU
         def to_bhd_q(t: torch.Tensor) -> torch.Tensor:
             t = t.view(B, h, d, H, W).permute(0, 1, 3, 4, 2).contiguous()
             return t.view(B * h, Tq, d)
