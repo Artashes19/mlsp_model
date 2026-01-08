@@ -129,6 +129,11 @@ class AlgorithmBase(pl.LightningModule):
     
     def __step(self, batch, split_name):
         if self.__first_step:
+            # DEBUG: Log batch shape and memory before step
+            if isinstance(batch, (list, tuple)) and len(batch) > 0:
+                b0 = batch[0]
+                log.info(f"[DEBUG] First batch shape: {b0.shape if hasattr(b0, 'shape') else 'N/A'}, "
+                        f"GPU memory before step: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
             log.info(f"[step:{split_name}] first step begin; measuring FLOPs and applying compile if enabled")
             with self.__flop_counter:
                 self.__start.record()

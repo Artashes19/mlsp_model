@@ -197,6 +197,8 @@ def train(config: DictConfig) -> str | None:
         config.datamodule,
         epoch_counter=epoch_counter, multi_gpu=multi_gpu, drop_last=not config.algorithm.compiled.disable
     )
+    # DEBUG: Print actual batch_size being used
+    log.info(f"[DEBUG] ACTUAL batch_size={datamodule._batch_size}, num_workers={datamodule._num_workers}")
     # Summarize datasets if available
     try:
         tr_n = len(datamodule.train_set) if datamodule.train_set is not None else 0
