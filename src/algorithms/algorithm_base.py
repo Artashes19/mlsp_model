@@ -129,17 +129,24 @@ class AlgorithmBase(pl.LightningModule):
     
     def __step(self, batch, split_name):
         if self.__first_step:
-            # DEBUG: Log batch shape and memory before step
+            # DEBUG: Log batch shape, dtype, and memory before step
             if isinstance(batch, (list, tuple)) and len(batch) > 0:
                 b0 = batch[0]
                 log.info(f"[DEBUG] First batch shape: {b0.shape if hasattr(b0, 'shape') else 'N/A'}, "
+                        f"dtype: {b0.dtype if hasattr(b0, 'dtype') else 'N/A'}, "
                         f"GPU memory before step: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+            # Check if autocast is enabled
+            log.info(f"[DEBUG] torch.is_autocast_enabled(): {torch.is_autocast_enabled()}, "
+                    f"autocast dtype: {torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else 'N/A'}")
             log.info(f"[step:{split_name}] first step begin; measuring FLOPs and applying compile if enabled")
+            torch.cuda.reset_peak_memory_stats()
             with self.__flop_counter:
                 self.__start.record()
                 output = self._step(batch, split_name)
                 self.__end.record()
                 torch.cuda.synchronize()
+            
+            log.info(f"[DEBUG] After first step - Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
             
             if self.__num_flop is None:
                 self.__num_flop = self.__flop_counter.get_total_flops()
