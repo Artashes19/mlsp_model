@@ -137,19 +137,30 @@ class AlgorithmBase(pl.LightningModule):
                         f"GPU memory before step: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
             # Check if autocast is enabled
             log.info(f"[DEBUG] torch.is_autocast_enabled(): {torch.is_autocast_enabled()}, "
-                    f"autocast dtype: {torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else 'N/A'}")
+                    f"autocast dtype: {torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else 'N/A'}, "
+                    f"model.training: {self._network.training}")
             log.info(f"[step:{split_name}] first step begin; measuring FLOPs and applying compile if enabled")
             torch.cuda.reset_peak_memory_stats()
-            with self.__flop_counter:
+            
+            # Only use FlopCounterMode for training, skip for validation (causes memory issues)
+            if split_name == "train":
+                with self.__flop_counter:
+                    self.__start.record()
+                    output = self._step(batch, split_name)
+                    self.__end.record()
+                    torch.cuda.synchronize()
+                if self.__num_flop is None:
+                    self.__num_flop = self.__flop_counter.get_total_flops()
+            else:
+                # For validation, skip FlopCounterMode
+                log.info(f"[DEBUG] Skipping FlopCounterMode for {split_name}")
                 self.__start.record()
                 output = self._step(batch, split_name)
                 self.__end.record()
                 torch.cuda.synchronize()
+                self.__num_flop = 1  # placeholder
             
             log.info(f"[DEBUG] After first step - Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
-            
-            if self.__num_flop is None:
-                self.__num_flop = self.__flop_counter.get_total_flops()
             
             if not self._compile.disable:
                 log.info("Compiling the model.")

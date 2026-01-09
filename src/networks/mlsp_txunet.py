@@ -255,6 +255,8 @@ class GatedDepthwiseFFN(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         u = self.branch1(x)  # [B, Hid, H, W]
+        # Clamp u to prevent explosion before multiplicative gate
+        u = torch.clamp(u, -256.0, 256.0)
         v = self.act(self.branch2(x))  # [B, Hid, H, W]
         g = u * v  # Gated: [B, Hid, H, W]
         return self.proj(g) + x  # Internal residual: [B, C, H, W]
@@ -305,13 +307,13 @@ class WindowAttention(nn.Module):
 
 class TransformerBlock(nn.Module):
     """
-    Complete Transformer block: LayerNorm → Attention (+ residual) → FFN (has internal residual).
+    Complete Transformer block: Pre-LN → Attention (+ residual) → Pre-LN → FFN (has internal residual).
 
     Architecture:
-        x → LN → Attention → + x (residual) → FFN (with internal residual) → output
+        x → LN1 → Attention → + x (residual) → LN2 → FFN (with internal residual) → output
 
     Note:
-    - Pre-LN is applied only before attention (not before FFN)
+    - Pre-LN is applied before both attention AND FFN for stability
     - FFN has its own internal residual connection
 
     Input: [B, C, H, W]
@@ -320,21 +322,23 @@ class TransformerBlock(nn.Module):
     
     def __init__(self, dim: int, heads: int, expand: float = 2.66, ln_eps: float = 1e-5, kv_stride: int = 1) -> None:
         super().__init__()
-        self.norm = LayerNorm2d(dim, eps=ln_eps)
+        self.norm1 = LayerNorm2d(dim, eps=ln_eps)  # Before attention
+        self.norm2 = LayerNorm2d(dim, eps=ln_eps)  # Before FFN (for stability)
         self.attn = EfficientGlobalAttention(dim, heads, kv_stride=kv_stride)
         self.ffn = GatedDepthwiseFFN(dim, expand)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Attention with external residual
-        x = x + self.attn(self.norm(x))
-        # FFN has internal residual
-        x = self.ffn(x)
+        x = x + self.attn(self.norm1(x))
+        # FFN with Pre-LN for stability (FFN has internal residual)
+        x = self.ffn(self.norm2(x))
         return x
 
 
 class WindowedTransformerBlock(nn.Module):
     """
     Transformer block variant that applies windowed attention.
+    Uses Pre-LN before both attention and FFN for stability.
     """
     
     def __init__(
@@ -348,15 +352,16 @@ class WindowedTransformerBlock(nn.Module):
         kv_stride: int = 1,
     ) -> None:
         super().__init__()
-        self.norm = LayerNorm2d(dim, eps=ln_eps)
+        self.norm1 = LayerNorm2d(dim, eps=ln_eps)  # Before attention
+        self.norm2 = LayerNorm2d(dim, eps=ln_eps)  # Before FFN (for stability)
         self.attn = WindowAttention(
             EfficientGlobalAttention(dim, heads, kv_stride=kv_stride), window=window, stride=stride
         )
         self.ffn = GatedDepthwiseFFN(dim, expand)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm(x))
-        x = self.ffn(x)
+        x = x + self.attn(self.norm1(x))
+        x = self.ffn(self.norm2(x))
         return x
 
 
