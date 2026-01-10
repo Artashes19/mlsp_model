@@ -362,6 +362,12 @@ class MLSP(AlgorithmBase):
         self.test_step_outputs[dataloader_idx].append(outputs)
     
     def get_metrics(self, preds, targets, masks, weights):
+        # DEBUG: Check actual value ranges
+        if not hasattr(self, '_debug_logged') or not self._debug_logged:
+            log.info(f"[DEBUG get_metrics] preds: min={preds.min():.2f}, max={preds.max():.2f}, mean={preds.mean():.2f}")
+            log.info(f"[DEBUG get_metrics] targets: min={targets.min():.2f}, max={targets.max():.2f}, mean={targets.mean():.2f}")
+            log.info(f"[DEBUG get_metrics] masks: sum={masks.sum():.0f}, shape={masks.shape}")
+            self._debug_logged = True
         
         # MSE (internal; used to derive RMSE)
         batch_se = se(preds, targets, masks, weights)
@@ -396,11 +402,13 @@ class MLSP(AlgorithmBase):
             l2sp = self._l2sp_penalty()
             loss = loss + alpha * l2sp
         
-        rmse = torch.sqrt(batch_mse)
+        # Scale RMSE by out_norm to report in dB units
+        rmse_normalized = torch.sqrt(batch_mse)
+        rmse_db = rmse_normalized * self.out_norm
         
         return {
             "loss": loss,
-            "rmse": rmse,
+            "rmse": rmse_db,
             "mae": batch_mae,
         }
     

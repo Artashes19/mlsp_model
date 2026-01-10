@@ -177,6 +177,8 @@ class PathlossDataset(Dataset):
         input_img[2] = torch.from_numpy(dist_m)
         
         output_img = torch.from_numpy(pathloss)
+        # Normalize targets to [0, 1] by dividing by max dB (160)
+        output_img = output_img / 160.0
         
         freq_MHz = float(meta["frequency_MHz"])  # required above
         radiation_pattern = torch.ones(360, dtype=torch.float32)
@@ -227,6 +229,8 @@ class PathlossDataset(Dataset):
             output_img = read_image(output_file).float()
             if output_img.size(0) == 1:
                 output_img = output_img.squeeze(0)
+            # Normalize targets to [0, 1] by dividing by max dB (160)
+            output_img = output_img / 160.0
         sampling_positions = pd.read_csv(position_file)
         x_ant, y_ant, azimuth = sampling_positions.loc[int(sampling_position), ["Y", "X", "Azimuth"]]
         radiation_pattern_np = np.genfromtxt(radiation_pattern_file, delimiter=',')
