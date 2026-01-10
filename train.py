@@ -57,6 +57,8 @@ def build_model(cfg: Dict) -> nn.Module:
         ln_eps=float(cfg.get("ln_eps", 1e-5)),
         window0=cfg.get("window0", None),
         window0_stride=cfg.get("window0_stride", None),
+        sra0_enabled=cfg.get("sra0_enabled", False),
+        sra0_stride=cfg.get("sra0_stride", 4),
     )
 
 
