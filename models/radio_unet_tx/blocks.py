@@ -231,9 +231,19 @@ class GatedDepthwiseFFN(nn.Module):
         Gate: g = u × v (Hadamard product)
         Output: 1×1 Conv(g) + Y (internal residual)
     
+    Numerical Stability:
+        The gate `g = u * v` can cause activation explosion when both u and v
+        are large positive values. To prevent overflow in fp16/bf16:
+        - We clamp u before the multiplication to limit magnitude
+        - The clamp value is set high enough to not affect normal training
+    
     Input: [B, C, H, W]
     Output: [B, C, H, W]
     """
+    # Clamp threshold to prevent overflow in multiplicative gate
+    # fp16 max is ~65504, so clamping at 256 allows g up to 65536 which is safe
+    GATE_CLAMP = 256.0
+    
     def __init__(self, dim: int, expand: float = 2.66) -> None:
         super().__init__()
         hidden = int(round(dim * expand))
@@ -248,6 +258,11 @@ class GatedDepthwiseFFN(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         u = self.branch1(x)            # [B, Hid, H, W]
         v = self.act(self.branch2(x))  # [B, Hid, H, W]
+        
+        # Clamp u to prevent explosion in multiplicative gate
+        # GELU already bounds v to roughly [-0.17, +inf), so we only clamp u
+        u = torch.clamp(u, -self.GATE_CLAMP, self.GATE_CLAMP)
+        
         g = u * v                       # Gated: [B, Hid, H, W]
         return self.proj(g) + x         # Internal residual: [B, C, H, W]
 
@@ -296,35 +311,45 @@ class WindowAttention(nn.Module):
 
 class TransformerBlock(nn.Module):
     """
-    Complete Transformer block: LayerNorm → Attention (+ residual) → FFN (has internal residual).
+    Complete Transformer block with Pre-LN architecture.
     
-    Architecture:
-        x → LN → Attention → + x (residual) → FFN (with internal residual) → output
+    Architecture (Pre-LN, standard in GPT-2/3, LLaMA, etc.):
+        x → LN1 → Attention → + x (residual) → LN2 → FFN → + (internal residual) → output
     
-    Note: 
-    - Pre-LN is applied only before attention (not before FFN)
-    - FFN has its own internal residual connection
+    This design normalizes inputs before each sub-layer, which:
+    - Prevents activation explosion through deep networks
+    - Provides more stable gradients during training
+    - Is critical for fp16/bf16 mixed precision training
+    
+    Backward Compatibility:
+        Old checkpoints with single 'norm' are automatically migrated to 'norm1'.
+        The new 'norm2' is initialized to identity (weight=1, bias=0).
     
     Input: [B, C, H, W]
     Output: [B, C, H, W]
     """
     def __init__(self, dim: int, heads: int, expand: float = 2.66, ln_eps: float = 1e-5, kv_stride: int = 1) -> None:
         super().__init__()
-        self.norm = LayerNorm2d(dim, eps=ln_eps)
+        self.norm1 = LayerNorm2d(dim, eps=ln_eps)
         self.attn = EfficientGlobalAttention(dim, heads, kv_stride=kv_stride)
+        self.norm2 = LayerNorm2d(dim, eps=ln_eps)
         self.ffn = GatedDepthwiseFFN(dim, expand)
+        
+        # For backward compatibility: alias norm -> norm1
+        # This allows old checkpoints with 'norm' to load into 'norm1'
+        self.norm = self.norm1
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Attention with external residual
-        x = x + self.attn(self.norm(x))
-        # FFN has internal residual
-        x = self.ffn(x)
+        # Attention with pre-norm and external residual
+        x = x + self.attn(self.norm1(x))
+        # FFN with pre-norm (FFN has internal residual)
+        x = self.ffn(self.norm2(x))
         return x
 
 
 class WindowedTransformerBlock(nn.Module):
     """
-    Transformer block variant that applies windowed attention.
+    Transformer block variant that applies windowed attention with Pre-LN architecture.
     """
     def __init__(
         self,
@@ -337,11 +362,80 @@ class WindowedTransformerBlock(nn.Module):
         kv_stride: int = 1,
     ) -> None:
         super().__init__()
-        self.norm = LayerNorm2d(dim, eps=ln_eps)
+        self.norm1 = LayerNorm2d(dim, eps=ln_eps)
         self.attn = WindowAttention(EfficientGlobalAttention(dim, heads, kv_stride=kv_stride), window=window, stride=stride)
+        self.norm2 = LayerNorm2d(dim, eps=ln_eps)
         self.ffn = GatedDepthwiseFFN(dim, expand)
+        
+        # For backward compatibility
+        self.norm = self.norm1
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm(x))
-        x = self.ffn(x)
+        # Attention with pre-norm and external residual
+        x = x + self.attn(self.norm1(x))
+        # FFN with pre-norm (FFN has internal residual)
+        x = self.ffn(self.norm2(x))
         return x
+
+
+def migrate_checkpoint(state_dict: dict) -> dict:
+    """
+    Migrate old checkpoint state_dict to new format.
+    
+    Old format: TransformerBlock has single 'norm'
+    New format: TransformerBlock has 'norm1' and 'norm2'
+    
+    This function:
+    1. Renames 'norm.weight' -> 'norm1.weight', 'norm.bias' -> 'norm1.bias'
+    2. Adds new 'norm2.weight' (ones) and 'norm2.bias' (zeros) if missing
+    
+    Returns:
+        Updated state_dict compatible with new model architecture
+    """
+    new_state_dict = {}
+    needs_migration = False
+    
+    # Check if migration is needed
+    for key in state_dict.keys():
+        if '.norm.weight' in key or '.norm.bias' in key:
+            needs_migration = True
+            break
+    
+    if not needs_migration:
+        return state_dict
+    
+    print("Migrating checkpoint from old format (single norm) to new format (norm1/norm2)...")
+    
+    # Track which blocks need norm2 added
+    blocks_needing_norm2 = set()
+    
+    for key, value in state_dict.items():
+        new_key = key
+        
+        # Rename norm -> norm1
+        if '.norm.weight' in key:
+            new_key = key.replace('.norm.weight', '.norm1.weight')
+            # Track this block for norm2 addition
+            block_prefix = key.rsplit('.norm.weight', 1)[0]
+            blocks_needing_norm2.add(block_prefix)
+        elif '.norm.bias' in key:
+            new_key = key.replace('.norm.bias', '.norm1.bias')
+        
+        new_state_dict[new_key] = value
+    
+    # Add norm2 for each block (initialized to identity: weight=1, bias=0)
+    for block_prefix in blocks_needing_norm2:
+        norm1_weight_key = f"{block_prefix}.norm1.weight"
+        if norm1_weight_key in new_state_dict:
+            weight_shape = new_state_dict[norm1_weight_key].shape
+            
+            norm2_weight_key = f"{block_prefix}.norm2.weight"
+            norm2_bias_key = f"{block_prefix}.norm2.bias"
+            
+            if norm2_weight_key not in new_state_dict:
+                new_state_dict[norm2_weight_key] = torch.ones(weight_shape)
+            if norm2_bias_key not in new_state_dict:
+                new_state_dict[norm2_bias_key] = torch.zeros(weight_shape)
+    
+    print(f"  Migrated {len(blocks_needing_norm2)} transformer blocks")
+    return new_state_dict

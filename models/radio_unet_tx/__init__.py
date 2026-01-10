@@ -7,6 +7,7 @@ Main exports:
     - TxUNet: The main model class
     - TransformerBlock: Single transformer block
     - DConvBlock: 1×1 Conv + 3×3 Depthwise Conv building block
+    - migrate_checkpoint: Utility to migrate old checkpoints to new format
 """
 
 from .unet import TxUNet, Downsample, Upsample, make_blocks
@@ -16,6 +17,7 @@ from .blocks import (
     EfficientGlobalAttention,
     GatedDepthwiseFFN,
     TransformerBlock,
+    migrate_checkpoint,
 )
 
 __all__ = [
@@ -31,4 +33,6 @@ __all__ = [
     "EfficientGlobalAttention",
     "GatedDepthwiseFFN",
     "TransformerBlock",
+    # Utilities
+    "migrate_checkpoint",
 ]

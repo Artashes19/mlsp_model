@@ -15,7 +15,7 @@ import yaml
 
 from data.dataset import IndoorRadioMapDataset, gather_task2_samples, parse_meta
 from losses.l1_rmse import L1LossMasked, rmse
-from models.radio_unet_tx import TxUNet
+from models.radio_unet_tx import TxUNet, migrate_checkpoint
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -200,7 +200,10 @@ def main() -> None:
     # Resume
     if args.resume and Path(args.resume).is_file():
         ckpt = torch.load(args.resume, map_location=device)
-        model.load_state_dict(ckpt.get("state_dict", ckpt))
+        state_dict = ckpt.get("state_dict", ckpt)
+        # Migrate old checkpoint format if needed (norm -> norm1/norm2)
+        state_dict = migrate_checkpoint(state_dict)
+        model.load_state_dict(state_dict, strict=False)
         print(f"Resumed from: {args.resume}")
 
     # Optimizer & Loss
