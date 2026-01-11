@@ -1,21 +1,13 @@
 import logging
-import os
 import re
-import shutil
-import time
 from collections import defaultdict
 from typing import Any
 
 import hydra
-import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
-from kaggle import KaggleApi
 from omegaconf import DictConfig, OmegaConf
-from PIL import Image
 from torch.optim.lr_scheduler import LRScheduler
-from tqdm import tqdm
 
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.datamodules.datasets.mlsp import IMG_TARGET_SIZE
@@ -251,68 +243,6 @@ class MLSP(AlgorithmBase):
     def _step(self, batch, split_name, *args, **kwargs):
         inputs, targets, masks, sample = batch
         
-        if split_name == "val" and sample["task_idx"][0].item() not in [-1, -2]:
-            # No evaluation for sanity check
-            if self.trainer.sanity_checking:
-                inf = torch.Tensor([float("inf")])
-                return {
-                    "loss": inf,
-                    "rmse": inf,
-                }
-            
-            # Getting predictions
-            log.info("[validation] Kaggle submission branch engaged")
-            pred_path = "./task1" if sample["task_idx"][0] == 1 else "./task2"
-            if os.path.exists(pred_path):
-                shutil.rmtree(pred_path)
-            os.makedirs(pred_path, exist_ok=True)
-            for i in tqdm(list(range(len(targets)))):
-                sample_i = {k: sample[k][i] for k in sample.keys()}
-                alg_out = self.pred(
-                    (inputs[i], targets[i], masks[i], sample_i)
-                )
-                pred_img = Image.fromarray(alg_out["pred"]).convert("RGB")
-                pred_img.save(os.path.join(pred_path, f"{sample['file_name'][i]}"))
-            
-            # Creating predictions dataframe
-            data = []
-            for file_name in os.listdir(pred_path):
-                if file_name.endswith(".png"):
-                    file_path = os.path.join(pred_path, file_name)
-                    image = Image.open(file_path).convert("L")
-                    pl_array = np.array(image)
-                    
-                    flat_pl = pl_array.flatten()
-                    for idx, value in enumerate(flat_pl):
-                        id_str = f"{file_name.split('.')[0]}_{idx}"
-                        data.append((id_str, value))
-            
-            # Save predictions to CSV
-            df = pd.DataFrame(data, columns=["ID", "PL"])
-            df = df.groupby("ID", as_index=False).mean()
-            pred_file = os.path.join(pred_path, f"epoch_{self.trainer.current_epoch}.csv")
-            df.to_csv(pred_file, index=False)
-            
-            # Submit to Kaggle
-            if sample["task_idx"][0] == 1:
-                competition = "iprm-task-1"
-            else:
-                competition = "indoor-pathloss-radio-map-prediction-task-2"
-            
-            api = KaggleApi()
-            api.authenticate()
-            submission = self._submit_solution_to_kaggle(
-                api, pred_file, competition,
-                f"Submission from epoch {self.trainer.current_epoch}"
-            )
-            kaggle_mse = self._poll_submission_score(api, competition, submission)
-            kaggle_rmse = torch.Tensor([kaggle_mse]).sqrt()
-            
-            return {
-                "loss": kaggle_rmse,
-                "rmse": kaggle_rmse,
-            }
-        
         preds = self._network(inputs)
         
         weights = torch.ones_like(inputs[:, -1])
@@ -321,37 +251,6 @@ class MLSP(AlgorithmBase):
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
         self.training_step_outputs.append(outputs)
-    
-    @staticmethod
-    def _submit_solution_to_kaggle(api: KaggleApi, file_path: str, competition: str, message: str):
-        """
-        Submits the CSV file to Kaggle and returns the submission object.
-        """
-        return api.competition_submit(file_path, message, competition)
-    
-    @staticmethod
-    def _poll_submission_score(api: KaggleApi, competition: str, submission) -> float:
-        """
-        Polls Kaggle until the submission completes and returns the public_score (MSE).
-        """
-        result = None
-        i = 0
-        while result is None:
-            submission_results = api.competition_submissions(competition=competition)
-            latest = sorted(submission_results, key=lambda x: x.date, reverse=True)[0]
-            if str(latest.status) == "SubmissionStatus.COMPLETE":
-                result = latest
-                break
-            
-            if result is not None:
-                break
-            time.sleep(5)  # Wait between checks
-            i += 1
-            if i > 24:
-                log.warning("Kaggle submission timed out.")
-                break
-        
-        return float(result.public_score) if result is not None else float("inf")  # Kaggle's published MSE score
     
     def on_validation_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)

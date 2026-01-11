@@ -11,7 +11,7 @@ e2:
     - scheduler: wsd_s_pretraining
     - algorithm: mlsp
     - network: mlsp_txunet
-    - callbacks: [ model_checkpoint_0, model_checkpoint_every ]
+    - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every ]
     - loggers: [ aim ]
     - strategy: null
     - _self_

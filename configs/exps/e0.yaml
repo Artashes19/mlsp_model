@@ -10,7 +10,7 @@ e0:
     - scheduler: wsd_s_finetune
     - algorithm: mlsp
     - network: mlsp_txunet
-    - callbacks: [ model_checkpoint_0, early_stopping ]
+    - callbacks: [ tqdm_progress_bar, model_checkpoint_0, early_stopping ]
     - loggers: [ aim ]
     - strategy: null
     - _self_
