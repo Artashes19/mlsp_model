@@ -107,7 +107,7 @@ def create_mock_sample(
         file_name="mock_sample",
         task_idx=0,
         pl_clip=None,
-        use_fspl=True,
+        use_approximator_feature=True,
         use_transmittance_loss=True,
         H=H,
         W=W,

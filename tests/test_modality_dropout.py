@@ -29,7 +29,7 @@ def create_dummy_sample(H=64, W=64):
         file_name="test",
         task_idx=1,
         pl_clip=float("inf"),
-        use_fspl=True,
+        use_approximator_feature=True,
         use_transmittance_loss=False,
         H=H,
         W=W,

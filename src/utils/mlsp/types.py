@@ -10,7 +10,7 @@ class RadarSample:
     file_name: str
     task_idx: int
     pl_clip: Optional[torch.Tensor]
-    use_fspl: bool
+    use_approximator_feature: bool
     use_transmittance_loss: bool
     H: int
     W: int

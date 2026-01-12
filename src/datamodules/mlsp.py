@@ -413,7 +413,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 "mlsp_task1",
                 "mlsp_task_idx",
                 "pl_clip",
-                "use_fspl",
+                "use_approximator_feature",
                 "use_transmittance_loss",
                 "reps_per_epoch",
                 "augment_val",

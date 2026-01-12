@@ -28,7 +28,7 @@ class PathlossDataset(Dataset):
         mlsp_task_idx: int,
         task_idx: Optional[int],
         pl_clip: Optional[int],
-        use_fspl: bool,
+        use_approximator_feature: bool,
         use_transmittance_loss: bool,
         inference: bool,
         reps_per_epoch: int,
@@ -43,7 +43,7 @@ class PathlossDataset(Dataset):
         self.task_idx = task_idx
         self.mlsp_task_idx = mlsp_task_idx
         self.pl_clip = pl_clip
-        self.use_fspl = use_fspl
+        self.use_approximator_feature = use_approximator_feature
         self.use_transmittance_loss = use_transmittance_loss
         self.inference = inference
         self.reps_per_epoch = reps_per_epoch
@@ -192,7 +192,7 @@ class PathlossDataset(Dataset):
             file_name=file_name,
             task_idx=self.task_idx,
             pl_clip=pl_clip,
-            use_fspl=self.use_fspl,
+            use_approximator_feature=self.use_approximator_feature,
             use_transmittance_loss=self.use_transmittance_loss,
             H=H,
             W=W,
@@ -243,7 +243,7 @@ class PathlossDataset(Dataset):
             file_name=file_name,
             task_idx=self.task_idx,
             pl_clip=pl_clip,
-            use_fspl=self.use_fspl,
+            use_approximator_feature=self.use_approximator_feature,
             use_transmittance_loss=self.use_transmittance_loss,
             H=H,
             W=W,

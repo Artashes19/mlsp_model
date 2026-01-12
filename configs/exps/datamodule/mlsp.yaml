@@ -32,7 +32,7 @@ validation_names: [ "real_val", "icassp_val" ]
 icassp_val_subsample_ratio: 1.0
 reps_per_epoch: 1
 mlsp_task_idx: 1
-use_fspl: False
+use_approximator_feature: False
 use_transmittance_loss: True
 
 # Sparse measurement controls

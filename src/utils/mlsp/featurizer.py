@@ -699,7 +699,7 @@ def featurizer(
     else:
         input_tensor[6] = ((reflectance > 0) | (transmittance > 0)).float()
 
-    if sample.use_fspl:
+    if sample.use_approximator_feature:
         input_tensor[7] = approximation_feature_func(sample)
     
     # Modality dropout logic:
