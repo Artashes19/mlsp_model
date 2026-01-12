@@ -25,6 +25,10 @@ e2:
     train_samples_per_epoch: 6250
     use_synthetic_train: True
     synthetic_dir: ${oc.env:SYNTHETIC_TRAIN_DIR}
+    # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
+    modality_dropout_prob: 0.6666
+    # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
+    sparse_dropout_given_dropout: 0.5
 
   callbacks:
     model_checkpoint_0:

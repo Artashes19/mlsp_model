@@ -66,6 +66,10 @@ class PathlossDataset(Dataset):
             
         if not isinstance(self.sparse_range, (list, tuple)) or len(self.sparse_range) != 2:
             raise ValueError(f"sparse_range must be a list/tuple of 2 floats, got {self.sparse_range}")
+        
+        # Modality dropout parameters
+        self.modality_dropout_prob = float(kwargs.get("modality_dropout_prob", 0.6666))
+        self.sparse_dropout_given_dropout = float(kwargs.get("sparse_dropout_given_dropout", 0.5))
             
         self.target_size = IMG_TARGET_SIZE
     
@@ -283,7 +287,9 @@ class PathlossDataset(Dataset):
         input_tensor = featurizer(
             sample=sample,
             sparse_prob=self.sparse_prob,
-            sparse_range=self.sparse_range
+            sparse_range=self.sparse_range,
+            modality_dropout_prob=self.modality_dropout_prob,
+            sparse_dropout_given_dropout=self.sparse_dropout_given_dropout
         )
         mask = sample.mask
         # Store original dimensions for algorithm to use

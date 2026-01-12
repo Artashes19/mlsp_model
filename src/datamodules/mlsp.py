@@ -105,6 +105,10 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.sparse_prob = kwargs.pop("sparse_prob")
         self.sparse_range = kwargs.pop("sparse_range")
         
+        # Modality dropout controls
+        self.modality_dropout_prob = kwargs.pop("modality_dropout_prob")
+        self.sparse_dropout_given_dropout = kwargs.pop("sparse_dropout_given_dropout")
+        
         # Always use dense ground truth outputs for ICASSP train-style data (Task_2_ICASSP layout)
         # If explicit manifests are provided, skip enumerating the full ICASSP directory
         if not self.train_manifest_path and not self.val_manifest_path:
@@ -415,11 +419,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 "reps_per_epoch",
                 "augment_val",
             }
-            # Add sparse controls to dataset kwargs
+            # Add sparse controls and modality dropout to dataset kwargs
             base = {k: v for k, v in src_kwargs.items() if k in allowed}
             base.update({
                 "sparse_prob": self.sparse_prob,
-                "sparse_range": self.sparse_range
+                "sparse_range": self.sparse_range,
+                "modality_dropout_prob": self.modality_dropout_prob,
+                "sparse_dropout_given_dropout": self.sparse_dropout_given_dropout
             })
             return base
         

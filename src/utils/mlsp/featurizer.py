@@ -673,7 +673,9 @@ def featurizer(
     sample: RadarSample,
     approximation_feature_func=get_fspl,
     sparse_prob: float = 1.0/3.0,
-    sparse_range: tuple[float, float] = (0.0, 0.01)
+    sparse_range: tuple[float, float] = (0.0, 0.01),
+    modality_dropout_prob: float = 0.6666,
+    sparse_dropout_given_dropout: float = 0.5
 ) -> torch.Tensor:
     reflectance = sample.input_img[0]  # First channel
     transmittance = sample.input_img[1]  # Second channel
@@ -704,9 +706,27 @@ def featurizer(
 
     if approximation_feature_func is not None:
         input_tensor[7] = approximation_feature_func(sample)
+    
+    # Modality dropout logic:
+    # With prob modality_dropout_prob, turn off one modality (trans+ref OR sparse)
+    # If dropout happens, sparse_dropout_given_dropout controls which one is turned off
+    drop_trans_ref = False
+    drop_sparse = False
+    
+    if random.random() < modality_dropout_prob:
+        # Dropout one modality
+        if random.random() < sparse_dropout_given_dropout:
+            drop_sparse = True
+        else:
+            drop_trans_ref = True
+    
+    # Apply trans+ref dropout if selected
+    if drop_trans_ref:
+        input_tensor[0] = torch.zeros_like(input_tensor[0])  # Zero out reflectance
+        input_tensor[1] = torch.zeros_like(input_tensor[1])  # Zero out transmittance
         
-    # Sparse measurements channel
-    if random.random() < sparse_prob and sample.output_img is not None:
+    # Sparse measurements channel (only populate if not dropping sparse)
+    if not drop_sparse and random.random() < sparse_prob and sample.output_img is not None:
         sparsity = random.uniform(sparse_range[0], sparse_range[1])
         # Only sample from valid mask region
         valid_indices = torch.nonzero(sample.mask)
