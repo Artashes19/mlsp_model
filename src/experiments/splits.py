@@ -38,9 +38,9 @@ def ensure_exp_dir(exp_dir_name: Optional[str], root_dir: str) -> str:
 
 def generate_building_split(
     seed: int,
+    val_buildings: list[int],
     n_buildings: int = 25,
     train_small_n: int = 7,
-    train_full_n: int = 20
 ) -> Split:
     """
     Generates a consistent split of buildings [1..25].
@@ -58,8 +58,8 @@ def generate_building_split(
     # So we pick 20 for full training, and the remaining 5 are validation.
     # Then from the 20, we pick 7 for small training.
     
-    train_full = sorted(all_buildings[:train_full_n])
-    validation = sorted(all_buildings[train_full_n:])
+    validation = val_buildings
+    train_full = sorted(set(all_buildings) - set(val_buildings))
     
     # Now select train_small as a subset of train_full
     # Use the same RNG state? Or re-seed? 

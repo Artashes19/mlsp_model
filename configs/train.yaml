@@ -15,6 +15,7 @@ exp_dir: ""  # optional explicit exps directory
 experiments_root: exps
 experiments_config_dir: null
 
+val_buildings: [ 21, 22, 23, 24, 25 ]
 split:
   train_small_n: 7
   train_full_n: 20

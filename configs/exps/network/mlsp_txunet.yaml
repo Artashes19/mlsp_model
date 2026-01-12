@@ -10,5 +10,5 @@ use_checkpoint: False
 ln_eps: 1e-5
 window0: null
 window0_stride: null
-sra0_enabled: False
-sra0_stride: 2
+sra0_enabled: True
+sra0_stride: 4

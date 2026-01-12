@@ -57,7 +57,10 @@ def exp_root_prep(config: DictConfig):
         split_cfg = config.get("split") or {}
         tsn = int(split_cfg.get("train_small_n", 7))
         tfn = int(split_cfg.get("train_full_n", 20))
-        split = generate_building_split(seed=int(config.seed), n_buildings=25, train_small_n=tsn, train_full_n=tfn)
+        split = generate_building_split(
+            seed=int(config.seed), n_buildings=25, train_small_n=tsn,
+            val_buildings=list(config["val_buildings"])
+        )
         write_split_json(exp_dir, split)
         log.info(
             f"[split] created new exps set at {exp_dir} "

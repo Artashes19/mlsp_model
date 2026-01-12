@@ -12,7 +12,7 @@ freqs_mhz: [ 868, 1800, 3500 ]
 pl_clip: null
 freqs: [ 1, 2, 3 ]
 val_freq: [ 1, 2, 3 ]
-val_buildings: [ 1, 2, 3 ]
+val_buildings: [ 21, 22, 23, 24, 25 ]
 # Additional validation (disabled for now)
 kaggle_task1_path: ""
 kaggle_task2_path: ""
