@@ -49,8 +49,6 @@ class PathlossDataset(Dataset):
         self.reps_per_epoch = reps_per_epoch
         self.augment_val = augment_val
         
-        self.sparse_prob = float(kwargs["sparse_prob"])
-        
         # Ensure sparse_range is a list/tuple of floats
         sparse_range_val = kwargs["sparse_range"]
         if isinstance(sparse_range_val, str):
@@ -286,7 +284,6 @@ class PathlossDataset(Dataset):
         
         input_tensor = featurizer(
             sample=sample,
-            sparse_prob=self.sparse_prob,
             sparse_range=self.sparse_range,
             modality_dropout_prob=self.modality_dropout_prob,
             sparse_dropout_given_dropout=self.sparse_dropout_given_dropout

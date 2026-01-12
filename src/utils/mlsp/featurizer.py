@@ -503,20 +503,16 @@ def calculate_antenna_gain(radiation_pattern, W, H, azimuth, x_ant, y_ant):
 
 def normalize_input(input_tensor):
     min_antenna_gain = -55.0
-    mean = torch.tensor([0.485, 0.456, 0.406])
-    std = torch.tensor([0.229, 0.224, 0.225])
     normalized = input_tensor.clone()
-    for i in range(2):
-        
-        normalized[i] = (normalized[i] / 255.0 - mean[i]) / std[i]
+    # Channels 0,1 (reflectance, transmittance): simple /255 normalization
+    normalized[0] = normalized[0] / 255.0
+    normalized[1] = normalized[1] / 255.0
     normalized[2] = torch.log10(1 + normalized[2])
     normalized[3] = normalized[3] / min_antenna_gain
     normalized[4] = torch.log10(normalized[4]) - 1.9  # "magic shift"
-    # normalized[7] = (normalized[7] - 87) / 160.0
+    # normalized[5] is the mask, no normalization needed
     normalized[7] = (normalized[7] - 87) / 160.0
     normalized[8] = (normalized[8] - 87) / 160.0
-    # normalized[9] = (normalized[7] - 87) / 160.0
-    # normalized[5] = normalized[5] / 100.0  # this feature mask has values < 300
     return normalized
 
 
@@ -672,7 +668,6 @@ def get_fspl(sample: RadarSample) -> torch.Tensor:
 def featurizer(
     sample: RadarSample,
     approximation_feature_func=get_fspl,
-    sparse_prob: float = 1.0/3.0,
     sparse_range: tuple[float, float] = (0.0, 0.01),
     modality_dropout_prob: float = 0.6666,
     sparse_dropout_given_dropout: float = 0.5
@@ -704,7 +699,7 @@ def featurizer(
     else:
         input_tensor[6] = ((reflectance > 0) | (transmittance > 0)).float()
 
-    if approximation_feature_func is not None:
+    if sample.use_fspl:
         input_tensor[7] = approximation_feature_func(sample)
     
     # Modality dropout logic:
@@ -726,7 +721,7 @@ def featurizer(
         input_tensor[1] = torch.zeros_like(input_tensor[1])  # Zero out transmittance
         
     # Sparse measurements channel (only populate if not dropping sparse)
-    if not drop_sparse and random.random() < sparse_prob and sample.output_img is not None:
+    if not drop_sparse and sample.output_img is not None:
         sparsity = random.uniform(sparse_range[0], sparse_range[1])
         # Only sample from valid mask region
         valid_indices = torch.nonzero(sample.mask)

@@ -101,8 +101,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.use_synthetic_val = use_synthetic_val
         self.synthetic_val_samples_per_epoch = synthetic_val_samples_per_epoch
         
-        # Sparse measurement probability controls - strictly from config
-        self.sparse_prob = kwargs.pop("sparse_prob")
+        # Sparse measurement controls - strictly from config
         self.sparse_range = kwargs.pop("sparse_range")
         
         # Modality dropout controls
@@ -422,7 +421,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
             # Add sparse controls and modality dropout to dataset kwargs
             base = {k: v for k, v in src_kwargs.items() if k in allowed}
             base.update({
-                "sparse_prob": self.sparse_prob,
                 "sparse_range": self.sparse_range,
                 "modality_dropout_prob": self.modality_dropout_prob,
                 "sparse_dropout_given_dropout": self.sparse_dropout_given_dropout
