@@ -244,6 +244,9 @@ class MLSP(AlgorithmBase):
         inputs, targets, masks, sample = batch
         
         preds = self._network(inputs)
+        # Squeeze channel dim: [B, 1, H, W] -> [B, H, W] to match targets shape
+        if preds.dim() == 4:
+            preds = preds.squeeze(1)
         
         weights = torch.ones_like(inputs[:, -1])
         return self.get_metrics(preds, targets, masks, weights)
@@ -263,8 +266,12 @@ class MLSP(AlgorithmBase):
     def get_metrics(self, preds, targets, masks, weights):
         # DEBUG: Check actual value ranges
         if not hasattr(self, '_debug_logged') or not self._debug_logged:
-            log.info(f"[DEBUG get_metrics] preds: min={preds.min():.2f}, max={preds.max():.2f}, mean={preds.mean():.2f}")
-            log.info(f"[DEBUG get_metrics] targets: min={targets.min():.2f}, max={targets.max():.2f}, mean={targets.mean():.2f}")
+            log.info(
+                f"[DEBUG get_metrics] preds: min={preds.min():.2f}, max={preds.max():.2f}, mean={preds.mean():.2f}"
+            )
+            log.info(
+                f"[DEBUG get_metrics] targets: min={targets.min():.2f}, max={targets.max():.2f}, mean={targets.mean():.2f}"
+            )
             log.info(f"[DEBUG get_metrics] masks: sum={masks.sum():.0f}, shape={masks.shape}")
             self._debug_logged = True
         
