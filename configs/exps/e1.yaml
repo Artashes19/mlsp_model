@@ -7,7 +7,7 @@ e1:
     - trainer: default
     - datamodule: mlsp
     - optimizer: adam
-    - scheduler: wsd_s_finetune
+    - scheduler: wsd_s_finetune_bs25
     - algorithm: mlsp
     - network: mlsp_txunet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0, early_stopping ]

@@ -3,6 +3,6 @@ _target_: pytorch_lightning.Trainer
 accelerator: gpu
 devices: [ 0 ]  # Uses cuda:0 by default
 use_distributed_sampler: True
-precision: 32
+precision: 16
 max_epochs: 20
 accumulate_grad_batches: 1
