@@ -22,7 +22,7 @@ e2:
     icassp_val_buildings: validation  # resolved from split.json by orchestrator
     split_save_path: ./splits/e2.pkl
     # Optional: number of training samples per epoch (null => full dataset)
-    train_samples_per_epoch: 6250
+    train_samples_per_epoch: 6240
     use_synthetic_train: True
     synthetic_dir: ${oc.env:SYNTHETIC_TRAIN_DIR}
     # Modality dropout: prob of turning off one modality (trans+ref OR sparse)

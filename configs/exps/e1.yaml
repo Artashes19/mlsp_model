@@ -20,7 +20,7 @@ e1:
     icassp_train_buildings: train_full
     icassp_val_buildings: validation  # resolved from split.json by orchestrator
     split_save_path: ./splits/e1.pkl
-    train_samples_per_epoch: 1000
+    train_samples_per_epoch: 960
     # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
     modality_dropout_prob: 0.6666
     # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
