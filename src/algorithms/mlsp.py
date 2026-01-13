@@ -248,6 +248,10 @@ class MLSP(AlgorithmBase):
         if preds.dim() == 4:
             preds = preds.squeeze(1)
         
+        # Clamp predictions to [0, 1] only during validation (matches colleague's approach)
+        if split_name in ("val", "valid", "validation", "test"):
+            preds = torch.clamp(preds, 0.0, 1.0)
+        
         weights = torch.ones_like(inputs[:, -1])
         return self.get_metrics(preds, targets, masks, weights)
     
