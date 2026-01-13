@@ -73,7 +73,7 @@ class UNetModel(nn.Module):
     def forward(self, x):
         features = self.unet.encoder(x)
         features[-1] = self.aspp(features[-1])
-        decoder_output = self.unet.decoder(*features)
+        decoder_output = self.unet.decoder(features)
         logits = self.unet.segmentation_head(decoder_output)
         
         output = logits.squeeze(1)
