@@ -107,7 +107,7 @@ def create_mock_sample(
         file_name="mock_sample",
         task_idx=0,
         pl_clip=None,
-        use_fspl=True,
+        use_approximator_feature=True,
         use_transmittance_loss=True,
         H=H,
         W=W,
@@ -183,7 +183,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         print("="*60)
         
         sample = create_mock_sample()
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         self.assertEqual(output.shape[0], 9, "Should have 9 channels")
         self.assertEqual(output.shape[1], sample.H, "Height should match")
@@ -197,20 +197,16 @@ class TestFeaturizerLogic(unittest.TestCase):
         print("="*60)
         
         sample = create_mock_sample(reflectance_value=255.0)  # Max value
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         ch0 = output[0]
-        
-        # ImageNet normalization: (val/255 - 0.485) / 0.229
-        # For val=255: (1.0 - 0.485) / 0.229 ≈ 2.249
-        # For val=0: (0.0 - 0.485) / 0.229 ≈ -2.118
         
         # Check non-zero region (where we set reflectance=255)
         non_zero_region = ch0[20:80, 20:80]
         zero_region = ch0[0:20, 0:20]
         
-        expected_non_zero = (255/255 - 0.485) / 0.229
-        expected_zero = (0/255 - 0.485) / 0.229
+        expected_non_zero = 255 / 255.0
+        expected_zero = 0 / 255.0
         
         print(f"  Non-zero region: min={non_zero_region.min():.4f}, max={non_zero_region.max():.4f}")
         print(f"  Expected for 255: {expected_non_zero:.4f}")
@@ -230,12 +226,12 @@ class TestFeaturizerLogic(unittest.TestCase):
         print("="*60)
         
         sample = create_mock_sample(transmittance_value=127.5)  # Mid value
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         ch1 = output[1]
         
-        # ImageNet normalization: (val/255 - 0.456) / 0.224
-        expected_mid = (127.5/255 - 0.456) / 0.224
+        # Simple /255 normalization: val/255
+        expected_mid = 127.5 / 255.0
         
         non_zero_region = ch1[30:70, 30:70]
         print(f"  Transmittance region: mean={non_zero_region.mean():.4f}")
@@ -254,7 +250,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         print("="*60)
         
         sample = create_mock_sample()
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         ch2 = output[2]
         
@@ -282,7 +278,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         # Create sample with realistic padding: 100x100 image with 100x80 valid region
         # (simulates Nx640 image padded to 640x640)
         sample = create_mock_sample(H=100, W=100, valid_h=100, valid_w=80)
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         ch5 = output[5]
         unique_vals = torch.unique(ch5)
@@ -317,7 +313,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         # No floor_plan provided, should be auto-generated
         self.assertIsNone(sample.floor_plan)
         
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         ch6 = output[6]
         
@@ -341,7 +337,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         print("="*60)
         
         sample = create_mock_sample()
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         ch7 = output[7]
         
@@ -367,18 +363,18 @@ class TestFeaturizerLogic(unittest.TestCase):
         self.assertGreater(corner_val, center_val, "FSPL should increase with distance")
     
     def test_sparse_channel_no_sparse(self):
-        """Test channel 8 when sparse_prob=0 (no sparse measurements)."""
+        """Test channel 8 when sparse is dropped via modality dropout."""
         print("\n" + "="*60)
-        print("[TEST] Sparse Channel - No Sparse (prob=0)")
+        print("[TEST] Sparse Channel - No Sparse (modality dropout)")
         print("="*60)
         
         sample = create_mock_sample()
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        # Force sparse to be dropped: modality_dropout_prob=1.0, sparse_dropout_given_dropout=1.0
+        output = featurizer(sample, sparse_range=[0.0, 0.01], modality_dropout_prob=1.0, sparse_dropout_given_dropout=1.0)
         
         ch8 = output[8]
         
-        # With sparse_prob=0, no sparse measurements should be added
-        # Channel should be all zeros before normalization
+        # With sparse dropped, channel should be all zeros before normalization
         # After normalization: (0 - 87) / 160 = -0.54375
         expected_bg = (0.0 - NORM_OFFSET) / NORM_SCALE
         
@@ -387,21 +383,21 @@ class TestFeaturizerLogic(unittest.TestCase):
         
         self.assertTrue(
             torch.allclose(ch8, torch.full_like(ch8, expected_bg), atol=1e-5),
-            "Sparse channel should be all background when sparse_prob=0"
+            "Sparse channel should be all background when sparse is dropped"
         )
     
     def test_sparse_channel_with_sparse(self):
-        """Test channel 8 with sparse_prob=1.0 (always add sparse measurements)."""
+        """Test channel 8 with sparse enabled (no modality dropout)."""
         print("\n" + "="*60)
-        print("[TEST] Sparse Channel - With Sparse (prob=1.0)")
+        print("[TEST] Sparse Channel - With Sparse (no dropout)")
         print("="*60)
         
         output_val = 80.0  # Ground truth pathloss value
         sample = create_mock_sample(output_value=output_val)
         
-        # Force sparse measurements with exact sparsity
+        # Force sparse measurements: no modality dropout
         sparse_range = [0.05, 0.05]  # Exactly 5% sparsity
-        output = featurizer(sample, sparse_prob=1.0, sparse_range=sparse_range)
+        output = featurizer(sample, sparse_range=sparse_range, modality_dropout_prob=0.0)
         
         ch8 = output[8]
         
@@ -455,7 +451,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         # Gradient from 50 to 100 dB
         sample.output_img = 50.0 + 50.0 * (xx + yy) / (H + W - 2)
         
-        output = featurizer(sample, sparse_prob=1.0, sparse_range=[0.1, 0.1])
+        output = featurizer(sample, sparse_range=[0.1, 0.1])
         
         ch8 = output[8]
         bg_val = (0.0 - NORM_OFFSET) / NORM_SCALE
@@ -478,7 +474,7 @@ class TestFeaturizerLogic(unittest.TestCase):
             
             self.assertLess(max_diff, 0.01, "Sparse values should exactly match GT")
         else:
-            self.fail("No sparse measurements generated despite sparse_prob=1.0")
+            self.fail("No sparse measurements generated despite modality dropout disabled")
     
     def test_custom_approximation_function(self):
         """Test using a custom approximation function."""
@@ -496,7 +492,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         output = featurizer(
             sample,
             approximation_feature_func=custom_approx,
-            sparse_prob=0.0,
+            
             sparse_range=[0.0, 0.01]
         )
         
@@ -522,11 +518,11 @@ class TestFeaturizerLogic(unittest.TestCase):
         sample = create_mock_sample()
         
         # Test with sparse measurements
-        output = featurizer(sample, sparse_prob=1.0, sparse_range=[0.05, 0.05])
+        output = featurizer(sample, sparse_range=[0.05, 0.05])
         save_featurizer_output_visualization(output, sample, self.output_dir, "mock_with_sparse")
         
         # Test without sparse measurements
-        output_no_sparse = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output_no_sparse = featurizer(sample, sparse_range=[0.0, 0.01])
         save_featurizer_output_visualization(output_no_sparse, sample, self.output_dir, "mock_no_sparse")
     
     def test_normalize_input_function(self):
@@ -557,8 +553,8 @@ class TestFeaturizerLogic(unittest.TestCase):
             print(f"    Ch{i}: input={input_tensor[i, 0, 0].item():.2f} -> normalized={val:.4f}")
         
         # Check specific normalizations
-        # Ch0 (reflectance): (255/255 - 0.485) / 0.229 ≈ 2.249
-        expected_ch0 = (1.0 - 0.485) / 0.229
+        # Ch0 (reflectance): 255/255 = 1.0
+        expected_ch0 = 255 / 255.0
         self.assertAlmostEqual(normalized[0, 0, 0].item(), expected_ch0, places=2)
         
         # Ch7 (approx): (87 - 87) / 160 = 0
@@ -584,7 +580,7 @@ class TestEdgeCases(unittest.TestCase):
         sample.input_img[1] = 0  # Clear transmittance
         sample.input_img[1, 3:7, 3:7] = 0.5
         
-        output = featurizer(sample, sparse_prob=1.0, sparse_range=[0.1, 0.1])
+        output = featurizer(sample, sparse_range=[0.1, 0.1])
         
         self.assertEqual(output.shape, (9, 10, 10))
         self.assertFalse(torch.isnan(output).any())
@@ -597,7 +593,7 @@ class TestEdgeCases(unittest.TestCase):
         print("="*60)
         
         sample = create_mock_sample(x_ant=0.0, y_ant=0.0)
-        output = featurizer(sample, sparse_prob=0.0, sparse_range=[0.0, 0.01])
+        output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         self.assertEqual(output.shape, (9, 100, 100))
         self.assertFalse(torch.isnan(output).any())
@@ -620,7 +616,7 @@ class TestEdgeCases(unittest.TestCase):
         print("="*60)
         
         sample = create_mock_sample()
-        output = featurizer(sample, sparse_prob=1.0, sparse_range=[0.0, 0.0])
+        output = featurizer(sample, sparse_range=[0.0, 0.0])
         
         ch8 = output[8]
         bg_val = (0.0 - NORM_OFFSET) / NORM_SCALE
@@ -820,6 +816,9 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         
         # Get multiple raw samples
         n_samples = min(3, len(dm.train_dataloader().dataset))
+        sparse_range = list(cfg.datamodule.sparse_range)
+        modality_dropout_prob = float(cfg.datamodule.modality_dropout_prob)
+        sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
             print(f"\n  Sample {i+1}/{n_samples}:")
@@ -832,13 +831,11 @@ class TestFeaturizerWithRealData(unittest.TestCase):
             print(f"    Input shape: {sample.input_img.shape}")
             
             # Run through featurizer
-            sparse_prob = float(cfg.datamodule.sparse_prob)
-            sparse_range = list(cfg.datamodule.sparse_range)
-            
             output = featurizer(
                 sample,
-                sparse_prob=sparse_prob,
-                sparse_range=sparse_range
+                sparse_range=sparse_range,
+                modality_dropout_prob=modality_dropout_prob,
+                sparse_dropout_given_dropout=sparse_dropout_given_dropout
             )
             
             # Verify output
@@ -884,6 +881,9 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         
         # Get multiple raw samples
         n_samples = min(3, len(dm.train_dataloader().dataset))
+        sparse_range = list(cfg.datamodule.sparse_range)
+        modality_dropout_prob = float(cfg.datamodule.modality_dropout_prob)
+        sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
             print(f"\n  Sample {i+1}/{n_samples}:")
@@ -897,13 +897,11 @@ class TestFeaturizerWithRealData(unittest.TestCase):
             print(f"    Input shape: {sample.input_img.shape}")
             
             # Run through featurizer
-            sparse_prob = float(cfg.datamodule.sparse_prob)
-            sparse_range = list(cfg.datamodule.sparse_range)
-            
             output = featurizer(
                 sample,
-                sparse_prob=sparse_prob,
-                sparse_range=sparse_range
+                sparse_range=sparse_range,
+                modality_dropout_prob=modality_dropout_prob,
+                sparse_dropout_given_dropout=sparse_dropout_given_dropout
             )
             
             # Verify output
@@ -952,7 +950,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         print(f"  Testing with: {sample.file_name}")
         
         # Force sparse measurements
-        output = featurizer(sample, sparse_prob=1.0, sparse_range=[0.05, 0.05])
+        output = featurizer(sample, sparse_range=[0.05, 0.05])
         
         ch8 = output[8]
         bg_val = (0.0 - NORM_OFFSET) / NORM_SCALE
@@ -1006,12 +1004,13 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         channel_maxs = [[] for _ in range(9)]
         channel_means = [[] for _ in range(9)]
         
-        sparse_prob = float(cfg.datamodule.sparse_prob)
         sparse_range = list(cfg.datamodule.sparse_range)
+        modality_dropout_prob = float(cfg.datamodule.modality_dropout_prob)
+        sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
             sample, _ = self._get_raw_sample_from_datamodule(dm, idx=i)
-            output = featurizer(sample, sparse_prob=sparse_prob, sparse_range=sparse_range)
+            output = featurizer(sample, sparse_range=sparse_range, modality_dropout_prob=modality_dropout_prob, sparse_dropout_given_dropout=sparse_dropout_given_dropout)
             
             for ch in range(9):
                 ch_data = output[ch]

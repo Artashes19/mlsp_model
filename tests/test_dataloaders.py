@@ -346,11 +346,16 @@ class TestDataloaders(unittest.TestCase):
     
     def _check_sparsity(self, inputs: torch.Tensor, cfg, name: str) -> dict:
         """Check that sparsity matches config expectations."""
-        sparse_prob = float(cfg.datamodule.sparse_prob)
+        modality_dropout_prob = float(cfg.datamodule.modality_dropout_prob)
+        sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         sparse_range = list(cfg.datamodule.sparse_range)
         
+        # P(sparse present) = 1 - modality_dropout_prob * sparse_dropout_given_dropout
+        sparse_prob = 1.0 - modality_dropout_prob * sparse_dropout_given_dropout
+        
         print(f"\n  Sparsity check for {name}:")
-        print(f"    Config: sparse_prob={sparse_prob}, sparse_range={sparse_range}")
+        print(f"    Config: modality_dropout_prob={modality_dropout_prob}, sparse_dropout_given_dropout={sparse_dropout_given_dropout}")
+        print(f"    Effective sparse_prob: {sparse_prob:.3f}, sparse_range={sparse_range}")
         
         batch_size = inputs.shape[0]
         sparse_channel = inputs[:, 8]  # Channel 8 is sparse measurements
@@ -376,7 +381,7 @@ class TestDataloaders(unittest.TestCase):
         sparse_rate = samples_with_sparse / batch_size
         print(f"    Samples with sparse measurements: {samples_with_sparse}/{batch_size} ({sparse_rate:.1%})")
         
-        # The probability of having sparse measurements is sparse_prob
+        # The probability of having sparse measurements is controlled by modality dropout
         # With batch_size samples, expected ~sparse_prob * batch_size samples have sparse
         # Allow some variance (check even for small batches)
         expected_with_sparse = sparse_prob * batch_size
@@ -469,7 +474,8 @@ class TestDataloaders(unittest.TestCase):
         dm, cfg = create_datamodule("e0")
         
         print(f"\n  Config:")
-        print(f"    sparse_prob: {cfg.datamodule.sparse_prob}")
+        print(f"    modality_dropout_prob: {cfg.datamodule.modality_dropout_prob}")
+        print(f"    sparse_dropout_given_dropout: {cfg.datamodule.sparse_dropout_given_dropout}")
         print(f"    sparse_range: {list(cfg.datamodule.sparse_range)}")
         
         loader = dm.train_dataloader()
@@ -515,7 +521,8 @@ class TestDataloaders(unittest.TestCase):
         dm, cfg = create_datamodule("e2")
         
         print(f"\n  Config:")
-        print(f"    sparse_prob: {cfg.datamodule.sparse_prob}")
+        print(f"    modality_dropout_prob: {cfg.datamodule.modality_dropout_prob}")
+        print(f"    sparse_dropout_given_dropout: {cfg.datamodule.sparse_dropout_given_dropout}")
         print(f"    sparse_range: {list(cfg.datamodule.sparse_range)}")
         print(f"    use_synthetic_train: {cfg.datamodule.use_synthetic_train}")
         

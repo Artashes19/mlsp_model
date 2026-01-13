@@ -28,7 +28,7 @@ class PathlossDataset(Dataset):
         mlsp_task_idx: int,
         task_idx: Optional[int],
         pl_clip: Optional[int],
-        use_fspl: bool,
+        use_approximator_feature: bool,
         use_transmittance_loss: bool,
         inference: bool,
         reps_per_epoch: int,
@@ -43,13 +43,11 @@ class PathlossDataset(Dataset):
         self.task_idx = task_idx
         self.mlsp_task_idx = mlsp_task_idx
         self.pl_clip = pl_clip
-        self.use_fspl = use_fspl
+        self.use_approximator_feature = use_approximator_feature
         self.use_transmittance_loss = use_transmittance_loss
         self.inference = inference
         self.reps_per_epoch = reps_per_epoch
         self.augment_val = augment_val
-        
-        self.sparse_prob = float(kwargs["sparse_prob"])
         
         # Ensure sparse_range is a list/tuple of floats
         sparse_range_val = kwargs["sparse_range"]
@@ -66,6 +64,10 @@ class PathlossDataset(Dataset):
             
         if not isinstance(self.sparse_range, (list, tuple)) or len(self.sparse_range) != 2:
             raise ValueError(f"sparse_range must be a list/tuple of 2 floats, got {self.sparse_range}")
+        
+        # Modality dropout parameters
+        self.modality_dropout_prob = float(kwargs.get("modality_dropout_prob", 0.6666))
+        self.sparse_dropout_given_dropout = float(kwargs.get("sparse_dropout_given_dropout", 0.5))
             
         self.target_size = IMG_TARGET_SIZE
     
@@ -192,7 +194,7 @@ class PathlossDataset(Dataset):
             file_name=file_name,
             task_idx=self.task_idx,
             pl_clip=pl_clip,
-            use_fspl=self.use_fspl,
+            use_approximator_feature=self.use_approximator_feature,
             use_transmittance_loss=self.use_transmittance_loss,
             H=H,
             W=W,
@@ -245,7 +247,7 @@ class PathlossDataset(Dataset):
             file_name=file_name,
             task_idx=self.task_idx,
             pl_clip=pl_clip,
-            use_fspl=self.use_fspl,
+            use_approximator_feature=self.use_approximator_feature,
             use_transmittance_loss=self.use_transmittance_loss,
             H=H,
             W=W,
@@ -286,8 +288,9 @@ class PathlossDataset(Dataset):
         
         input_tensor = featurizer(
             sample=sample,
-            sparse_prob=self.sparse_prob,
-            sparse_range=self.sparse_range
+            sparse_range=self.sparse_range,
+            modality_dropout_prob=self.modality_dropout_prob,
+            sparse_dropout_given_dropout=self.sparse_dropout_given_dropout
         )
         mask = sample.mask
         # Store original dimensions for algorithm to use

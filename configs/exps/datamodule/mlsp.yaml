@@ -32,12 +32,17 @@ validation_names: [ "real_val", "icassp_val" ]
 icassp_val_subsample_ratio: 1.0
 reps_per_epoch: 1
 mlsp_task_idx: 1
-use_fspl: True
+use_approximator_feature: False
 use_transmittance_loss: True
 
 # Sparse measurement controls
-sparse_prob: 0.333333333333
 sparse_range: [ 0.0, 0.01 ]
+
+# Modality dropout controls
+# prob of turning off one modality (trans+ref OR sparse measurements)
+modality_dropout_prob: 0.6666
+# If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
+sparse_dropout_given_dropout: 0.5
 
 # Data augmentation parameters
 augment_val: False
