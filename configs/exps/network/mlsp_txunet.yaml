@@ -3,7 +3,7 @@ _target_: src.networks.TxUNetModel
 in_ch: 4  # TEMPORARY: R, T, D, mask, zeros (was 9)
 out_ch: 1
 base_ch: 48
-depths: [ 2, 3, 3, 4 ]
+depths: [ 4, 6, 6, 8 ]
 heads: [ 4, 4, 8, 8 ]
 expand: 2.66
 use_checkpoint: False

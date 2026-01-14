@@ -1,0 +1,31 @@
+# Evaluation config for Korean checkpoint
+defaults:
+  - algorithm: mlsp
+  - network: mlsp_txunet
+  - datamodule: mlsp
+  - _self_
+
+# Checkpoint to evaluate
+checkpoint: /nfs/dgx/raid/iot/mlsp_wair_d_data/torch_korean_runs/2026-01-10_18-10-45_txunet/best.ckpt
+
+# Validation buildings (B21-B25)
+val_buildings: [21, 22, 23, 24, 25]
+
+# Device
+device: cuda
+
+# Override network depths
+network:
+  depths: [4, 6, 6, 8]
+
+# Override datamodule settings
+datamodule:
+  data_dir: /nfs/dgx/raid/iot/mlsp_wair_d_data/icassp2025
+  synthetic_dir: null
+  use_synthetic_train: false
+
+hydra:
+  run:
+    dir: .
+  job:
+    chdir: False
