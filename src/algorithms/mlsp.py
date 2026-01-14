@@ -106,7 +106,9 @@ class MLSP(AlgorithmBase):
         scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
         resized_w = int(old_w * scale_factor_forward)
         
-        pred = self.network(inputs.cuda(self._gpu).unsqueeze(0)).squeeze(0)
+        # Use bfloat16 autocast for forward pass (enables Flash Attention)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = self.network(inputs.cuda(self._gpu).unsqueeze(0)).squeeze(0)
         
         # Cut prediction to remove padding (640x640 → 640xresized_w)
         pred_cut = pred[:, :resized_w]
@@ -142,6 +144,32 @@ class MLSP(AlgorithmBase):
         self._network.load_state_dict(remapped, strict=False)
         self._network.to(device)
         log.info(f"Loaded weights-only from {ckpt_path}")
+    
+    def load_state_dict(
+        self,
+        state_dict: dict[str, torch.Tensor],
+        strict: bool = True,
+        assign: bool = False
+    ):
+        """
+        Override to handle foreign (colleague's) checkpoint format.
+        Remaps keys by adding _network. prefix if needed.
+        """
+        # Check if this is a foreign checkpoint (no _network. prefix in keys)
+        has_network_prefix = any(k.startswith("_network.") for k in state_dict.keys())
+        
+        if not has_network_prefix and len(state_dict) > 0:
+            # This is a foreign checkpoint - remap keys
+            log.info(f"[load_state_dict] Detected foreign checkpoint, remapping keys...")
+            remapped = {}
+            for key, value in state_dict.items():
+                new_key = f"_network.{key}"
+                remapped[new_key] = value
+            state_dict = remapped
+            # Use strict=False for foreign checkpoints due to potential mismatches
+            strict = False
+        
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
     
     def _capture_pretrained_reference(self) -> None:
         self._pretrained_weights = {
@@ -243,7 +271,10 @@ class MLSP(AlgorithmBase):
     def _step(self, batch, split_name, *args, **kwargs):
         inputs, targets, masks, sample = batch
         
-        preds = self._network(inputs)
+        # Use bfloat16 autocast for forward pass (enables Flash Attention)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            preds = self._network(inputs)
+        
         # Squeeze channel dim: [B, 1, H, W] -> [B, H, W] to match targets shape
         if preds.dim() == 4:
             preds = preds.squeeze(1)

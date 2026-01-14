@@ -189,7 +189,7 @@ class EfficientGlobalAttention(nn.Module):
         Tk = Hk * Wk
         
         # Use PyTorch SDPA on CUDA (auto-selects Flash/MemEff based on dtype)
-        # Flash Attention requires FP16/BF16 - use torch.amp.autocast in training
+        # Flash Attention requires FP16/BF16 - autocast applied at algorithm level
         if x.is_cuda:
             # Reshape to [B, h, T, d]
             def to_bhtd_q(t: torch.Tensor) -> torch.Tensor:

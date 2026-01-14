@@ -1,5 +1,3 @@
-import random
-
 import math
 import numpy as np
 import torch
@@ -672,77 +670,18 @@ def featurizer(
     modality_dropout_prob: float = 0.6666,
     sparse_dropout_given_dropout: float = 0.5
 ) -> torch.Tensor:
+    # TEMPORARY: Simplified channels with mask
+    # Channels: [R, T, D, mask, zeros]
     reflectance = sample.input_img[0]  # First channel
     transmittance = sample.input_img[1]  # Second channel
     distance = sample.input_img[2]  # Third channel
-    radiation_pattern = sample.radiation_pattern
-    antenna_gain = calculate_antenna_gain(
-        radiation_pattern,
-        sample.W,
-        sample.H,
-        sample.azimuth,
-        sample.x_ant,
-        sample.y_ant
-    )
-    # Build input tensor with a zero auxiliary channel to keep network input stable
-    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, floor_plan, approximation_feature, sparse_measurements]
-    input_tensor = torch.zeros((9, sample.H, sample.W), dtype=torch.float32, device=torch.device('cpu'))
-    input_tensor[0] = reflectance
-    input_tensor[1] = transmittance
-    input_tensor[2] = distance
-    input_tensor[3] = antenna_gain
-    input_tensor[4] = torch.full((sample.H, sample.W), sample.freq_MHz, dtype=torch.float32, device=torch.device('cpu'))
-    input_tensor[5] = sample.mask
     
-    if sample.floor_plan is not None:
-        input_tensor[6] = sample.floor_plan
-    else:
-        input_tensor[6] = ((reflectance > 0) | (transmittance > 0)).float()
-
-    if sample.use_approximator_feature:
-        input_tensor[7] = approximation_feature_func(sample)
-    
-    # Modality dropout logic:
-    # With prob modality_dropout_prob, turn off one modality (trans+ref OR sparse)
-    # If dropout happens, sparse_dropout_given_dropout controls which one is turned off
-    drop_trans_ref = False
-    drop_sparse = False
-    
-    if random.random() < modality_dropout_prob:
-        # Dropout one modality
-        if random.random() < sparse_dropout_given_dropout:
-            drop_sparse = True
-        else:
-            drop_trans_ref = True
-    
-    # Apply trans+ref dropout if selected
-    if drop_trans_ref:
-        input_tensor[0] = torch.zeros_like(input_tensor[0])  # Zero out reflectance
-        input_tensor[1] = torch.zeros_like(input_tensor[1])  # Zero out transmittance
-        
-    # Sparse measurements channel (only populate if not dropping sparse)
-    if not drop_sparse and sample.output_img is not None:
-        sparsity = random.uniform(sparse_range[0], sparse_range[1])
-        # Only sample from valid mask region
-        valid_indices = torch.nonzero(sample.mask)
-        if valid_indices.numel() > 0:
-            num_samples = int(valid_indices.size(0) * sparsity)
-            if num_samples > 0:
-                perm = torch.randperm(valid_indices.size(0))
-                selected_indices = valid_indices[perm[:num_samples]]
-                
-                # Get ground truth values (handling potential shape mismatch if output_img is (C,H,W))
-                output_img = sample.output_img
-                if output_img.ndim == 3:
-                    output_img = output_img.squeeze(0)
-                
-                sparse_channel = torch.zeros((sample.H, sample.W), dtype=torch.float32)
-                rows = selected_indices[:, 0]
-                cols = selected_indices[:, 1]
-                sparse_channel[rows, cols] = output_img[rows, cols]
-                input_tensor[8] = sparse_channel
-    
-    input_tensor = normalize_input(input_tensor)
+    input_tensor = torch.zeros((4, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
+    input_tensor[0] = reflectance / 255.0
+    input_tensor[1] = transmittance / 255.0
+    input_tensor[2] = distance / 255.0
+    # input_tensor[3] = sample.mask  # Mask channel (already 0/1)
+    # Channel 4 stays zeros (padding)
     
     return input_tensor
 

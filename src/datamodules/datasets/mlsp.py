@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from typing import Optional, Union
 
 import numpy as np
@@ -61,14 +62,14 @@ class PathlossDataset(Dataset):
         else:
             # Convert from omegaconf.ListConfig or other iterables to a plain list
             self.sparse_range = list(sparse_range_val)
-            
+        
         if not isinstance(self.sparse_range, (list, tuple)) or len(self.sparse_range) != 2:
             raise ValueError(f"sparse_range must be a list/tuple of 2 floats, got {self.sparse_range}")
         
         # Modality dropout parameters
         self.modality_dropout_prob = float(kwargs.get("modality_dropout_prob", 0.6666))
         self.sparse_dropout_given_dropout = float(kwargs.get("sparse_dropout_given_dropout", 0.5))
-            
+        
         self.target_size = IMG_TARGET_SIZE
     
     def __len__(self):
@@ -114,7 +115,7 @@ class PathlossDataset(Dataset):
                 (pad_left, pad_right, pad_top, pad_bottom),
                 value=0
             ).squeeze(0)
-
+        
         sample.x_ant += pad_left
         sample.y_ant += pad_top
         _, new_H, new_W = sample.input_img.shape
@@ -270,7 +271,10 @@ class PathlossDataset(Dataset):
         return self.read_sample_icassp(inputs)
     
     def __getitem__(self, idx):
-        idx = idx % len(self.inputs_list)
+        if self.training:
+            idx = random.randint(0, len(self.inputs_list) - 1)
+        else:
+            idx = idx % len(self.inputs_list)
         inp = self.inputs_list[idx]
         sample = self.read_sample(inp)
         

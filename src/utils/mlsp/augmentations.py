@@ -57,51 +57,37 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
         sample.y_ant = max(0, min(sample.y_ant, sample.H - 1))
     
     C, H, W = sample.input_img.shape
-    scale_factor = min(target_size / H, target_size / W)
-    new_h, new_w = int(H * scale_factor), int(W * scale_factor)
-    new_size = (new_h, new_w)
+    new_size = (target_size, target_size)
+    
+    # Scale factors for x and y (no aspect ratio preservation)
+    scale_x = target_size / W
+    scale_y = target_size / H
     
     reflectance = sample.input_img[0:1]  # First channel with dimension [1, H, W]
     transmittance = sample.input_img[1:2]  # Second channel with dimension [1, H, W]
+    distance = sample.input_img[2:3]  # Third channel with dimension [1, H, W]
     
     reflectance_resized = resize_nearest(reflectance, new_size)
     transmittance_resized = resize_nearest(transmittance, new_size)
+    distance_resized = resize_linear(distance, new_size)
     mask_resized = resize_nearest(sample.mask.unsqueeze(0), new_size).squeeze(0)
     
-    sample.x_ant = int(sample.x_ant * scale_factor)
-    sample.y_ant = int(sample.y_ant * scale_factor)
+    sample.x_ant = int(sample.x_ant * scale_x)
+    sample.y_ant = int(sample.y_ant * scale_y)
     
-    sample.pixel_size /= scale_factor  # Update pixel size (divide by scale factor)
-    
-    sample.input_img = torch.zeros((max(3, C), target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
-    sample.input_img[0:1, :new_h, :new_w] = reflectance_resized
-    sample.input_img[1:2, :new_h, :new_w] = transmittance_resized
+    sample.input_img = torch.zeros((max(3, C), target_size, target_size), dtype=torch.float32, device=torch.device("cpu"))
+    sample.input_img[0:1] = reflectance_resized
+    sample.input_img[1:2] = transmittance_resized
+    sample.input_img[2:3] = distance_resized
     
     if sample.floor_plan is not None:
-        floor_plan_resized = resize_nearest(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
-        sample.floor_plan = torch.zeros((target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
-        sample.floor_plan[:new_h, :new_w] = floor_plan_resized
+        sample.floor_plan = resize_nearest(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
 
     if sample.output_img != "":
-        resized_output = resize_linear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
-        padded_output = torch.zeros((target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
-        padded_output[:new_h, :new_w] = resized_output
-        sample.output_img = padded_output
+        sample.output_img = resize_linear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
     
     sample.H = sample.W = target_size
-    
-    sample.mask = torch.zeros((target_size, target_size), dtype=torch.float32, device=torch.device('cpu'))
-    sample.mask[:new_h, :new_w] = mask_resized
-    
-    y_grid, x_grid = torch.meshgrid(
-        torch.arange(target_size, dtype=torch.float32, device=torch.device('cpu')),
-        torch.arange(target_size, dtype=torch.float32, device=torch.device('cpu')),
-        indexing='ij'
-    )
-    
-    sample.input_img[2, :, :] = torch.sqrt(
-        (x_grid - sample.x_ant) ** 2 + (y_grid - sample.y_ant) ** 2
-    ) * sample.pixel_size
+    sample.mask = mask_resized
     
     return sample
 

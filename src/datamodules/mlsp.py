@@ -229,7 +229,7 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 f"(elapsed={dt:.2f}s)"
             )
             return inputs_list
-
+        
         # ICASSP layout: Inputs/{task}/ and Outputs/{task}/
         input_dir = os.path.join(data_dir, f"Inputs/{task}")
         output_dir = os.path.join(data_dir, f"Outputs/{task}")
@@ -420,11 +420,13 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
             }
             # Add sparse controls and modality dropout to dataset kwargs
             base = {k: v for k, v in src_kwargs.items() if k in allowed}
-            base.update({
-                "sparse_range": self.sparse_range,
-                "modality_dropout_prob": self.modality_dropout_prob,
-                "sparse_dropout_given_dropout": self.sparse_dropout_given_dropout
-            })
+            base.update(
+                {
+                    "sparse_range": self.sparse_range,
+                    "modality_dropout_prob": self.modality_dropout_prob,
+                    "sparse_dropout_given_dropout": self.sparse_dropout_given_dropout
+                }
+            )
             return base
         
         if self.inference:
