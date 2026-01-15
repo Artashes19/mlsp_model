@@ -6,8 +6,8 @@ e1:
   defaults:
     - trainer: default
     - datamodule: mlsp
-    - optimizer: adam
-    - scheduler: null
+    - optimizer: lamb
+    - scheduler: wsd_s_finetune_bs80
     - algorithm: mlsp
     - network: mlsp_txunet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0 ]

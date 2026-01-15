@@ -437,7 +437,7 @@ class Upsample(nn.Module):
     """
     2× spatial upsampling with channel reduction.
 
-    Uses nearest neighbor upsampling followed by 1×1 convolution.
+    Uses bilinear upsampling followed by 1×1 convolution.
 
     Input: [B, in_ch, H, W]
     Output: [B, out_ch, 2H, 2W]
@@ -445,7 +445,7 @@ class Upsample(nn.Module):
     
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
-        self.up = nn.Upsample(scale_factor=2, mode="nearest")
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
         self.reduce = nn.Conv2d(in_ch, out_ch, kernel_size=1)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:

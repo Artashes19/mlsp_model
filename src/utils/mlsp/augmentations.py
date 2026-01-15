@@ -10,8 +10,8 @@ from src.utils.mlsp.featurizer import calculate_transmittance_loss
 from src.utils.mlsp.types import RadarSample
 
 
-def resize_nearest(img, new_size):
-    return TF.resize(img, new_size, interpolation=InterpolationMode.NEAREST_EXACT)
+def resize_bilinear(img, new_size):
+    return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
 
 
 def resize_linear(img, new_size):
@@ -31,8 +31,8 @@ def resize_db(img, new_size):
     return img_rs
 
 
-def rotate_nearest(img, angle):
-    return TF.rotate(img, angle, interpolation=InterpolationMode.NEAREST, fill=0, expand=True)
+def rotate_bilinear(img, angle):
+    return TF.rotate(img, angle, interpolation=InterpolationMode.BILINEAR, fill=0, expand=True)
 
 
 def rotate_linear(img, angle):
@@ -67,10 +67,10 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     transmittance = sample.input_img[1:2]  # Second channel with dimension [1, H, W]
     distance = sample.input_img[2:3]  # Third channel with dimension [1, H, W]
     
-    reflectance_resized = resize_nearest(reflectance, new_size)
-    transmittance_resized = resize_nearest(transmittance, new_size)
+    reflectance_resized = resize_bilinear(reflectance, new_size)
+    transmittance_resized = resize_bilinear(transmittance, new_size)
     distance_resized = resize_linear(distance, new_size)
-    mask_resized = resize_nearest(sample.mask.unsqueeze(0), new_size).squeeze(0)
+    mask_resized = resize_bilinear(sample.mask.unsqueeze(0), new_size).squeeze(0)
     
     sample.x_ant = int(sample.x_ant * scale_x)
     sample.y_ant = int(sample.y_ant * scale_y)
@@ -81,7 +81,7 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     sample.input_img[2:3] = distance_resized
     
     if sample.floor_plan is not None:
-        sample.floor_plan = resize_nearest(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
+        sample.floor_plan = resize_bilinear(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
 
     if sample.output_img != "":
         sample.output_img = resize_linear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
@@ -153,9 +153,9 @@ class GeometricAugmentation(BaseAugmentation):
         transmittance = sample.input_img[1:2]  # (1, H, W)
         distance = sample.input_img[2:3]  # (1, H, W)
         
-        rot_reflectance = rotate_nearest(reflectance, angle)
-        rot_transmittance = rotate_nearest(transmittance, angle)
-        rot_distance = rotate_nearest(distance, angle)
+        rot_reflectance = rotate_bilinear(reflectance, angle)
+        rot_transmittance = rotate_bilinear(transmittance, angle)
+        rot_distance = rotate_bilinear(distance, angle)
         
         if sample.output_img is not None:
             out_expanded = sample.output_img.unsqueeze(0)  # (1,H,W)
@@ -164,12 +164,12 @@ class GeometricAugmentation(BaseAugmentation):
         
         if sample.floor_plan is not None:
             fp_expanded = sample.floor_plan.unsqueeze(0)
-            rot_fp = rotate_nearest(fp_expanded, angle).squeeze(0)
+            rot_fp = rotate_bilinear(fp_expanded, angle).squeeze(0)
             sample.floor_plan = rot_fp
 
         if sample.mask is not None:
             mask_expanded = sample.mask.unsqueeze(0)
-            rot_mask = rotate_nearest(mask_expanded, angle).squeeze(0)
+            rot_mask = rotate_bilinear(mask_expanded, angle).squeeze(0)
             sample.mask = rot_mask
         
         _, new_H, new_W = rot_reflectance.shape
