@@ -7,8 +7,8 @@ e2:
   defaults:
     - trainer: default
     - datamodule: mlsp
-    - optimizer: adam
-    - scheduler: wsd_s_pretraining_bs24
+    - optimizer: lamb
+    - scheduler: wsd_s_pretraining_bs120
     - algorithm: mlsp
     - network: mlsp_txunet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every ]
@@ -38,4 +38,4 @@ e2:
 
   loggers:
     aim:
-      experiment: v1_e2
+      experiment: v2_e2
