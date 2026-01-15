@@ -1,10 +1,9 @@
 import argparse
 import csv
-import hashlib
 import json
 import os
 from typing import List, Sequence
-from pandas.core.algorithms import searchsorted
+
 from tqdm import tqdm
 
 
@@ -19,7 +18,7 @@ def nearest_freq_index(freq_mhz: float, freqs_mhz: List[float]) -> int:
     return 1 + nearest  # 1-based
 
 
-def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
+def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: int) -> int:
     rows = []
     for dirpath, dirnames, filenames in tqdm(os.walk(root)):
         npz_files = [f for f in filenames if f.endswith('.npz')]
@@ -78,15 +77,18 @@ def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
                 except Exception:
                     pass
             rows.append(row)
-
+            if len(rows) >= limit:
+                break
+    
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
     with open(out, 'w', newline='') as csvfile:
-        fieldnames = ['file_name', 'npz_file', 'json_file', 'building', 'antenna', 'freq_idx', 'sample_index', 'frequency_MHz']
+        fieldnames = ['file_name', 'npz_file', 'json_file', 'building', 'antenna', 'freq_idx', 'sample_index',
+                      'frequency_MHz']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
             writer.writerow(r)
-
+    
     # Write/update a companion meta file with a dataset signature for cache invalidation
     meta_path = out + '.meta.json'
     try:
@@ -101,13 +103,14 @@ def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
     except Exception:
         # Do not fail manifest creation if meta write fails
         pass
-
+    
     return len(rows)
 
 
 def compute_dataset_signature(root: str) -> dict:
     """Compute a simple signature of the ICASSP dataset layout."""
     import re, hashlib, os
+    
     # lists all the names in the root directory
     # checks if name is a valid sample name, s folloed by 6 digits
     # if so, updates the hashlib signiture in the for loop, if not, skip
@@ -123,7 +126,7 @@ def compute_dataset_signature(root: str) -> dict:
     return {'root': root_abs, 'num_pairs': count, 'sha256': h.hexdigest()}
 
 
-def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
+def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: int) -> int:
     """Ensure a fresh manifest exists for the dataset.
     - If the manifest or its meta is missing, rebuild it.
     - If the signature differs from the current dataset state, rebuild it.
@@ -136,8 +139,8 @@ def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
         current_sig = compute_dataset_signature(root)
     except Exception:
         # If signature computation fails, force rebuild
-        return generate_manifest(root, out, freqs_mhz)
-
+        return generate_manifest(root, out, freqs_mhz, limit=limit)
+    
     need_rebuild = not os.path.exists(out) or not os.path.exists(meta_path)
     if not need_rebuild:
         try:
@@ -151,9 +154,9 @@ def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float]) -> int:
                 need_rebuild = True
         except Exception:
             need_rebuild = True
-
+    
     if need_rebuild:
-        return generate_manifest(root, out, freqs_mhz)
+        return generate_manifest(root, out, freqs_mhz, limit=limit)
     return -1
 
 
@@ -178,46 +181,51 @@ def compute_icassp_signature(root: str) -> dict:
     return results
 
 
-
 def generate_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], task: str = "Task_2_ICASSP") -> int:
     """Scan ICASSP tree and write a complete manifest CSV. Returns number of rows written."""
     os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     with open(out_csv, "w", newline="") as fp:
         writer = csv.writer(fp)
-        writer.writerow([
-            "file_name",
-            "building",
-            "antenna",
-            "frequency_index",
-            "sample_index",
-            "freq_MHz",
-            "input_file",
-            "output_file",
-            "position_file",
-            "radiation_pattern_file",
-            "sampling_position",
-        ])
+        writer.writerow(
+            [
+                "file_name",
+                "building",
+                "antenna",
+                "frequency_index",
+                "sample_index",
+                "freq_MHz",
+                "input_file",
+                "output_file",
+                "position_file",
+                "radiation_pattern_file",
+                "sampling_position",
+            ]
+        )
         n = 0
         for b in range(1, 26):
             for ant in range(1, 3):
                 for f in range(1, 1 + len(freqs_mhz)):
                     for sp in range(80):
-                        input_file, output_file, position_file, radiation = _icassp_expected_paths(root, task, b, ant, f, sp)
+                        input_file, output_file, position_file, radiation = _icassp_expected_paths(
+                            root, task, b, ant, f, sp
+                            )
                         if os.path.exists(input_file):
                             file_name = os.path.basename(input_file)
-                            writer.writerow([
-                                file_name,
-                                b,
-                                ant,
-                                f,
-                                sp,
-                                float(freqs_mhz[f - 1]),
-                                input_file,
-                                output_file,
-                                position_file,
-                                radiation,
-                                sp,
-                            ])
+                            writer.writerow(
+                                [
+                                    file_name,
+                                    b,
+                                    ant,
+                                    f,
+                                    sp,
+                                    float(freqs_mhz[f - 1]),
+                                    input_file,
+                                    output_file,
+                                    position_file,
+                                    radiation,
+                                    sp,
+                                ]
+                            )
                             n += 1
     # meta next to CSV
     meta_path = out_csv + ".meta.json"
@@ -252,9 +260,11 @@ def ensure_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], 
         return generate_icassp_manifest(root, out_csv, freqs_mhz, task=task)
     return -1
 
+
 # ===== FILTER HELPERS (for per-run manifests) =====
 
-def filter_icassp_manifest(src_csv: str, out_csv: str, allow_buildings: Sequence[int], limit_per_building: int | None) -> int:
+def filter_icassp_manifest(
+    src_csv: str, out_csv: str, allow_buildings: Sequence[int], limit_per_building: int | None) -> int:
     """Write a filtered ICASSP manifest containing only rows for allow_buildings,
     with an optional per-building limit. Returns number of rows written."""
     if not src_csv or not os.path.exists(src_csv):
@@ -265,7 +275,8 @@ def filter_icassp_manifest(src_csv: str, out_csv: str, allow_buildings: Sequence
     with open(src_csv, "r", newline="") as fin, open(out_csv, "w", newline="") as fout:
         rdr = csv.DictReader(fin)
         fieldnames = rdr.fieldnames or [
-            "file_name","building","antenna","frequency_index","sample_index","freq_MHz","input_file","output_file","position_file","radiation_pattern_file","sampling_position"
+            "file_name", "building", "antenna", "frequency_index", "sample_index", "freq_MHz", "input_file",
+            "output_file", "position_file", "radiation_pattern_file", "sampling_position"
         ]
         w = csv.DictWriter(fout, fieldnames=fieldnames)
         w.writeheader()
@@ -296,7 +307,8 @@ def filter_synthetic_manifest(src_csv: str, out_csv: str, limit_total: int | Non
     kept = 0
     with open(src_csv, "r", newline="") as fin, open(out_csv, "w", newline="") as fout:
         rdr = csv.DictReader(fin)
-        fieldnames = rdr.fieldnames or ["file_name","npz_file","json_file","building","antenna","freq_idx","sample_index","frequency_MHz"]
+        fieldnames = rdr.fieldnames or ["file_name", "npz_file", "json_file", "building", "antenna", "freq_idx",
+                                        "sample_index", "frequency_MHz"]
         w = csv.DictWriter(fout, fieldnames=fieldnames)
         w.writeheader()
         for row in rdr:
@@ -306,13 +318,14 @@ def filter_synthetic_manifest(src_csv: str, out_csv: str, limit_total: int | Non
             kept += 1
     return kept
 
+
 def main():
     parser = argparse.ArgumentParser(description="Generate samples.csv manifest for synthetic dataset")
     parser.add_argument('--root', required=True, help='Root directory of the synthetic dataset')
     parser.add_argument('--out', required=True, help='Output CSV path (e.g., /path/to/samples.csv)')
     parser.add_argument('--freqs-mhz', default='868,1800,3500', help='Comma-separated list of known freqs (MHz)')
     args = parser.parse_args()
-
+    
     freqs_mhz = parse_freqs_mhz(args.freqs_mhz)
     n = generate_manifest(args.root, args.out, freqs_mhz)
     print(f"Wrote {n} rows to {args.out}")

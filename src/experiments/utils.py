@@ -117,7 +117,8 @@ def create_exp_manifest(config: DictConfig, split, exp_list):
                 synth_global_manifest = os.path.join(synth_root, "samples.csv")
                 t0 = time.perf_counter()
                 _ = ensure_synth_manifest(
-                    synth_root, synth_global_manifest, config["exps"][exp]["datamodule"].get("freqs_mhz", [])
+                    synth_root, synth_global_manifest, config["exps"][exp]["datamodule"].get("freqs_mhz", []),
+                    limit=config["exps"][exp]["datamodule"].get("synthetic_limit")
                 )
                 dt = time.perf_counter() - t0
                 rows = 0
