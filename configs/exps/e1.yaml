@@ -7,7 +7,7 @@ e1:
     - trainer: default
     - datamodule: mlsp
     - optimizer: lamb
-    - scheduler: wsd_s_finetune_bs80
+    - scheduler: wsd_s_finetune_bs60
     - algorithm: mlsp
     - network: mlsp_txunet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0 ]
@@ -20,11 +20,11 @@ e1:
     icassp_train_buildings: train_full
     icassp_val_buildings: validation  # resolved from split.json by orchestrator
     split_save_path: ./splits/e1.pkl
-    train_samples_per_epoch: 3000
+    train_samples_per_epoch: 960
     # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
-    modality_dropout_prob: 1
+    modality_dropout_prob: 0.6666
     # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
-    sparse_dropout_given_dropout: 1
+    sparse_dropout_given_dropout: 0.5
 
   callbacks:
     model_checkpoint_0:
@@ -32,4 +32,4 @@ e1:
 
   loggers:
     aim:
-      experiment: v1_e1
+      experiment: v2_e1

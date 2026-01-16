@@ -7,7 +7,7 @@ e2:
   defaults:
     - trainer: default
     - datamodule: mlsp
-    - optimizer: lamb
+    - optimizer: adam
     - scheduler: wsd_s_pretraining_bs120
     - algorithm: mlsp
     - network: mlsp_txunet
@@ -24,6 +24,7 @@ e2:
     # Optional: number of training samples per epoch (null => full dataset)
     train_samples_per_epoch: 6240
     use_synthetic_train: True
+    use_synthetic_val: True
     synthetic_dir: ${oc.env:SYNTHETIC_TRAIN_DIR}
     # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
     modality_dropout_prob: 0.6666
