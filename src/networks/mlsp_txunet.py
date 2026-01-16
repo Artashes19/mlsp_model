@@ -254,12 +254,14 @@ class GatedDepthwiseFFN(nn.Module):
         self.proj = nn.Conv2d(hidden, dim, kernel_size=1, bias=True)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        u = self.branch1(x)  # [B, Hid, H, W]
-        # Clamp u to prevent explosion before multiplicative gate
-        u = torch.clamp(u, -256.0, 256.0)
+        u = self.branch1(x)            # [B, Hid, H, W]
         v = self.act(self.branch2(x))  # [B, Hid, H, W]
-        g = u * v  # Gated: [B, Hid, H, W]
-        return self.proj(g) + x  # Internal residual: [B, C, H, W]
+        
+        # Clamp u to prevent explosion in multiplicative gate
+        u = torch.clamp(u, -256.0, 256.0)
+        
+        g = u * v                       # Gated: [B, Hid, H, W]
+        return self.proj(g) + x         # Internal residual: [B, C, H, W]
 
 
 # ---------- Windowed Attention Wrapper ----------
@@ -307,14 +309,10 @@ class WindowAttention(nn.Module):
 
 class TransformerBlock(nn.Module):
     """
-    Complete Transformer block: Pre-LN → Attention (+ residual) → Pre-LN → FFN (has internal residual).
+    Complete Transformer block with Pre-LN architecture.
 
     Architecture:
-        x → LN1 → Attention → + x (residual) → LN2 → FFN (with internal residual) → output
-
-    Note:
-    - Pre-LN is applied before both attention AND FFN for stability
-    - FFN has its own internal residual connection
+        x → LN1 → Attention → + x (residual) → LN2 → FFN → + (internal residual) → output
 
     Input: [B, C, H, W]
     Output: [B, C, H, W]
@@ -322,23 +320,21 @@ class TransformerBlock(nn.Module):
     
     def __init__(self, dim: int, heads: int, expand: float = 2.66, ln_eps: float = 1e-5, kv_stride: int = 1) -> None:
         super().__init__()
-        self.norm1 = LayerNorm2d(dim, eps=ln_eps)  # Before attention
-        self.norm2 = LayerNorm2d(dim, eps=ln_eps)  # Before FFN (for stability)
+        # Module registration order must match korean-model for weight reproducibility
+        self.norm1 = LayerNorm2d(dim, eps=ln_eps)
         self.attn = EfficientGlobalAttention(dim, heads, kv_stride=kv_stride)
+        self.norm2 = LayerNorm2d(dim, eps=ln_eps)
         self.ffn = GatedDepthwiseFFN(dim, expand)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Attention with external residual
         x = x + self.attn(self.norm1(x))
-        # FFN with Pre-LN for stability (FFN has internal residual)
         x = self.ffn(self.norm2(x))
         return x
 
 
 class WindowedTransformerBlock(nn.Module):
     """
-    Transformer block variant that applies windowed attention.
-    Uses Pre-LN before both attention and FFN for stability.
+    Transformer block variant that applies windowed attention with Pre-LN architecture.
     """
     
     def __init__(
@@ -352,11 +348,12 @@ class WindowedTransformerBlock(nn.Module):
         kv_stride: int = 1,
     ) -> None:
         super().__init__()
-        self.norm1 = LayerNorm2d(dim, eps=ln_eps)  # Before attention
-        self.norm2 = LayerNorm2d(dim, eps=ln_eps)  # Before FFN (for stability)
+        # Module registration order must match korean-model for weight reproducibility
+        self.norm1 = LayerNorm2d(dim, eps=ln_eps)
         self.attn = WindowAttention(
             EfficientGlobalAttention(dim, heads, kv_stride=kv_stride), window=window, stride=stride
         )
+        self.norm2 = LayerNorm2d(dim, eps=ln_eps)
         self.ffn = GatedDepthwiseFFN(dim, expand)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -437,7 +434,7 @@ class Upsample(nn.Module):
     """
     2× spatial upsampling with channel reduction.
 
-    Uses bilinear upsampling followed by 1×1 convolution.
+    Uses nearest neighbor upsampling followed by 1×1 convolution.
 
     Input: [B, in_ch, H, W]
     Output: [B, out_ch, 2H, 2W]
@@ -445,7 +442,7 @@ class Upsample(nn.Module):
     
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
-        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.up = nn.Upsample(scale_factor=2, mode="nearest")
         self.reduce = nn.Conv2d(in_ch, out_ch, kernel_size=1)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
