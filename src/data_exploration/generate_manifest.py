@@ -77,8 +77,8 @@ def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: in
                 except Exception:
                     pass
             rows.append(row)
-            if len(rows) >= limit:
-                break
+        if limit and len(rows) >= limit:
+            break
     
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
     with open(out, 'w', newline='') as csvfile:
@@ -141,7 +141,7 @@ def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: int)
         # If signature computation fails, force rebuild
         return generate_manifest(root, out, freqs_mhz, limit=limit)
     
-    need_rebuild = not os.path.exists(out) or not os.path.exists(meta_path)
+    need_rebuild = True # not os.path.exists(out) or not os.path.exists(meta_path)
     if not need_rebuild:
         try:
             with open(meta_path, 'r') as fp:

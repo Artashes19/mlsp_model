@@ -164,8 +164,8 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
                 for row in reader:
                     n_rows += 1
                     # Common fields
-                    b = int(row.get("building", 0))
-                    ant = int(row.get("antenna", 0))
+                    b = int(row.get("building", "0") or 0)
+                    ant = int(row.get("antenna", "0") or 0)
                     # Resolve frequency index (1-based)
                     f_idx_internal = None
                     for key in ("freq_idx", "frequency_index"):
