@@ -130,14 +130,12 @@ def create_datamodule(
     cfg["val_buildings"] = val_buildings
     cfg["inference"] = False
     cfg["multi_gpu"] = False
-    cfg["drop_last"] = False
     cfg["batch_size"] = 1
     cfg["num_workers"] = 4
     # Disable augmentations for evaluation
     cfg["aug_p"] = 0.0
     cfg["modality_dropout_prob"] = 0.0
     cfg["sparse_dropout_given_dropout"] = 0.0
-    cfg["icassp_val_subsample_ratio"] = 1.0
 
     # Remove _target_ as we instantiate directly
     cfg.pop("_target_", None)

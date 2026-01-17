@@ -25,57 +25,33 @@ class PathlossDataset(Dataset):
         self,
         inputs_list,
         training: bool,
-        mlsp_task1: bool,
-        mlsp_task_idx: int,
-        task_idx: Optional[int],
         pl_clip: Optional[int],
         use_approximator_feature: bool,
         use_transmittance_loss: bool,
         inference: bool,
-        reps_per_epoch: int,
         augment_val: bool,
         augmentations: Optional[AugmentationPipeline],
-        *args, **kwargs
+        sparse_range: list[float],
+        modality_dropout_prob: float,
+        sparse_dropout_given_dropout: float,
+        **kwargs
     ):
         self.inputs_list = inputs_list
         self.training = training
         self.augmentations = augmentations
-        self.mlsp_task1 = mlsp_task1
-        self.task_idx = task_idx
-        self.mlsp_task_idx = mlsp_task_idx
         self.pl_clip = pl_clip
         self.use_approximator_feature = use_approximator_feature
         self.use_transmittance_loss = use_transmittance_loss
         self.inference = inference
-        self.reps_per_epoch = reps_per_epoch
         self.augment_val = augment_val
-        
-        # Ensure sparse_range is a list/tuple of floats
-        sparse_range_val = kwargs["sparse_range"]
-        if isinstance(sparse_range_val, str):
-            # Parse string representation if it comes as a string (e.g. "[0.0, 0.01]")
-            try:
-                cleaned = sparse_range_val.strip("[]()")
-                self.sparse_range = [float(x.strip()) for x in cleaned.split(",")]
-            except ValueError:
-                raise ValueError(f"Could not parse sparse_range string: {sparse_range_val}")
-        else:
-            # Convert from omegaconf.ListConfig or other iterables to a plain list
-            self.sparse_range = list(sparse_range_val)
-        
-        if not isinstance(self.sparse_range, (list, tuple)) or len(self.sparse_range) != 2:
-            raise ValueError(f"sparse_range must be a list/tuple of 2 floats, got {self.sparse_range}")
-        
-        # Modality dropout parameters
-        self.modality_dropout_prob = float(kwargs.get("modality_dropout_prob", 0.6666))
-        self.sparse_dropout_given_dropout = float(kwargs.get("sparse_dropout_given_dropout", 0.5))
+        self.sparse_range = sparse_range
+        self.modality_dropout_prob = modality_dropout_prob
+        self.sparse_dropout_given_dropout = sparse_dropout_given_dropout
         
         self.target_size = IMG_TARGET_SIZE
     
     def __len__(self):
-        if self.inference:
-            return len(self.inputs_list)
-        return len(self.inputs_list) * self.reps_per_epoch
+        return len(self.inputs_list)
     
     @staticmethod
     def pad_sample(sample: RadarSample) -> RadarSample:
@@ -193,7 +169,6 @@ class PathlossDataset(Dataset):
         
         sample = RadarSample(
             file_name=file_name,
-            task_idx=self.task_idx,
             pl_clip=pl_clip,
             use_approximator_feature=self.use_approximator_feature,
             use_transmittance_loss=self.use_transmittance_loss,
@@ -246,7 +221,6 @@ class PathlossDataset(Dataset):
         
         sample = RadarSample(
             file_name=file_name,
-            task_idx=self.task_idx,
             pl_clip=pl_clip,
             use_approximator_feature=self.use_approximator_feature,
             use_transmittance_loss=self.use_transmittance_loss,
@@ -303,8 +277,6 @@ class PathlossDataset(Dataset):
             "file_name": sample.file_name,
             # keep as a plain float; default_collate will tensorize to (B,)
             "pixel_size": float(sample.pixel_size),
-            # keep task_idx as tensor so downstream checks like sample["task_idx"][0].item() work
-            "task_idx": torch.tensor(sample.task_idx, dtype=torch.int64),
         }
         # Reset dimensions back to original for consistency with inference.py logic
         sample.H = orig_h

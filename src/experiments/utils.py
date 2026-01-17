@@ -77,7 +77,6 @@ def create_exp_manifest(config: DictConfig, split, exp_list):
     manifests_dir = os.path.join(run_dir_abs, "manifests")
     os.makedirs(manifests_dir, exist_ok=True)
     # Enforce the required ICASSP root early (fail fast)
-    icassp_limit = 0
     synth_limit = 0
     icassp_global_manifest: Optional[str] = None
     synth_global_manifest: Optional[str] = None
@@ -108,7 +107,6 @@ def create_exp_manifest(config: DictConfig, split, exp_list):
                     f"[manifest] ensured ICASSP manifest at {icassp_global_manifest} "
                     f"(rows={rows if rows >= 0 else 'unknown'}, took={dt:.2f}s)"
                 )
-                icassp_limit = int(config["exps"][exp]["datamodule"].get("icassp_limit_per_building", 0) or 0)
         if exp == "e2":
             # Global synthetic manifest under SYNTH root
             synth_root = os.path.expanduser(str(config["exps"][exp]["datamodule"].get("synthetic_dir", "")))
@@ -145,18 +143,15 @@ def create_exp_manifest(config: DictConfig, split, exp_list):
         icassp_val_manifest = os.path.join(manifests_dir, "icassp_validation.filtered.csv")
         t0 = t1 = time.perf_counter()
         _ = filter_icassp_manifest(
-            icassp_global_manifest, icassp_small_manifest, list(split.train_small),
-            icassp_limit if icassp_limit > 0 else None
+            icassp_global_manifest, icassp_small_manifest, list(split.train_small), None
         )
         t1 = time.perf_counter()
         _ = filter_icassp_manifest(
-            icassp_global_manifest, icassp_full_manifest, list(split.train_full),
-            icassp_limit if icassp_limit > 0 else None
+            icassp_global_manifest, icassp_full_manifest, list(split.train_full), None
         )
         t2 = time.perf_counter()
         _ = filter_icassp_manifest(
-            icassp_global_manifest, icassp_val_manifest, list(split.validation),
-            icassp_limit if icassp_limit > 0 else None
+            icassp_global_manifest, icassp_val_manifest, list(split.validation), None
         )
         t3 = time.perf_counter()
         
@@ -164,15 +159,15 @@ def create_exp_manifest(config: DictConfig, split, exp_list):
         rows_full = _count_rows(icassp_full_manifest)
         rows_val = _count_rows(icassp_val_manifest)
         log.info(
-            f"[manifest] ICASSP filtered (small={len(split.train_small)} blds, limit_per_bld={icassp_limit or 'none'}) "
+            f"[manifest] ICASSP filtered (small={len(split.train_small)} blds) "
             f"-> {icassp_small_manifest} (rows={rows_small}, took={(t1 - t0):.2f}s)"
         )
         log.info(
-            f"[manifest] ICASSP filtered (full={len(split.train_full)} blds, limit_per_bld={icassp_limit or 'none'}) "
+            f"[manifest] ICASSP filtered (full={len(split.train_full)} blds) "
             f"-> {icassp_full_manifest} (rows={rows_full}, took={(t2 - t1):.2f}s)"
         )
         log.info(
-            f"[manifest] ICASSP filtered (validation={len(split.validation)} blds, limit_per_bld={icassp_limit or 'none'}) "
+            f"[manifest] ICASSP filtered (validation={len(split.validation)} blds) "
             f"-> {icassp_val_manifest} (rows={rows_val}, took={(t3 - t2):.2f}s)"
         )
     if synth_global_manifest and os.path.exists(synth_global_manifest):

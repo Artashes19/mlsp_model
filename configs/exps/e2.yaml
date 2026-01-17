@@ -1,6 +1,6 @@
 e2:
   # training uses synthetic only; validation uses ICASSP via data_dir
-  split_role: train_full
+  split_role: train_synthetic
   ckpt_path: null
   load_weights_only: False
 
@@ -18,9 +18,6 @@ e2:
 
   datamodule:
     name: synth_only_pretrain
-    icassp_train_buildings: null
-    icassp_val_buildings: validation  # resolved from split.json by orchestrator
-    split_save_path: ./splits/e2.pkl
     # Optional: number of training samples per epoch (null => full dataset)
     train_samples_per_epoch: 6240
     use_synthetic_train: True

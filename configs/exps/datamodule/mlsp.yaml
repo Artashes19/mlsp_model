@@ -1,42 +1,24 @@
 _target_: src.datamodules.MLSPDatamodule
 
-name: icassp_task1
+name: indoor_dataset
 batch_size: 24
 num_workers: 64
 
 data_dir: ${oc.env:ICASSP_ORIG_PATH}
-mlsp_task1: True
 inference: False
 
 freqs_mhz: [ 868, 1800, 3500 ]
 pl_clip: null
 freqs: [ 1, 2, 3 ]
-val_freq: [ 1, 2, 3 ]
-val_buildings: [ 21, 22, 23, 24, 25 ]
-# Additional validation (disabled for now)
-kaggle_task1_path: ""
-kaggle_task2_path: ""
-kaggle_freqs_mhz: [ 868, 2400 ]
 
 # ICASSP train data validation
 icassp_train_path: null
-icassp_train_buildings: train_small
-icassp_val_buildings: null
-train_subset_size: null
-split_save_path: null
-
-# Validation dataloader names for AIM logging (in order of creation)
-validation_names: [ "real_val", "icassp_val" ]
-
-# ICASSP validation subsampling ratio (0.0-1.0) for faster validation
-icassp_val_subsample_ratio: 1.0
-reps_per_epoch: 1
-mlsp_task_idx: 1
+train_subset_seed: 0
 use_approximator_feature: True
 use_transmittance_loss: True
 
 # Sparse measurement controls
-sparse_range: [ 0.0, 0.0 ]
+sparse_range: [ 0.0, 0.01 ]
 
 # Modality dropout controls
 # prob of turning off one modality (trans+ref OR sparse measurements)
@@ -57,14 +39,14 @@ cardinal_rotation: True
 
 # Experiment controls (optional)
 train_buildings: null
-val_buildings_override: null
 use_synthetic_train: False
 synthetic_dir: ${oc.env:SYNTH_ROOT}
-manifest_path: null
 real_manifest_path: null
+train_manifest_path: null
+val_manifest_path: null
 synthetic_manifest_path: null
-icassp_limit_per_building: null
 synthetic_limit: null
 train_samples_per_epoch: null
 use_synthetic_val: False
 synthetic_val_samples_per_epoch: 1000
+multi_gpu: False

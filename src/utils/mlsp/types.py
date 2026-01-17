@@ -8,7 +8,6 @@ import torch
 @dataclass
 class RadarSample:
     file_name: str
-    task_idx: int
     pl_clip: Optional[torch.Tensor]
     use_approximator_feature: bool
     use_transmittance_loss: bool

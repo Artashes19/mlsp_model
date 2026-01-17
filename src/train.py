@@ -67,26 +67,6 @@ def train_prep(config: DictConfig, project_root: str):
                     f"  python run.py exps={exp} trainer.max_epochs=2 trainer.devices=[0]"
                 )
         # Common overrides
-        # datamodule: resolve training buildings from split by role key if provided
-        val_role = None
-        train_role = None
-        if "datamodule" in cfg_e:
-            val_role = cfg_e.datamodule.get("icassp_val_buildings", None)
-            train_role = cfg_e.datamodule.get("icassp_train_buildings", None)
-        if val_role is None:
-            val_role = cfg_e.get("icassp_val_buildings", None)
-        if train_role is None:
-            train_role = cfg_e.get("icassp_train_buildings", None)
-        # Training buildings (only for real-data training)
-        train_from_role: list[int] | None = None
-        if train_role:
-            grp = getattr(split, str(train_role), None)
-            if grp is None:
-                raise RuntimeError(
-                    f"Unknown split key '{train_role}' requested for training. Expected one of: train_small, train_full, validation"
-                )
-            train_from_role = list(grp)
-        
         # Normalize checkpoint dirs for all ModelCheckpoint callbacks
         if "trainer" in cfg_e:
             try:
@@ -151,38 +131,17 @@ def train_prep(config: DictConfig, project_root: str):
         except Exception:
             pass
         
-        if exp == "e0":
-            # Train on train_small (ICASSP real only)
-            cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
-                split.train_small
-            )
-            t0 = time.perf_counter()
-            best = train(cfg_e)
-            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
-        elif exp == "e1":
-            # Train on train_full (ICASSP real only)
-            cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
-                split.train_full
-            )
-            t0 = time.perf_counter()
-            best = train(cfg_e)
-            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
-        elif exp == "e2":
-            # Pretrain on synthetic only; validation on real held-out buildings
-            t0 = time.perf_counter()
-            best = train(cfg_e)
-            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
-            # Try to capture the best checkpoint path for downstream e3
-        elif exp == "e3":
-            # Finetune on train_small using e2 checkpoints
-            cfg_e.datamodule.train_buildings = train_from_role if 'train_from_role' in locals() and train_from_role else list(
-                split.train_small
-            )
-            t0 = time.perf_counter()
-            best = train(cfg_e)
-            log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
-        else:
-            log.warning(f"Unknown experiment '{exp}' - skipping")
+        # Resolve train_buildings from split_role if specified
+        split_role = cfg_e.get("split_role")
+        if split_role:
+            split_buildings = getattr(split, str(split_role), None)
+            if split_buildings is not None:
+                cfg_e.datamodule.train_buildings = list(split_buildings)
+                log.info(f"[train@{exp}] resolved train_buildings from split_role={split_role}: {len(split_buildings)} buildings")
+        
+        t0 = time.perf_counter()
+        best = train(cfg_e)
+        log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
     return None
 
 
@@ -195,7 +154,8 @@ def train(config: DictConfig) -> str | None:
     log.info(f"Instantiating datamodule <{config.datamodule._target_}>")
     datamodule: MLSPDatamodule = hydra.utils.instantiate(
         config.datamodule,
-        epoch_counter=epoch_counter, multi_gpu=multi_gpu, drop_last=not config.algorithm.compiled.disable
+        epoch_counter=epoch_counter,
+        multi_gpu=multi_gpu,
     )
     # DEBUG: Print actual batch_size being used
     log.info(f"[DEBUG] ACTUAL batch_size={datamodule._batch_size}, num_workers={datamodule._num_workers}")
