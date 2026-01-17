@@ -13,7 +13,7 @@ from pytorch_lightning.strategies import ParallelStrategy
 
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.algorithms.mlsp import MLSP
-from src.datamodules.wair_d_base import WAIRDBaseDatamodule
+from src.datamodules.mlsp import MLSPDatamodule
 from src.experiments import create_exp_manifest, exp_root_prep
 from src.utils import EpochCounter, load_experiment_config, log_hyperparameters
 
@@ -193,7 +193,7 @@ def train(config: DictConfig) -> str | None:
     multi_gpu = gpus == -1 or (isinstance(gpus, Iterable) and len(gpus) > 1) or (isinstance(gpus, int) and gpus > 1)
     
     log.info(f"Instantiating datamodule <{config.datamodule._target_}>")
-    datamodule: WAIRDBaseDatamodule = hydra.utils.instantiate(
+    datamodule: MLSPDatamodule = hydra.utils.instantiate(
         config.datamodule,
         epoch_counter=epoch_counter, multi_gpu=multi_gpu, drop_last=not config.algorithm.compiled.disable
     )

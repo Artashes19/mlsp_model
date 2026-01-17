@@ -8,18 +8,20 @@ from typing import Optional, Union
 
 import math
 import numpy as np
+import pytorch_lightning as pl
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 
 from src.datamodules.datasets import PathlossDataset
-from src.datamodules.wair_d_base import WAIRDBaseDatamodule
 from src.utils.mlsp.augmentations import AugmentationPipeline, GeometricAugmentation
 from src.utils.mlsp.types import RadarSampleInputs
 
 log = logging.getLogger(__name__)
 
 
-class MLSPDatamodule(WAIRDBaseDatamodule):
+class MLSPDatamodule(pl.LightningDataModule):
+    
+    collate_fn = None
     
     def __init__(
         self,
@@ -131,10 +133,20 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         self.args = args
         self.kwargs = kwargs
         
-        super().__init__(
-            batch_size=batch_size, num_workers=num_workers, drop_last=drop_last, multi_gpu=multi_gpu,
-            *args, **kwargs
-        )
+        # Initialize base LightningDataModule
+        super().__init__()
+        
+        # Initialize dataloader settings (previously from WAIRDBaseDatamodule)
+        self._batch_size = batch_size
+        # Coerce possibly-string env values (e.g., '8') to int
+        self._num_workers = int(num_workers) if num_workers is not None else 0
+        self._drop_last = drop_last
+        self._multi_gpu = multi_gpu
+        
+        self._train_set = None
+        self._val_set = None
+        self._test_set = None
+        self._data_prepared = False
         
         self.prepare_data()
     
@@ -361,6 +373,9 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         return train_inputs, val_inputs
     
     def prepare_data(self) -> None:
+        if self._data_prepared:
+            return
+        
         t0_prepare = time.perf_counter()
         
         def _summarize_counts(samples: list) -> tuple[int, dict]:
@@ -603,6 +618,10 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         )
     
     @property
+    def train_set(self):
+        return self._train_set
+    
+    @property
     def test_set(self):
         return self._test_set
     
@@ -670,10 +689,6 @@ class MLSPDatamodule(WAIRDBaseDatamodule):
         return dataloaders
     
     def train_dataloader(self) -> DataLoader:
-        # If not using per-epoch sample budget, fallback to base behavior
-        if self.train_samples_per_epoch is None or int(self.train_samples_per_epoch) <= 0:
-            return super().train_dataloader()
-        
         # Determine rank/world size if DDP is active
         def _dist_info():
             if dist.is_available() and dist.is_initialized():

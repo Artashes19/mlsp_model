@@ -62,4 +62,6 @@ cache/
 # Aim
 .aim/
 
+.hydra/
+
 test_outputs/

@@ -6,7 +6,7 @@ e1:
   defaults:
     - trainer: default
     - datamodule: mlsp
-    - optimizer: lamb
+    - optimizer: adam
     - scheduler: wsd_s_finetune_bs60
     - algorithm: mlsp
     - network: mlsp_txunet
