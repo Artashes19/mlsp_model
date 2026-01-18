@@ -61,8 +61,6 @@ class MLSP(AlgorithmBase):
         self.training_step_outputs = []
         self.validation_step_outputs = defaultdict(list)
         self.test_step_outputs = defaultdict(list)
-        # Default pointwise criterion (used only as a fallback – main loss is computed in get_metrics)
-        self.loss = nn.L1Loss()
         
         # Finetune configuration (optional)
         self._finetune_conf: DictConfig | dict | None = kwargs.get("finetune", None)
@@ -120,30 +118,6 @@ class MLSP(AlgorithmBase):
         return {
             "pred": pred
         }
-    
-    # -------------------- Finetune helpers --------------------
-    def _load_weights_only(self, ckpt_path: str) -> None:
-        """Load only network weights from a PL checkpoint, ignore optimizer/scheduler."""
-        device = next(self._network.parameters()).device
-        ckpt = torch.load(ckpt_path, map_location="cpu")
-        state_dict = ckpt.get("state_dict", ckpt)
-        net_state = self._network.state_dict()
-        remapped = {}
-        matched, total = 0, 0
-        for k in net_state.keys():
-            total += 1
-            for prefix in ("_network.", "network.", ""):
-                cand = f"{prefix}{k}" if prefix else k
-                if cand in state_dict:
-                    remapped[k] = state_dict[cand]
-                    matched += 1
-                    break
-        missing = [k for k in net_state.keys() if k not in remapped]
-        if missing:
-            log.info(f"Weights-only load: matched {matched}/{total}; missing {len(missing)} params")
-        self._network.load_state_dict(remapped, strict=False)
-        self._network.to(device)
-        log.info(f"Loaded weights-only from {ckpt_path}")
     
     def load_state_dict(
         self,
@@ -285,18 +259,6 @@ class MLSP(AlgorithmBase):
         
         weights = torch.ones_like(inputs[:, -1])
         return self.get_metrics(preds, targets, masks, weights)
-    
-    def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
-        outputs = AlgorithmBase.convert_to_numpy(outputs)
-        self.training_step_outputs.append(outputs)
-    
-    def on_validation_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
-        outputs = AlgorithmBase.convert_to_numpy(outputs)
-        self.validation_step_outputs[dataloader_idx].append(outputs)
-    
-    def on_test_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
-        outputs = AlgorithmBase.convert_to_numpy(outputs)
-        self.test_step_outputs[dataloader_idx].append(outputs)
     
     def get_metrics(self, preds, targets, masks, weights):
         # DEBUG: Check actual value ranges

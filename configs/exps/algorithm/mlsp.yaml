@@ -13,12 +13,12 @@ sip2net_params:
 
 compiled:
   _target_: src.utils.CompileParams
-  fullgraph: False
-  dynamic: null
+  fullgraph: True
+  dynamic: False
   backend: inductor
-  mode: null
+  mode: max-autotune
   options: null
-  disable: True
+  disable: False
 
 finetune:
   enable: False

@@ -50,20 +50,20 @@ class AlgorithmBase(pl.LightningModule):
         self.validation_step_outputs = defaultdict(lambda: defaultdict(list))
         self.test_step_outputs = defaultdict(lambda: defaultdict(list))
         
-        self.__num_flop = None
-        self.__first_step = True
-        
-        self.__flop_counter = FlopCounterMode(display=False, depth=1)
-        self.__start = torch.cuda.Event(enable_timing=True)
-        self.__end = torch.cuda.Event(enable_timing=True)
+        # FLOPs and timing tracking state
+        self._should_count_flops = True
+        self._num_flops = None
+        self._last_elapsed_ms = None
+        self._is_compiled = False
+        self._compiled_forward = None
+        self._original_forward = None
+        self._flop_counter = FlopCounterMode(display=False, depth=1)
+        self._start = torch.cuda.Event(enable_timing=True)
+        self._end = torch.cuda.Event(enable_timing=True)
     
     @property
     def network(self) -> nn.Module:
         return self._network
-    
-    def forward(self, *args, **kwargs):
-        outputs = self._network(*args, **kwargs)
-        return outputs
     
     def configure_optimizers(self):
         optimizer = hydra.utils.instantiate(
@@ -121,6 +121,65 @@ class AlgorithmBase(pl.LightningModule):
         
         return ret_opt
     
+    def _wrap_network_for_flops(self) -> None:
+        """Wrap the network's forward method with FLOPs counting and timing."""
+        # Store original forward for later compilation
+        self._original_forward = self._network.forward
+        
+        def forward_with_flops_and_timing(*args, **kwargs):
+            self._start.record()
+            
+            # Use compiled forward if available, otherwise original
+            fwd = self._compiled_forward if self._compiled_forward else self._original_forward
+            
+            if self._should_count_flops:
+                with self._flop_counter:
+                    result = fwd(*args, **kwargs)
+                self._num_flops = self._flop_counter.get_total_flops()
+                self._should_count_flops = False
+                log.info(f"[FLOPs] Measured network FLOPs: {self._num_flops:.2e}")
+            else:
+                result = fwd(*args, **kwargs)
+            
+            self._end.record()
+            torch.cuda.synchronize()
+            self._last_elapsed_ms = self._start.elapsed_time(self._end)
+            return result
+        
+        self._network.forward = forward_with_flops_and_timing
+    
+    def _compile_network(self) -> None:
+        """Compile the network's forward pass (called after FLOPs measurement)."""
+        if self._compile.disable or self._is_compiled:
+            return
+        
+        log.info("Compiling the network...")
+        t0 = torch.cuda.Event(enable_timing=True)
+        t1 = torch.cuda.Event(enable_timing=True)
+        t0.record()
+        # Compile the original forward function, not the wrapper
+        # This allows the wrapper to do timing outside the compiled graph
+        self._compiled_forward = torch.compile(
+            self._original_forward,
+            fullgraph=self._compile.fullgraph,
+            dynamic=self._compile.dynamic,
+            backend=self._compile.backend,
+            mode=self._compile.mode,
+            options=self._compile.options,
+        )
+        t1.record()
+        torch.cuda.synchronize()
+        self._is_compiled = True
+        log.info(
+            f"[compile] done; elapsed={t0.elapsed_time(t1) / 1000.0:.3f}s "
+            f"(fullgraph={self._compile.fullgraph}, backend={self._compile.backend}, mode={self._compile.mode})"
+        )
+    
+    def setup(self, stage: str) -> None:
+        """Setup hook - wrap network for FLOPs counting."""
+        if stage in ("fit", "test"):
+            self._wrap_network_for_flops()
+    
     def pred(self, batch):
         raise NotImplementedError
     
@@ -128,76 +187,22 @@ class AlgorithmBase(pl.LightningModule):
         raise NotImplementedError
     
     def __step(self, batch, split_name):
-        if self.__first_step:
-            # DEBUG: Log batch shape, dtype, and memory before step
-            if isinstance(batch, (list, tuple)) and len(batch) > 0:
-                b0 = batch[0]
-                log.info(f"[DEBUG] First batch shape: {b0.shape if hasattr(b0, 'shape') else 'N/A'}, "
-                        f"dtype: {b0.dtype if hasattr(b0, 'dtype') else 'N/A'}, "
-                        f"GPU memory before step: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-            # Check if autocast is enabled
-            log.info(f"[DEBUG] torch.is_autocast_enabled(): {torch.is_autocast_enabled()}, "
-                    f"autocast dtype: {torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else 'N/A'}, "
-                    f"model.training: {self._network.training}")
-            log.info(f"[step:{split_name}] first step begin; measuring FLOPs and applying compile if enabled")
-            torch.cuda.reset_peak_memory_stats()
-            
-            # Only use FlopCounterMode for training, skip for validation (causes memory issues)
-            if split_name == "train":
-                with self.__flop_counter:
-                    self.__start.record()
-                    output = self._step(batch, split_name)
-                    self.__end.record()
-                    torch.cuda.synchronize()
-                if self.__num_flop is None:
-                    self.__num_flop = self.__flop_counter.get_total_flops()
-            else:
-                # For validation, skip FlopCounterMode
-                log.info(f"[DEBUG] Skipping FlopCounterMode for {split_name}")
-                self.__start.record()
-                output = self._step(batch, split_name)
-                self.__end.record()
-                torch.cuda.synchronize()
-                self.__num_flop = 1  # placeholder
-            
-            log.info(f"[DEBUG] After first step - Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
-            
-            if not self._compile.disable:
-                log.info("Compiling the model.")
-                t0 = torch.cuda.Event(enable_timing=True)
-                t1 = torch.cuda.Event(enable_timing=True)
-                t0.record()
-                self._network = torch.compile(
-                    self._network,
-                    fullgraph=self._compile.fullgraph,
-                    dynamic=self._compile.dynamic,
-                    backend=self._compile.backend,
-                    mode=self._compile.mode,
-                    options=self._compile.options,
-                    disable=self._compile.disable,
-                )
-                t1.record()
-                torch.cuda.synchronize()
-                log.info(
-                    f"[compile] done; elapsed={t0.elapsed_time(t1) / 1000.0:.3f}s "
-                    f"(fullgraph={self._compile.fullgraph}, backend={self._compile.backend}, mode={self._compile.mode})"
-                )
-            
-            self.__first_step = False
-        else:
-            self.__start.record()
-            output = self._step(batch, split_name)
-            self.__end.record()
-            torch.cuda.synchronize()
+        output = self._step(batch, split_name)
         
-        # In test step we get 0 FLOP, so we use the previous known value
+        # After first forward (FLOPs measured), compile the network
+        if not self._is_compiled and not self._compile.disable:
+            self._compile_network()
         
-        flops = self.__num_flop / (self.__start.elapsed_time(self.__end) / 1000)
-        output["flops"] = flops
-        progress_bar_dict = dict(flops=flops)
+        # Calculate FLOP/s using cached FLOPs and timing from network forward
+        if self._num_flops is not None and self._last_elapsed_ms is not None and self._last_elapsed_ms > 0:
+            flops = self._num_flops / (self._last_elapsed_ms / 1000)
+            output["flops"] = flops
+            progress_bar_dict = {
+                "flops": flops,
+                "loss": output["loss"].item(),
+            }
+            self.trainer.progress_bar_metrics.update(progress_bar_dict)
         
-        progress_bar_dict["loss"] = output["loss"].item()
-        self.trainer.progress_bar_metrics.update(progress_bar_dict)
         return output
     
     @staticmethod
@@ -210,22 +215,15 @@ class AlgorithmBase(pl.LightningModule):
     
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
-        for key, value in outputs.items():
-            self.training_step_outputs[key].append(value)
+        self.training_step_outputs.append(outputs)
     
-    def on_validation_batch_end(
-        self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0
-    ) -> None:
+    def on_validation_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
-        for key, value in outputs.items():
-            self.validation_step_outputs[dataloader_idx][key].append(value)
+        self.validation_step_outputs[dataloader_idx].append(outputs)
     
-    def on_test_batch_end(
-        self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0
-    ) -> None:
+    def on_test_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
-        for key, value in outputs.items():
-            self.test_step_outputs[dataloader_idx][key].append(value)
+        self.test_step_outputs[dataloader_idx].append(outputs)
     
     def training_step(self, batch, *args, **kwargs):
         output = self.__step(batch, split_name="train")
@@ -279,25 +277,3 @@ class AlgorithmBase(pl.LightningModule):
             self._epoch_end(outputs, split_name=f"test_{test_num}")
         
         self.test_step_outputs.clear()
-    
-    def _calculate_epoch_metrics(self, outputs: dict[str, list]) -> dict:
-        epoch_metrics_sep = {}
-        
-        # add all output values to combined_group_metrics
-        for metric_name, metric_values in outputs.items():
-            epoch_metrics_sep[metric_name] = torch.tensor(
-                sum(metric_values) / len(metric_values)
-            )
-        
-        epoch_metrics_shared = {
-            "learning_rate": torch.tensor(
-                self.trainer.optimizers[0].param_groups[0]["lr"]
-            )
-        }
-        
-        if self.logger:
-            self.logger.log_metrics(epoch_metrics_shared, self.trainer.current_epoch)
-        else:
-            log.info(f"""\n{epoch_metrics_shared}\n""")
-        
-        return epoch_metrics_sep
