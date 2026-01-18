@@ -288,7 +288,7 @@ def train(config: DictConfig) -> str | None:
                 pass
         # Determine destination: parent of default_root_dir if endswith '/pl', else default_root_dir
         droot = getattr(trainer, 'default_root_dir', None) or None
-        if isinstance(droot, str) and droot:
+        if trainer.is_global_zero and isinstance(droot, str) and droot:
             parent = os.path.dirname(droot.rstrip('/'))
             out_dir = parent if os.path.basename(droot.rstrip('/')) == 'pl' else droot
             os.makedirs(out_dir, exist_ok=True)

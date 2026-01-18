@@ -133,11 +133,14 @@ class AlgorithmBase(pl.LightningModule):
             fwd = self._compiled_forward if self._compiled_forward else self._original_forward
             
             if self._should_count_flops:
-                with self._flop_counter:
+                if self.global_rank == 0:
+                    with self._flop_counter:
+                        result = fwd(*args, **kwargs)
+                    self._num_flops = self._flop_counter.get_total_flops()
+                    log.info(f"[FLOPs] Measured network FLOPs: {self._num_flops:.2e}")
+                else:
                     result = fwd(*args, **kwargs)
-                self._num_flops = self._flop_counter.get_total_flops()
                 self._should_count_flops = False
-                log.info(f"[FLOPs] Measured network FLOPs: {self._num_flops:.2e}")
             else:
                 result = fwd(*args, **kwargs)
             
@@ -153,7 +156,8 @@ class AlgorithmBase(pl.LightningModule):
         if self._compile.disable or self._is_compiled:
             return
         
-        log.info("Compiling the network...")
+        if self.global_rank == 0:
+            log.info("Compiling the network...")
         t0 = torch.cuda.Event(enable_timing=True)
         t1 = torch.cuda.Event(enable_timing=True)
         t0.record()
@@ -170,10 +174,11 @@ class AlgorithmBase(pl.LightningModule):
         t1.record()
         torch.cuda.synchronize()
         self._is_compiled = True
-        log.info(
-            f"[compile] done; elapsed={t0.elapsed_time(t1) / 1000.0:.3f}s "
-            f"(fullgraph={self._compile.fullgraph}, backend={self._compile.backend}, mode={self._compile.mode})"
-        )
+        if self.global_rank == 0:
+            log.info(
+                f"[compile] done; elapsed={t0.elapsed_time(t1) / 1000.0:.3f}s "
+                f"(fullgraph={self._compile.fullgraph}, backend={self._compile.backend}, mode={self._compile.mode})"
+            )
     
     def setup(self, stage: str) -> None:
         """Setup hook - wrap network for FLOPs counting."""
@@ -197,11 +202,12 @@ class AlgorithmBase(pl.LightningModule):
         if self._num_flops is not None and self._last_elapsed_ms is not None and self._last_elapsed_ms > 0:
             flops = self._num_flops / (self._last_elapsed_ms / 1000)
             output["flops"] = flops
-            progress_bar_dict = {
-                "flops": flops,
-                "loss": output["loss"].item(),
-            }
-            self.trainer.progress_bar_metrics.update(progress_bar_dict)
+            if self.global_rank == 0:
+                progress_bar_dict = {
+                    "flops": flops,
+                    "loss": output["loss"].item(),
+                }
+                self.trainer.progress_bar_metrics.update(progress_bar_dict)
         
         return output
     
@@ -240,17 +246,19 @@ class AlgorithmBase(pl.LightningModule):
     def _epoch_end(self, outputs: dict[str, list], split_name):
         epoch_metrics = self._calculate_epoch_metrics(outputs)
         epoch_metrics = {f"{split_name}_{k}": v for k, v in epoch_metrics.items()}
-        for checkpoint in self.trainer.checkpoint_callbacks:
-            if checkpoint.monitor in epoch_metrics:
-                epoch_metrics[checkpoint.monitor] = torch.Tensor(
-                    epoch_metrics[checkpoint.monitor]
-                )
         
-        self.trainer.callback_metrics.update(epoch_metrics)
-        if self.logger:
-            self.logger.log_metrics(epoch_metrics, self.trainer.current_epoch)
-        else:
-            log.info(f"""\n{epoch_metrics}\n""")
+        if self.global_rank == 0:
+            for checkpoint in self.trainer.checkpoint_callbacks:
+                if checkpoint.monitor in epoch_metrics:
+                    epoch_metrics[checkpoint.monitor] = torch.Tensor(
+                        epoch_metrics[checkpoint.monitor]
+                    )
+            
+            self.trainer.callback_metrics.update(epoch_metrics)
+            if self.logger:
+                self.logger.log_metrics(epoch_metrics, self.trainer.current_epoch)
+            else:
+                log.info(f"""\n{epoch_metrics}\n""")
     
     def on_train_epoch_end(self) -> None:
         outputs = self.training_step_outputs
