@@ -70,6 +70,9 @@ class PathlossDataset(Dataset):
         self.modality_dropout_prob = float(kwargs.get("modality_dropout_prob", 0.6666))
         self.sparse_dropout_given_dropout = float(kwargs.get("sparse_dropout_given_dropout", 0.5))
         
+        # Number of output channels (default 9, use 3 for korean-model equivalence)
+        self.num_channels = int(kwargs.get("num_channels", 9))
+        
         self.target_size = IMG_TARGET_SIZE
     
     def __len__(self):
@@ -294,7 +297,8 @@ class PathlossDataset(Dataset):
             sample=sample,
             sparse_range=self.sparse_range,
             modality_dropout_prob=self.modality_dropout_prob,
-            sparse_dropout_given_dropout=self.sparse_dropout_given_dropout
+            sparse_dropout_given_dropout=self.sparse_dropout_given_dropout,
+            num_channels=self.num_channels
         )
         mask = sample.mask
         # Store original dimensions for algorithm to use

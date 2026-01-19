@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cross-branch comparison: runs data loading from both branches and compares outputs.
+Cross-branch comparison: runs REAL data loading APIs from both branches and compares outputs.
 
 Usage:
     # From devbugfix_khoren branch:
@@ -26,56 +26,58 @@ KOREAN_FILE = SAVE_DIR / "korean_outputs.pt"
 NUM_SAMPLES = 10
 
 
-def get_icassp_input_files():
-    """Find ICASSP input PNG files."""
-    icassp_root = os.environ.get("ICASSP_ORIG_PATH", "")
-    candidates = [
-        Path(icassp_root) / "train" / "Inputs" / "Task_2_ICASSP",
-        Path(icassp_root) / "Inputs" / "Task_2_ICASSP",
-    ]
-    for c in candidates:
-        if c.exists():
-            return sorted(c.glob("*.png"))[:NUM_SAMPLES]
-    raise RuntimeError(f"No ICASSP data found. Set ICASSP_ORIG_PATH env var.")
-
-
 def run_devbugfix():
-    """Run devbugfix_khoren's featurizer with num_channels=3."""
-    print("Running devbugfix_khoren featurizer (num_channels=3)...")
+    """Run devbugfix_khoren's REAL PathlossDataset pipeline."""
+    print("Running devbugfix_khoren PathlossDataset (num_channels=3)...")
     
-    # Import from current branch
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from src.utils import normalize_size, RadarSample
-    from src.utils.mlsp.featurizer import featurizer
-    from torchvision.io import read_image
+    from src.datamodules.mlsp import MLSPDatamodule
+    from src.datamodules.datasets.mlsp import PathlossDataset
     
-    input_files = get_icassp_input_files()
+    icassp_root = os.environ.get("ICASSP_ORIG_PATH", "")
+    
+    # Use the real get_inputs_list to build inputs
+    inputs_list = MLSPDatamodule.get_inputs_list(
+        data_dir=icassp_root,
+        freqs_mhz=[868],  # Just one freq for simplicity
+        freqs=[1],
+        task="Task_2_ICASSP",
+        manifest_path=None
+    )
+    
+    # Take first NUM_SAMPLES
+    inputs_list = sorted(inputs_list, key=lambda x: x.file_name)[:NUM_SAMPLES]
+    print(f"  Found {len(inputs_list)} samples")
+    
+    # Create the REAL dataset
+    dataset = PathlossDataset(
+        inputs_list=inputs_list,
+        training=False,  # Deterministic
+        mlsp_task1=False,
+        mlsp_task_idx=1,
+        task_idx=1,
+        pl_clip=None,
+        use_approximator_feature=False,
+        use_transmittance_loss=False,
+        inference=True,
+        reps_per_epoch=1,
+        augment_val=False,
+        augmentations=None,
+        sparse_range=[0.0, 0.0],
+        modality_dropout_prob=0.0,  # No dropout
+        sparse_dropout_given_dropout=0.0,
+        num_channels=3,  # Use 3-channel mode
+    )
+    
     results = {}
-    
-    for f in input_files:
-        input_img = read_image(str(f)).float()
-        C, H, W = input_img.shape
-        
-        sample = RadarSample(
-            file_name=str(f),
-            task_idx=1,
-            pl_clip=float("inf"),
-            use_approximator_feature=False,
-            use_transmittance_loss=False,
-            H=H, W=W,
-            x_ant=H // 2, y_ant=W // 2,
-            azimuth=0.0,
-            freq_MHz=868.0,
-            input_img=input_img,
-            output_img="",
-            radiation_pattern=torch.ones(360),
-            pixel_size=0.25,
-            mask=torch.ones(H, W),
-        )
-        sample = normalize_size(sample, target_size=256)
-        output = featurizer(sample, num_channels=3, modality_dropout_prob=0.0)
-        results[f.name] = output.clone()
-        print(f"  {f.name}: shape={output.shape}, range=[{output.min():.4f}, {output.max():.4f}]")
+    for i in range(len(inputs_list)):
+        input_tensor, output_tensor, mask, meta = dataset[i]
+        fname = Path(meta["file_name"]).name
+        results[fname] = {
+            "input": input_tensor.clone(),
+            "mask": mask.clone(),
+        }
+        print(f"  {fname}: input={input_tensor.shape}, range=[{input_tensor.min():.4f}, {input_tensor.max():.4f}]")
     
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     torch.save(results, DEVBUGFIX_FILE)
@@ -83,29 +85,38 @@ def run_devbugfix():
 
 
 def run_korean():
-    """Run korean-model's data loader."""
-    print("Running korean-model data loader...")
+    """Run korean-model's REAL IndoorRadioMapDataset pipeline."""
+    print("Running korean-model IndoorRadioMapDataset...")
     
-    # Import from current branch (korean-model)
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from data.dataset import IndoorRadioMapDataset, SamplePaths
+    from data.dataset import IndoorRadioMapDataset, gather_task2_samples, SamplePaths
     
-    input_files = get_icassp_input_files()
+    icassp_root = os.environ.get("ICASSP_ORIG_PATH", "")
     
-    # Create dataset with just these files (no outputs needed for input comparison)
-    file_pairs = [SamplePaths(input_path=f, output_path=None) for f in input_files]
+    # Gather samples the korean-model way
+    all_samples = gather_task2_samples(Path(icassp_root), split="train")
+    # Filter to match devbugfix (freq=1 means f1 in filename)
+    samples = [s for s in all_samples if "_f1_" in s.input_path.name]
+    samples = sorted(samples, key=lambda x: x.input_path.name)[:NUM_SAMPLES]
+    print(f"  Found {len(samples)} samples")
+    
+    # Create the REAL dataset
     dataset = IndoorRadioMapDataset(
-        root=".",  # not used when file_pairs provided
+        root=icassp_root,
         split="train",
         resize_hw=(256, 256),
-        file_pairs=file_pairs,
+        file_pairs=samples,
     )
     
     results = {}
-    for i, f in enumerate(input_files):
+    for i in range(len(samples)):
         x, y, m, meta = dataset[i]
-        results[f.name] = x.clone()
-        print(f"  {f.name}: shape={x.shape}, range=[{x.min():.4f}, {x.max():.4f}]")
+        fname = samples[i].input_path.name
+        results[fname] = {
+            "input": x.clone(),
+            "mask": m.clone(),
+        }
+        print(f"  {fname}: input={x.shape}, range=[{x.min():.4f}, {x.max():.4f}]")
     
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     torch.save(results, KOREAN_FILE)
@@ -132,28 +143,54 @@ def compare():
     common_keys = set(devbugfix.keys()) & set(korean.keys())
     print(f"Common samples: {len(common_keys)}\n")
     
-    all_diffs = []
+    if not common_keys:
+        print("WARNING: No common samples found!")
+        print(f"  Devbugfix keys: {list(devbugfix.keys())[:5]}...")
+        print(f"  Korean keys: {list(korean.keys())[:5]}...")
+        return 1
+    
+    all_input_diffs = []
+    all_mask_diffs = []
+    
     for key in sorted(common_keys):
         d = devbugfix[key]
         k = korean[key]
         
-        if d.shape != k.shape:
-            print(f"  {key}: SHAPE MISMATCH {d.shape} vs {k.shape}")
+        d_input = d["input"] if isinstance(d, dict) else d
+        k_input = k["input"] if isinstance(k, dict) else k
+        
+        if d_input.shape != k_input.shape:
+            print(f"  {key}: INPUT SHAPE MISMATCH {d_input.shape} vs {k_input.shape}")
             continue
         
-        diff = (d - k).abs()
-        max_diff = diff.max().item()
-        mean_diff = diff.mean().item()
-        all_diffs.append(max_diff)
+        input_diff = (d_input - k_input).abs()
+        max_input_diff = input_diff.max().item()
+        mean_input_diff = input_diff.mean().item()
+        all_input_diffs.append(max_input_diff)
         
-        status = "OK" if max_diff < 1e-5 else "DIFF"
-        print(f"  {key}: max_diff={max_diff:.2e}, mean_diff={mean_diff:.2e} [{status}]")
+        # Compare masks if available
+        mask_diff_str = ""
+        if isinstance(d, dict) and isinstance(k, dict) and "mask" in d and "mask" in k:
+            d_mask = d["mask"]
+            k_mask = k["mask"]
+            if d_mask.shape == k_mask.shape:
+                mask_diff = (d_mask - k_mask).abs()
+                max_mask_diff = mask_diff.max().item()
+                all_mask_diffs.append(max_mask_diff)
+                mask_diff_str = f", mask_diff={max_mask_diff:.2e}"
+            else:
+                mask_diff_str = f", MASK SHAPE MISMATCH {d_mask.shape} vs {k_mask.shape}"
+        
+        status = "OK" if max_input_diff < 1e-5 else "DIFF"
+        print(f"  {key}: input_diff={max_input_diff:.2e} (mean={mean_input_diff:.2e}){mask_diff_str} [{status}]")
     
     print(f"\n{'='*60}")
-    print(f"Overall max diff: {max(all_diffs):.2e}")
-    print(f"Overall mean of max diffs: {np.mean(all_diffs):.2e}")
+    print(f"INPUT - Overall max diff: {max(all_input_diffs):.2e}")
+    print(f"INPUT - Overall mean of max diffs: {np.mean(all_input_diffs):.2e}")
+    if all_mask_diffs:
+        print(f"MASK  - Overall max diff: {max(all_mask_diffs):.2e}")
     
-    if max(all_diffs) < 1e-5:
+    if max(all_input_diffs) < 1e-5:
         print("\nRESULT: EQUIVALENT (within floating point tolerance)")
         return 0
     else:
