@@ -26,11 +26,20 @@ KOREAN_FILE = SAVE_DIR / "korean_outputs.pt"
 NUM_SAMPLES = 10
 
 
-def run_devbugfix():
+def run_devbugfix(resize_backend=None):
     """Run devbugfix_khoren's REAL PathlossDataset pipeline."""
-    print("Running devbugfix_khoren PathlossDataset (num_channels=3)...")
-    
     sys.path.insert(0, str(Path(__file__).parent.parent))
+    
+    # Only override if explicitly specified (otherwise use config/default)
+    if resize_backend is not None:
+        from src.utils.mlsp.augmentations import set_resize_backend
+        set_resize_backend(resize_backend)
+    
+    from src.utils.mlsp.config_overrides import get_config
+    config = get_config()
+    
+    print(f"Running devbugfix_khoren PathlossDataset (num_channels={config.num_channels}, resize={config.resize_backend})...")
+    
     from src.datamodules.mlsp import MLSPDatamodule
     from src.datamodules.datasets.mlsp import PathlossDataset
     
@@ -66,7 +75,7 @@ def run_devbugfix():
         sparse_range=[0.0, 0.0],
         modality_dropout_prob=0.0,  # No dropout
         sparse_dropout_given_dropout=0.0,
-        num_channels=3,  # Use 3-channel mode
+        # num_channels from config (default 9, or 3 if korean_mode.yaml loaded)
     )
     
     results = {}
@@ -203,6 +212,8 @@ def main():
     parser.add_argument("--run-devbugfix", action="store_true", help="Run devbugfix_khoren featurizer")
     parser.add_argument("--run-korean", action="store_true", help="Run korean-model data loader")
     parser.add_argument("--compare", action="store_true", help="Compare saved outputs")
+    parser.add_argument("--resize-backend", choices=["torchvision", "pil"], default=None,
+                        help="Override resize backend (default: use MLSP_OVERRIDES_CONFIG or torchvision)")
     args = parser.parse_args()
     
     if not any([args.run_devbugfix, args.run_korean, args.compare]):
@@ -210,7 +221,7 @@ def main():
         return 1
     
     if args.run_devbugfix:
-        run_devbugfix()
+        run_devbugfix(resize_backend=args.resize_backend)
     if args.run_korean:
         run_korean()
     if args.compare:

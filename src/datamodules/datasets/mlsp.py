@@ -14,6 +14,7 @@ from src.utils import normalize_size, RadarSample
 from src.utils.mlsp.augmentations import AugmentationPipeline
 from src.utils.mlsp.featurizer import featurizer
 from src.utils.mlsp.types import RadarSampleInputs
+from src.utils.mlsp.config_overrides import get_config
 
 INITIAL_PIXEL_SIZE = 0.25
 IMG_TARGET_SIZE = 256
@@ -70,8 +71,8 @@ class PathlossDataset(Dataset):
         self.modality_dropout_prob = float(kwargs.get("modality_dropout_prob", 0.6666))
         self.sparse_dropout_given_dropout = float(kwargs.get("sparse_dropout_given_dropout", 0.5))
         
-        # Number of output channels (default 9, use 3 for korean-model equivalence)
-        self.num_channels = int(kwargs.get("num_channels", 9))
+        # Number of output channels (default from config, or 9 if not set)
+        self.num_channels = int(kwargs.get("num_channels", get_config().num_channels))
         
         self.target_size = IMG_TARGET_SIZE
     
