@@ -13,11 +13,6 @@ from src.utils.mlsp.types import RadarSample
 def resize_bilinear(img, new_size):
     return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
 
-
-def resize_linear(img, new_size):
-    return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
-
-
 def resize_db(img, new_size):
     # Prevent overflow in 10^(x/10) for very large dB values (~>385 dB overflows float32)
     safe_db_max = float(10.0 * np.log10(np.finfo(np.float32).max)) - 1.0  # small margin
@@ -69,7 +64,7 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     
     reflectance_resized = resize_bilinear(reflectance, new_size)
     transmittance_resized = resize_bilinear(transmittance, new_size)
-    distance_resized = resize_linear(distance, new_size)
+    distance_resized = resize_bilinear(distance, new_size)
     mask_resized = resize_bilinear(sample.mask.unsqueeze(0), new_size).squeeze(0)
     
     sample.x_ant = int(sample.x_ant * scale_x)
@@ -84,7 +79,7 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
         sample.floor_plan = resize_bilinear(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
 
     if sample.output_img != "":
-        sample.output_img = resize_linear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
+        sample.output_img = resize_bilinear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
     
     sample.H = sample.W = target_size
     sample.mask = mask_resized
