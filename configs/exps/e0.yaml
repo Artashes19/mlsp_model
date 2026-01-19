@@ -1,5 +1,4 @@
 e0:
-  split_role: train_small
   ckpt_path: null
   load_weights_only: False
 
@@ -17,6 +16,7 @@ e0:
 
   datamodule:
     name: icassp_train_small
+    use_small_train: True
     train_samples_per_epoch: 960
     # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
     modality_dropout_prob: 0.6666

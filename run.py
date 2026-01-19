@@ -59,6 +59,10 @@ def main(config: DictConfig) -> None:
     
     if config["name"] == "train":
         return train_prep(config, project_root)
+    elif config["name"] == "manifest":
+        from src.manifest import manifest_prep
+        
+        return manifest_prep(config, project_root)
 
 
 if __name__ == "__main__":

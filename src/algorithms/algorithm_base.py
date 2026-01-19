@@ -264,19 +264,17 @@ class AlgorithmBase(pl.LightningModule):
         outputs = self.training_step_outputs
         num_dataloaders = 1
         if isinstance(self.trainer.val_dataloaders, (list, tuple)):
-            num_dataloaders = max(len(self.trainer.val_dataloaders), 1)
+            num_dataloaders = len(self.trainer.val_dataloaders)
+        # Log same training metrics with different prefixes for each validation dataloader
         for i in range(num_dataloaders):
             self._epoch_end(outputs, split_name=f"train_{i}")
         self.training_step_outputs.clear()
     
     def on_validation_epoch_end(self) -> None:
-        # Always expose a single validation metric namespace: 'val'
-        # If multiple validation loaders exist, only the first is used for tracked metrics.
-        if len(self.validation_step_outputs) > 0:
-            first_idx = sorted(self.validation_step_outputs.keys())[0]
-            outputs = self.validation_step_outputs[first_idx]
-            self._epoch_end(outputs, split_name=f"val_{first_idx}")
-        
+        # Log metrics for ALL validation dataloaders
+        for dataloader_idx in sorted(self.validation_step_outputs.keys()):
+            outputs = self.validation_step_outputs[dataloader_idx]
+            self._epoch_end(outputs, split_name=f"val_{dataloader_idx}")
         self.validation_step_outputs.clear()
     
     def on_test_epoch_end(self) -> None:

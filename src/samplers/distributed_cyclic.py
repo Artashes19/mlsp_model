@@ -19,7 +19,6 @@ class DistributedCyclicSampler(DistributedSampler):
         self,
         dataset,
         samples_per_epoch_total: int,
-        seed: int = 0,
         num_replicas: Optional[int] = None,
         rank: Optional[int] = None
     ):
@@ -41,11 +40,10 @@ class DistributedCyclicSampler(DistributedSampler):
         self._per_rank = int(
             math.ceil(self._samples_per_epoch_total / float(self.num_replicas))
         ) if self.num_replicas > 0 else self._samples_per_epoch_total
-        # Fixed shuffled order for cycling
-        self._rng = np.random.RandomState(int(seed) if seed is not None else 0)
+        # Fixed shuffled order for cycling (uses global numpy seed from seed_everything)
         self._order = np.arange(self._dataset_len, dtype=np.int64)
         if self._dataset_len > 0:
-            self._rng.shuffle(self._order)
+            np.random.shuffle(self._order)
         # Global base pointer (for rank 0); ranks offset by +rank at iteration time
         self._base_pos = 0
     

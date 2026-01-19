@@ -5,15 +5,13 @@ batch_size: 24
 num_workers: 64
 
 data_dir: ${oc.env:ICASSP_ORIG_PATH}
+synthetic_dir: ${oc.env:SYNTH_ROOT}
 inference: False
 
 freqs_mhz: [ 868, 1800, 3500 ]
 pl_clip: null
 freqs: [ 1, 2, 3 ]
 
-# ICASSP train data validation
-icassp_train_path: null
-train_subset_seed: 0
 use_approximator_feature: True
 use_transmittance_loss: True
 
@@ -37,16 +35,14 @@ flip_vertical: True
 flip_horizontal: True
 cardinal_rotation: True
 
-# Experiment controls (optional)
-train_buildings: null
+# Experiment controls
 use_synthetic_train: False
-synthetic_dir: ${oc.env:SYNTH_ROOT}
-real_manifest_path: null
-train_manifest_path: null
-val_manifest_path: null
-synthetic_manifest_path: null
+use_small_train: False
+train_manifest_path: ${oc.env:ICASSP_TRAIN_MANIFEST}
+train_small_manifest_path: ${oc.env:ICASSP_TRAIN_SMALL_MANIFEST}
+val_manifest_path: ${oc.env:ICASSP_VAL_MANIFEST}
+synthetic_manifest_path: ${oc.env:SYNTH_TRAIN_MANIFEST}
+synthetic_val_manifest_path: ${oc.env:SYNTH_VAL_MANIFEST}
 synthetic_limit: null
 train_samples_per_epoch: null
-use_synthetic_val: False
-synthetic_val_samples_per_epoch: 1000
 multi_gpu: False

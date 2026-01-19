@@ -14,7 +14,6 @@ from pytorch_lightning.strategies import ParallelStrategy
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.algorithms.mlsp import MLSP
 from src.datamodules.mlsp import MLSPDatamodule
-from src.experiments import create_exp_manifest, exp_root_prep
 from src.utils import EpochCounter, load_experiment_config, log_hyperparameters
 
 log = logging.getLogger(__name__)
@@ -33,54 +32,21 @@ def train_prep(config: DictConfig, project_root: str):
         cfg_e = clone_cfg(config["exps"][exp])
         config["exps"][exp] = load_experiment_config(cfg_e, config_root=os.path.join(project_root, "configs/exps"))
     
-    split, exp_dir = exp_root_prep(config)
-    icassp_small_manifest, icassp_val_manifest, icassp_full_manifest, synth_filtered_manifest = create_exp_manifest(
-        config, split, exp_list
-    )
-    
-    e2_best_ckpt: str | None = None
     # Fast-dev toggle
     fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
     if fast_dev:
         log.info("[orchestrator] fast_dev enabled: will cap epochs/batches for quick smoke run")
     for exp in exp_list:
         cfg_e = clone_cfg(config["exps"][exp])
-        # Merge experiment-specific config (required for trainer and any per-exp overrides)
-        exp_cfg_dir_opt = (
-            config.get("experiments_config_dir") or
-            os.path.join(project_root, "configs/exps")
+        log.info(
+            f"[trainer@{exp}] devices={cfg_e.trainer.devices}, accelerator={cfg_e.trainer.accelerator}, "
+            f"precision={cfg_e.trainer.precision}, max_epochs={cfg_e.trainer.max_epochs}"
         )
-        repo_root = os.path.dirname(os.path.abspath(__file__))
-        exp_cfg_dir = exp_cfg_dir_opt if os.path.isabs(exp_cfg_dir_opt) else os.path.join(
-            repo_root, exp_cfg_dir_opt
-        )
-        exp_cfg_path = os.path.join(exp_cfg_dir, f"{exp}.yaml")
-        if os.path.isfile(exp_cfg_path):
-            exp_cfg = OmegaConf.load(exp_cfg_path)
-            cfg_e = OmegaConf.merge(cfg_e, exp_cfg)
-        else:
-            # If no experiment config file, require trainer to be provided explicitly
-            if "trainer" not in cfg_e or not cfg_e.get("trainer"):
-                raise RuntimeError(
-                    f"Missing experiment config for '{exp}' at {exp_cfg_path} and no trainer provided.\n"
-                    f"Provide a per-experiment config file or pass trainer via CLI, e.g.:\n"
-                    f"  python run.py exps={exp} trainer.max_epochs=2 trainer.devices=[0]"
-                )
-        # Common overrides
-        # Normalize checkpoint dirs for all ModelCheckpoint callbacks
-        if "trainer" in cfg_e:
-            try:
-                log.info(
-                    f"[trainer@{exp}] devices={cfg_e.trainer.devices}, accelerator={cfg_e.trainer.accelerator}, "
-                    f"precision={cfg_e.trainer.precision}, max_epochs={cfg_e.trainer.max_epochs}"
-                )
-            except Exception:
-                pass
-            
-            if fast_dev:
-                cfg_e.trainer.max_epochs = 1
-                cfg_e.trainer.limit_train_batches = 4
-                cfg_e.trainer.limit_val_batches = 2
+        
+        if fast_dev:
+            cfg_e.trainer.max_epochs = 1
+            cfg_e.trainer.limit_train_batches = 4
+            cfg_e.trainer.limit_val_batches = 2
         
         # Enforce required data roots (no fallbacks)
         data_dir_req = cfg_e.datamodule.get("data_dir")
@@ -96,31 +62,12 @@ def train_prep(config: DictConfig, project_root: str):
                 raise RuntimeError(
                     f"datamodule.synthetic_dir must point to an existing synthetic root for e2. Got: {cfg_e.datamodule.get('synthetic_dir')}"
                 )
-        # Wire per-experiment manifests when available
-        # New explicit train/val manifests: no runtime splitting
-        if exp in ("e0", "e3"):
-            if icassp_small_manifest:
-                cfg_e.datamodule.train_manifest_path = icassp_small_manifest
-            if icassp_val_manifest:
-                cfg_e.datamodule.val_manifest_path = icassp_val_manifest
-        elif exp == "e1":
-            if icassp_full_manifest:
-                cfg_e.datamodule.train_manifest_path = icassp_full_manifest
-            if icassp_val_manifest:
-                cfg_e.datamodule.val_manifest_path = icassp_val_manifest
-        elif exp == "e2":
-            if synth_filtered_manifest:
-                cfg_e.datamodule.synthetic_manifest_path = synth_filtered_manifest
-            if icassp_val_manifest:
-                cfg_e.datamodule.val_manifest_path = icassp_val_manifest
         
         # Summarize datamodule plan for this experiment
         try:
             dm = cfg_e.datamodule
             plan = dict(
                 use_synthetic_train=bool(dm.get("use_synthetic_train", False)),
-                train_buildings=(
-                    "len=" + str(len(dm.get("train_buildings", []))) if dm.get("train_buildings") else "None"),
                 train_manifest_path=dm.get("train_manifest_path", None),
                 val_manifest_path=dm.get("val_manifest_path", None),
                 synthetic_manifest_path=dm.get("synthetic_manifest_path", None),
@@ -130,14 +77,6 @@ def train_prep(config: DictConfig, project_root: str):
             log.info(f"[datamodule@{exp}] plan={plan}")
         except Exception:
             pass
-        
-        # Resolve train_buildings from split_role if specified
-        split_role = cfg_e.get("split_role")
-        if split_role:
-            split_buildings = getattr(split, str(split_role), None)
-            if split_buildings is not None:
-                cfg_e.datamodule.train_buildings = list(split_buildings)
-                log.info(f"[train@{exp}] resolved train_buildings from split_role={split_role}: {len(split_buildings)} buildings")
         
         t0 = time.perf_counter()
         best = train(cfg_e)
@@ -169,9 +108,9 @@ def train(config: DictConfig) -> str | None:
         pass
     
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
-    ft_conf = config.algorithm.get("finetune", None)
-    if ft_conf and bool(ft_conf.get("enable", False)):
-        ckpt_ft = os.path.abspath(str(config.get("ckpt_path", "")))
+    ft_conf = config.algorithm.get("finetune")
+    if ft_conf and bool(ft_conf["enable"]):
+        ckpt_ft = os.path.abspath(str(config["ckpt_path"]))
         if not ckpt_ft:
             raise RuntimeError("Finetune is enabled but no ckpt_path was provided.")
         if not os.path.isfile(ckpt_ft):
@@ -181,10 +120,10 @@ def train(config: DictConfig) -> str | None:
         algorithm: AlgorithmBase = MLSP.load_from_checkpoint(
             ckpt_ft,
             strict=False,
-            out_norm=float(config.algorithm.get("out_norm")),
-            use_sip2net=bool(config.algorithm.get("use_sip2net", False)),
+            out_norm=float(config.algorithm["out_norm"]),
+            use_sip2net=bool(config.algorithm["use_sip2net"]),
             sip2net_params=(OmegaConf.to_container(
-                config.algorithm.get("sip2net_params"), resolve=True
+                config.algorithm["sip2net_params"], resolve=True
             ) if "sip2net_params" in config.algorithm else {}),
             compiled=compiled_obj,
             optimizer_conf=(OmegaConf.to_yaml(config.optimizer) if "optimizer" in config else None),
@@ -192,11 +131,11 @@ def train(config: DictConfig) -> str | None:
             network=None,
             network_conf=(OmegaConf.to_yaml(config.network) if "network" in config else None),
             gpu=None,
-            finetune=(OmegaConf.to_container(ft_conf, resolve=True) if ft_conf else {}),
+            finetune=OmegaConf.to_container(ft_conf, resolve=True),
             epoch_counter=epoch_counter,
         )
         # Optional: capture reference weights for L2-SP
-        if bool(ft_conf.get("l2sp", {}).get("enable", False)):
+        if bool(ft_conf["l2sp"]["enable"]):
             algorithm._capture_pretrained_reference()
         log.info(f"[algorithm] loaded from checkpoint (finetune): {ckpt_ft}")
     else:

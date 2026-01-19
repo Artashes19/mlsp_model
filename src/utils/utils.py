@@ -5,13 +5,10 @@ from pathlib import Path
 from typing import Any, Sequence, Union
 
 import fcntl
-import numpy as np
-import psutil
 import pytorch_lightning as pl
 import rich.syntax
 import rich.tree
 import termios
-import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.utilities import rank_zero_only
@@ -106,29 +103,6 @@ def log_hyperparameters(
     trainer.logger.log_hyperparams = empty
 
 
-def pad_to_square(img, fill_value=-1, size=None):
-    if size is not None and max(img.shape) <= size:
-        pic_size = size
-        pic = np.full(shape=(pic_size, pic_size, *img.shape[2:]), fill_value=fill_value, dtype=img.dtype)
-        left = (size - img.shape[0]) // 2
-        top = (size - img.shape[1]) // 2
-        pic[left:left + img.shape[0], top:top + img.shape[1]] = img
-        return pic
-    else:
-        pic_size = max(img.shape)
-        if pic_size > img.shape[0]:
-            pad_size = (pic_size - img.shape[0]) // 2
-            pad = np.full(shape=(pad_size, pic_size, *img.shape[2:]), fill_value=fill_value, dtype=img.dtype)
-            img = np.concatenate((pad, img, pad), axis=0)
-        
-        elif pic_size > img.shape[1]:
-            pad_size = (pic_size - img.shape[1]) // 2
-            pad = np.full(shape=(pic_size, pad_size, *img.shape[2:]), fill_value=fill_value, dtype=img.dtype)
-            img = np.concatenate((pad, img, pad), axis=1)
-    
-    return img
-
-
 class EpochCounter:
     count = 0
 
@@ -160,50 +134,6 @@ class CompileParams:
     mode: str
     options: dict[str, Any]
     disable: bool
-
-
-def unpatch(tensor: torch.Tensor, h: int, w: int, channels: int, patch_size: int) -> torch.Tensor:
-    """
-    Args:
-        tensor: tokens of shape (batch size, token size, h, w)
-        h: image height / patch size
-        w: image width / patch size
-        channels: number of channels in the image
-        patch_size: patch size
-
-    Returns: Unpactched image of shape (batch size, number of channels, image height, image width)
-    """
-    # the next line of code was thoroughly thought and tested, never to be touched again
-    return tensor.permute(0, 2, 3, 1).reshape(
-        -1, h, w, channels, patch_size, patch_size
-    ).permute(
-        0, 3, 1, 4, 2, 5
-    ).reshape(
-        -1, channels, patch_size * h, patch_size * w
-    )
-
-
-def worker_initializer(cpu_list, index_counter):
-    """Initializer function for pool workers."""
-    # Get the process ID of the current worker
-    pid = os.getpid()
-    p = psutil.Process(pid)
-    
-    with index_counter.get_lock():
-        index = index_counter.value % len(cpu_list)
-        index_counter.value += 1
-    
-    # Assign CPU affinity based on the process index
-    cpu_index = cpu_list[index]
-    p.cpu_affinity([cpu_index])
-
-
-def _count_rows(p):
-    try:
-        with open(p, "r", newline="") as fp:
-            return max(0, sum(1 for _ in fp) - 1)
-    except Exception:
-        return -1
 
 
 def load_experiment_config(

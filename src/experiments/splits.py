@@ -1,39 +1,8 @@
-import json
-import os
 import random
-import time
 from collections import namedtuple
-from typing import Optional
 
 # Define the Split structure matching run.py usage
 Split = namedtuple("Split", ["seed", "train_small", "train_full", "validation"])
-
-
-def ensure_experiments_dir(root_name: str = "exps") -> str:
-    """
-    Ensures the root exps directory exists (e.g., /path/to/repo/exps).
-    Returns absolute path.
-    """
-    # Assuming run.py is in root, we go relative to CWD or find git root
-    root_abs = os.path.abspath(root_name)
-    os.makedirs(root_abs, exist_ok=True)
-    return root_abs
-
-
-def ensure_exp_dir(exp_dir_name: Optional[str], root_dir: str) -> str:
-    """
-    Creates a specific experiment directory. 
-    If exp_dir_name is None, creates a timestamped directory.
-    """
-    if exp_dir_name:
-        path = os.path.join(root_dir, exp_dir_name)
-    else:
-        # Create timestamped dir: YYYY-MM-DD_HH-MM-SS
-        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-        path = os.path.join(root_dir, timestamp)
-    
-    os.makedirs(path, exist_ok=True)
-    return path
 
 
 def generate_building_split(
@@ -74,36 +43,3 @@ def generate_building_split(
         train_full=train_full,
         validation=validation
     )
-
-
-def write_split_json(exp_dir: str, split: Split) -> None:
-    """Saves the split to split.json in the experiment dir."""
-    path = os.path.join(exp_dir, "split.json")
-    data = {
-        "seed": split.seed,
-        "train_small": split.train_small,
-        "train_full": split.train_full,
-        "validation": split.validation
-    }
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-def read_split_json(exp_dir: str) -> Optional[Split]:
-    """Reads split.json if it exists."""
-    path = os.path.join(exp_dir, "split.json")
-    if not os.path.isfile(path):
-        return None
-    
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-        
-        return Split(
-            seed=data.get("seed", 0),
-            train_small=data.get("train_small", []),
-            train_full=data.get("train_full", []),
-            validation=data.get("validation", [])
-        )
-    except Exception:
-        return None
