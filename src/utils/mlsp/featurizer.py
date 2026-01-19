@@ -507,7 +507,7 @@ def normalize_input(input_tensor):
     # Channels 0,1 (reflectance, transmittance): simple /255 normalization
     normalized[0] = normalized[0] / 255.0
     normalized[1] = normalized[1] / 255.0
-    normalized[2] = torch.log10(1 + normalized[2])
+    normalized[2] = normalized[2] / 255.0
     normalized[3] = normalized[3] / min_antenna_gain
     normalized[4] = torch.log10(normalized[4]) - 1.9  # "magic shift"
     # normalized[5] is the mask, no normalization needed
