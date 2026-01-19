@@ -1,22 +1,71 @@
 import random
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms.functional import InterpolationMode
+from PIL import Image
 
 from src.utils.mlsp.featurizer import calculate_transmittance_loss
 from src.utils.mlsp.types import RadarSample
+from src.utils.mlsp.config_overrides import get_config
+
+# Legacy global for backward compatibility (prefer get_config().resize_backend)
+_RESIZE_BACKEND_OVERRIDE: Optional[Literal["torchvision", "pil"]] = None
+
+
+def set_resize_backend(backend: Literal["torchvision", "pil"]):
+    """Set the resize backend globally. Options: 'torchvision' or 'pil'.
+    
+    Note: This overrides the config file setting. Prefer using MLSP_OVERRIDES_CONFIG env var.
+    """
+    global _RESIZE_BACKEND_OVERRIDE
+    _RESIZE_BACKEND_OVERRIDE = backend
+
+
+def _get_resize_backend() -> str:
+    """Get effective resize backend (override > config > default)."""
+    if _RESIZE_BACKEND_OVERRIDE is not None:
+        return _RESIZE_BACKEND_OVERRIDE
+    return get_config().resize_backend
+
+
+def _resize_pil(img: torch.Tensor, new_size: tuple) -> torch.Tensor:
+    """Resize using PIL (matches korean-model exactly).
+    
+    Key: korean-model resizes uint8 images, then converts to float.
+    To match exactly, we must resize as uint8, not float32.
+    """
+    squeeze = False
+    if img.dim() == 2:
+        img = img.unsqueeze(0)
+        squeeze = True
+    
+    C, H, W = img.shape
+    pil_size = (new_size[1], new_size[0]) if len(new_size) == 2 else (new_size[0], new_size[0])
+    
+    result_channels = []
+    for c in range(C):
+        arr = img[c].numpy()
+        # Convert to uint8 for resize (matching korean-model)
+        # Assumes input is in [0, 255] range (raw pixel values)
+        arr_uint8 = np.clip(arr, 0, 255).astype(np.uint8)
+        pil_img = Image.fromarray(arr_uint8, mode='L')
+        pil_resized = pil_img.resize(pil_size, Image.BILINEAR)
+        # Keep as float32 (normalization happens later in featurizer)
+        result_channels.append(torch.from_numpy(np.array(pil_resized).astype(np.float32)))
+    
+    result = torch.stack(result_channels, dim=0)
+    if squeeze:
+        result = result.squeeze(0)
+    return result
 
 
 def resize_bilinear(img, new_size):
+    if _get_resize_backend() == "pil":
+        return _resize_pil(img, new_size)
     return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
-
-
-def resize_linear(img, new_size):
-    return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
-
 
 def resize_db(img, new_size):
     # Prevent overflow in 10^(x/10) for very large dB values (~>385 dB overflows float32)
@@ -69,7 +118,7 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     
     reflectance_resized = resize_bilinear(reflectance, new_size)
     transmittance_resized = resize_bilinear(transmittance, new_size)
-    distance_resized = resize_linear(distance, new_size)
+    distance_resized = resize_bilinear(distance, new_size)
     mask_resized = resize_bilinear(sample.mask.unsqueeze(0), new_size).squeeze(0)
     
     sample.x_ant = int(sample.x_ant * scale_x)
@@ -84,7 +133,7 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
         sample.floor_plan = resize_bilinear(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
 
     if sample.output_img != "":
-        sample.output_img = resize_linear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
+        sample.output_img = resize_bilinear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
     
     sample.H = sample.W = target_size
     sample.mask = mask_resized

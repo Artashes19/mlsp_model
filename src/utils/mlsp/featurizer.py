@@ -501,13 +501,15 @@ def calculate_antenna_gain(radiation_pattern, W, H, azimuth, x_ant, y_ant):
     return antenna_gain
 
 
-def normalize_input(input_tensor):
+def normalize_input(input_tensor, num_channels=9):
     min_antenna_gain = -55.0
     normalized = input_tensor.clone()
-    # Channels 0,1 (reflectance, transmittance): simple /255 normalization
+    # Channels 0,1,2: simple /255 normalization
     normalized[0] = normalized[0] / 255.0
     normalized[1] = normalized[1] / 255.0
-    normalized[2] = torch.log10(1 + normalized[2])
+    normalized[2] = normalized[2] / 255.0
+    if num_channels <= 3:
+        return normalized
     normalized[3] = normalized[3] / min_antenna_gain
     normalized[4] = torch.log10(normalized[4]) - 1.9  # "magic shift"
     # normalized[5] is the mask, no normalization needed
@@ -670,11 +672,21 @@ def featurizer(
     approximation_feature_func=get_fspl,
     sparse_range: tuple[float, float] = (0.0, 0.01),
     modality_dropout_prob: float = 0.6666,
-    sparse_dropout_given_dropout: float = 0.5
+    sparse_dropout_given_dropout: float = 0.5,
+    num_channels: int = 9
 ) -> torch.Tensor:
     reflectance = sample.input_img[0]  # First channel
     transmittance = sample.input_img[1]  # Second channel
     distance = sample.input_img[2]  # Third channel
+    
+    # For 3-channel mode, skip all extra computation
+    if num_channels <= 3:
+        input_tensor = torch.zeros((num_channels, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
+        input_tensor[0] = reflectance
+        input_tensor[1] = transmittance
+        input_tensor[2] = distance
+        return normalize_input(input_tensor, num_channels)
+    
     radiation_pattern = sample.radiation_pattern
     antenna_gain = calculate_antenna_gain(
         radiation_pattern,
@@ -742,7 +754,7 @@ def featurizer(
                 sparse_channel[rows, cols] = output_img[rows, cols]
                 input_tensor[8] = sparse_channel
     
-    input_tensor = normalize_input(input_tensor)
+    input_tensor = normalize_input(input_tensor, num_channels)
     
     return input_tensor
 
