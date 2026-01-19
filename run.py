@@ -50,9 +50,6 @@ def main(config: DictConfig) -> None:
     except Exception:
         pass
     
-    if config.get("print_config"):
-        utils.print_config(config, fields=tuple(config.keys()), resolve=True)
-    
     if config.get("ignore_warnings"):
         log.info("Disabling python warnings! <config.ignore_warnings=True>")
         warnings.filterwarnings("ignore")
@@ -62,6 +59,8 @@ def main(config: DictConfig) -> None:
     elif config["name"] == "manifest":
         from src.manifest import manifest_prep
         
+        if config.get("print_config"):
+            utils.print_config(config, fields=tuple(config.keys()), resolve=True)
         return manifest_prep(config, project_root)
 
 

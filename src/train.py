@@ -14,7 +14,7 @@ from pytorch_lightning.strategies import ParallelStrategy
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.algorithms.mlsp import MLSP
 from src.datamodules.mlsp import MLSPDatamodule
-from src.utils import EpochCounter, load_experiment_config, log_hyperparameters
+from src.utils import EpochCounter, load_experiment_config, log_hyperparameters, print_config
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,9 @@ def train_prep(config: DictConfig, project_root: str):
     for exp in exp_list:
         cfg_e = clone_cfg(config["exps"][exp])
         config["exps"][exp] = load_experiment_config(cfg_e, config_root=os.path.join(project_root, "configs/exps"))
+    
+    if config.get("print_config"):
+        print_config(config, fields=tuple(config.keys()), resolve=True)
     
     # Fast-dev toggle
     fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
