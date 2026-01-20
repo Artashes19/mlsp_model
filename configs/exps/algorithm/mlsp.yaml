@@ -18,7 +18,7 @@ compiled:
   backend: inductor
   mode: max-autotune
   options: null
-  disable: True
+  disable: False
 
 finetune:
   enable: False

@@ -10,7 +10,7 @@ synthetic_dir: ${oc.env:SYNTH_ROOT}
 # Validation configuration
 val_buildings: [21, 22, 23, 24, 25]
 train_small_n: 7  # Number of buildings for small training set
-synthetic_val_size: 10000
+synthetic_val_size: 6240
 
 # Frequency settings
 freqs_mhz: [868, 1800, 3500]

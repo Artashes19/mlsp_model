@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import os
+import random
 from typing import List, Sequence
 
 from tqdm import tqdm
@@ -317,6 +318,66 @@ def filter_synthetic_manifest(src_csv: str, out_csv: str, limit_total: int | Non
             w.writerow(row)
             kept += 1
     return kept
+
+
+def split_synthetic_manifest(
+    src_csv: str,
+    train_csv: str,
+    val_csv: str,
+    val_size: int,
+) -> tuple[int, int]:
+    """
+    Split synthetic manifest into disjoint train/val sets.
+    
+    1. Read all rows from src_csv
+    2. Shuffle (assumes seed_everything already called)
+    3. First val_size rows -> val_csv
+    4. Remaining rows -> train_csv
+    
+    Returns (n_train, n_val).
+    """
+    if not src_csv or not os.path.exists(src_csv):
+        return -1, -1
+    
+    # Read all rows
+    with open(src_csv, "r", newline="") as fin:
+        rdr = csv.DictReader(fin)
+        fieldnames = rdr.fieldnames or [
+            "file_name",
+            "npz_file",
+            "json_file",
+            "building",
+            "antenna",
+            "freq_idx",
+            "sample_index",
+            "frequency_MHz",
+        ]
+        rows = list(rdr)
+    
+    # Shuffle (seed_everything already sets the global random state)
+    random.shuffle(rows)
+    
+    # Split: first val_size -> validation, rest -> training
+    val_rows = rows[:val_size]
+    train_rows = rows[val_size:]
+    
+    # Write validation manifest
+    os.makedirs(os.path.dirname(val_csv) or ".", exist_ok=True)
+    with open(val_csv, "w", newline="") as fout:
+        w = csv.DictWriter(fout, fieldnames=fieldnames)
+        w.writeheader()
+        for row in val_rows:
+            w.writerow(row)
+    
+    # Write training manifest
+    os.makedirs(os.path.dirname(train_csv) or ".", exist_ok=True)
+    with open(train_csv, "w", newline="") as fout:
+        w = csv.DictWriter(fout, fieldnames=fieldnames)
+        w.writeheader()
+        for row in train_rows:
+            w.writerow(row)
+    
+    return len(train_rows), len(val_rows)
 
 
 def main():

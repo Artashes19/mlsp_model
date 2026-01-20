@@ -9,7 +9,7 @@ from src.data_exploration.generate_manifest import (
     ensure_icassp_manifest,
     ensure_manifest as ensure_synth_manifest,
     filter_icassp_manifest,
-    filter_synthetic_manifest,
+    split_synthetic_manifest,
 )
 
 log = logging.getLogger(__name__)
@@ -156,40 +156,32 @@ def manifest_prep(
             f"(rows={rows}, took={dt:.2f}s)"
         )
         
-        # Generate full training manifest (copy of global, or just reference it)
+        # Generate disjoint train/val manifests (shuffled, then split)
         synth_train_manifest = os.path.join(
             synthetic_manifest_dir,
             "synthetic_train.csv",
         )
+        synth_val_manifest = os.path.join(
+            synthetic_manifest_dir,
+            f"synthetic_val_{synthetic_val_size}.csv",
+        )
         t0 = time.perf_counter()
-        n_train = filter_synthetic_manifest(
+        n_train, n_val = split_synthetic_manifest(
             src_csv=synth_global_manifest,
-            out_csv=synth_train_manifest,
-            limit_total=None,
+            train_csv=synth_train_manifest,
+            val_csv=synth_val_manifest,
+            val_size=synthetic_val_size,
         )
         dt = time.perf_counter() - t0
         log.info(
             f"[manifest] Synthetic train manifest: {synth_train_manifest} "
             f"(rows={n_train}, took={dt:.2f}s)"
         )
-        result["synth_train_manifest"] = synth_train_manifest
-        
-        # Generate validation manifest (limited by synthetic_val_size)
-        synth_val_manifest = os.path.join(
-            synthetic_manifest_dir,
-            f"synthetic_val_{synthetic_val_size}.csv",
-        )
-        t0 = time.perf_counter()
-        n_val = filter_synthetic_manifest(
-            src_csv=synth_global_manifest,
-            out_csv=synth_val_manifest,
-            limit_total=synthetic_val_size,
-        )
-        dt = time.perf_counter() - t0
         log.info(
             f"[manifest] Synthetic val manifest: {synth_val_manifest} "
             f"(rows={n_val}, took={dt:.2f}s)"
         )
+        result["synth_train_manifest"] = synth_train_manifest
         result["synth_val_manifest"] = synth_val_manifest
     else:
         log.warning(f"[manifest] Synthetic data dir not found or not specified: {synthetic_dir}")
