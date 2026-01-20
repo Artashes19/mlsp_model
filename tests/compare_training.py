@@ -41,6 +41,10 @@ SEED = 42
 NUM_TRAIN_SAMPLES = 8
 NUM_VAL_SAMPLES = 2
 
+# Precision setting (can be overridden via --precision flag or COMPARE_TRAINING_PRECISION env var)
+# Valid values: "32", "16", "bf16-mixed"
+PRECISION = os.environ.get("COMPARE_TRAINING_PRECISION", "bf16-mixed")
+
 # Hardcoded samples with 100% mask coverage (verified to avoid loss denominator issues)
 # These are from B1 building, freq=1, which all have full mask coverage
 VERIFIED_SAMPLES = [
@@ -193,6 +197,7 @@ def run_devbugfix():
         "+exps.e0.network.in_ch=3",
         # Training settings
         f"++exps.e0.trainer.max_epochs={NUM_EPOCHS}",
+        f"++exps.e0.trainer.precision={PRECISION}",  # Precision: 32, 16, or bf16-mixed
         "++exps.e0.trainer.devices=[0]",  # Use 0 because CUDA_VISIBLE_DEVICES=1 remaps it
         f"++exps.e0.datamodule.batch_size={BATCH_SIZE}",
         "++exps.e0.datamodule.num_workers=0",  # Don't need workers for 10 samples
@@ -303,15 +308,25 @@ def run_korean():
     # Create temporary config files with controlled settings
     import yaml
     
-    # Training config
+    # Training config - set AMP based on PRECISION setting
+    if PRECISION == "32":
+        amp_enabled = False
+        amp_dtype = "fp32"
+    elif PRECISION == "16":
+        amp_enabled = True
+        amp_dtype = "fp16"
+    else:  # bf16-mixed
+        amp_enabled = True
+        amp_dtype = "bf16"
+    
     train_config = {
         "lr": LEARNING_RATE,
         "epochs": NUM_EPOCHS,
         "batch_size": BATCH_SIZE,
         "num_workers": 0,
         "pin_memory": True,
-        "amp_dtype": "bf16",
-        "amp_enabled": True,  # Enable AMP (matches devbugfix's bf16-mixed precision)
+        "amp_dtype": amp_dtype,
+        "amp_enabled": amp_enabled,
         "clip_norm": 1.0,
         "checkpoint_dir": str(KOREAN_DIR),
     }
@@ -670,6 +685,8 @@ def run_full():
 
 
 def main():
+    global PRECISION
+    
     parser = argparse.ArgumentParser(description="Cross-branch training comparison")
     parser.add_argument("--run-devbugfix", action="store_true", help="Run training on devbugfix_khoren")
     parser.add_argument("--run-korean", action="store_true", help="Run training on korean-model")
@@ -677,7 +694,14 @@ def main():
     parser.add_argument("--clean", action="store_true", help="Clean up temporary files")
     parser.add_argument("--full", action="store_true", 
                         help="Run full comparison: devbugfix training → checkout korean → korean training → compare → restore")
+    parser.add_argument("--precision", type=str, default=None, choices=["32", "16", "bf16-mixed"],
+                        help="Training precision: 32 (fp32), 16 (fp16), or bf16-mixed (default)")
     args = parser.parse_args()
+    
+    # Set precision from argument or use default
+    if args.precision:
+        PRECISION = args.precision
+    print(f"Using precision: {PRECISION}")
     
     if not any([args.run_devbugfix, args.run_korean, args.compare, args.clean, args.full]):
         parser.print_help()
