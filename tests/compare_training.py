@@ -108,6 +108,7 @@ def verify_samples_have_full_mask(icassp_root: Path, sample_names: list[str]) ->
         sparse_range=[0.0, 0.0],
         modality_dropout_prob=0.0,
         sparse_dropout_given_dropout=0.0,
+        channels="rtdgfmpas",
     )
     
     verified = []

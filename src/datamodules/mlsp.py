@@ -44,8 +44,20 @@ class MLSPDatamodule(pl.LightningDataModule):
         synthetic_limit: Optional[int],
         train_samples_per_epoch: int,
         multi_gpu: bool,
+        channels: str,
         **kwargs
     ):
+        # Validate and store channels configuration
+        valid_channels = "rtdgfmpas"
+        if not channels:
+            raise ValueError("channels cannot be empty")
+        if len(channels) != len(set(channels)):
+            raise ValueError(f"channels cannot contain duplicates: {channels}")
+        invalid = set(channels) - set(valid_channels)
+        if invalid:
+            raise ValueError(f"Invalid channel letters: {invalid}. Valid letters: {valid_channels}")
+        self.channels = channels
+        
         self.freqs_mhz = freqs_mhz
         self.freqs = freqs
         self.data_dir = data_dir
@@ -74,6 +86,7 @@ class MLSPDatamodule(pl.LightningDataModule):
         
         # Store kwargs for dataset
         self.dataset_kwargs = kwargs
+        self.dataset_kwargs["channels"] = channels
         
         # Initialize base LightningDataModule
         super().__init__()

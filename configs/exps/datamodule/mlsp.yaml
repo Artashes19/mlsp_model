@@ -1,6 +1,11 @@
 _target_: src.datamodules.MLSPDatamodule
 
 name: indoor_dataset
+
+# Channel selection: string of letters specifying which channels to use
+# r=reflectance, t=transmittance, d=distance, g=antenna gain, f=frequency,
+# m=mask, p=floor plan, a=approximation feature, s=sparse measurements
+channels: "rtdgfmpas"
 batch_size: 24
 num_workers: 64
 

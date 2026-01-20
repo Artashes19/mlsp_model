@@ -501,20 +501,44 @@ def calculate_antenna_gain(radiation_pattern, W, H, azimuth, x_ant, y_ant):
     return antenna_gain
 
 
-def normalize_input(input_tensor, num_channels=9):
+def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmpas") -> torch.Tensor:
+    """
+    Normalize input tensor based on channel types.
+    
+    Channel letters and their normalization:
+        r - reflectance: /255
+        t - transmittance: /255
+        d - distance: /255
+        g - antenna gain: /min_antenna_gain (-55)
+        f - frequency: log10(x) - 1.9
+        m - mask: no normalization
+        p - floor plan: no normalization
+        a - approximation feature: (x - 87) / 160
+        s - sparse measurements: (x - 87) / 160
+    """
     min_antenna_gain = -55.0
     normalized = input_tensor.clone()
-    # Channels 0,1,2: simple /255 normalization
-    normalized[0] = normalized[0] / 255.0
-    normalized[1] = normalized[1] / 255.0
-    normalized[2] = normalized[2] / 255.0
-    if num_channels <= 3:
-        return normalized
-    normalized[3] = normalized[3] / min_antenna_gain
-    normalized[4] = torch.log10(normalized[4]) - 1.9  # "magic shift"
-    # normalized[5] is the mask, no normalization needed
-    normalized[7] = (normalized[7] - 87) / 160.0
-    normalized[8] = (normalized[8] - 87) / 160.0
+    
+    for idx, ch in enumerate(channels):
+        if ch == "r":
+            normalized[idx] = normalized[idx] / 255.0
+        elif ch == "t":
+            normalized[idx] = normalized[idx] / 255.0
+        elif ch == "d":
+            normalized[idx] = normalized[idx] / 255.0
+        elif ch == "g":
+            normalized[idx] = normalized[idx] / min_antenna_gain
+        elif ch == "f":
+            normalized[idx] = torch.log10(normalized[idx]) - 1.9
+        elif ch == "m":
+            pass  # mask: no normalization needed
+        elif ch == "p":
+            pass  # floor plan: no normalization needed
+        elif ch == "a":
+            normalized[idx] = (normalized[idx] - 87) / 160.0
+        elif ch == "s":
+            normalized[idx] = (normalized[idx] - 87) / 160.0
+    
     return normalized
 
 
@@ -673,46 +697,23 @@ def featurizer(
     sparse_range: tuple[float, float] = (0.0, 0.01),
     modality_dropout_prob: float = 0.6666,
     sparse_dropout_given_dropout: float = 0.5,
-    num_channels: int = 9
+    channels: str = "rtdgfmpas"
 ) -> torch.Tensor:
-    reflectance = sample.input_img[0]  # First channel
-    transmittance = sample.input_img[1]  # Second channel
-    distance = sample.input_img[2]  # Third channel
+    """
+    Build input tensor with selected channels.
     
-    # For 3-channel mode, skip all extra computation
-    if num_channels <= 3:
-        input_tensor = torch.zeros((num_channels, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
-        input_tensor[0] = reflectance
-        input_tensor[1] = transmittance
-        input_tensor[2] = distance
-        return normalize_input(input_tensor, num_channels)
-    
-    radiation_pattern = sample.radiation_pattern
-    antenna_gain = calculate_antenna_gain(
-        radiation_pattern,
-        sample.W,
-        sample.H,
-        sample.azimuth,
-        sample.x_ant,
-        sample.y_ant
-    )
-    # Build input tensor with a zero auxiliary channel to keep network input stable
-    # Channels: [reflectance, transmittance, distance, antenna_gain, frequency, mask, floor_plan, approximation_feature, sparse_measurements]
-    input_tensor = torch.zeros((9, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
-    input_tensor[0] = reflectance
-    input_tensor[1] = transmittance
-    input_tensor[2] = distance
-    input_tensor[3] = antenna_gain
-    input_tensor[4] = torch.full((sample.H, sample.W), sample.freq_MHz, dtype=torch.float32, device=torch.device("cpu"))
-    input_tensor[5] = sample.mask
-    
-    if sample.floor_plan is not None:
-        input_tensor[6] = sample.floor_plan
-    else:
-        input_tensor[6] = ((reflectance > 0) | (transmittance > 0)).float()
-
-    if sample.use_approximator_feature:
-        input_tensor[7] = approximation_feature_func(sample)
+    Channel letters:
+        r - reflectance
+        t - transmittance
+        d - distance
+        g - antenna gain
+        f - frequency
+        m - mask
+        p - floor plan
+        a - approximation feature (FSPL)
+        s - sparse measurements
+    """
+    num_channels = len(channels)
     
     # Modality dropout logic:
     # With prob modality_dropout_prob, turn off one modality (trans+ref OR sparse)
@@ -727,13 +728,27 @@ def featurizer(
         else:
             drop_trans_ref = True
     
-    # Apply trans+ref dropout if selected
-    if drop_trans_ref:
-        input_tensor[0] = torch.zeros_like(input_tensor[0])  # Zero out reflectance
-        input_tensor[1] = torch.zeros_like(input_tensor[1])  # Zero out transmittance
-        
-    # Sparse measurements channel (only populate if not dropping sparse)
-    if not drop_sparse and sample.output_img is not None:
+    # Precompute base data from sample
+    reflectance = sample.input_img[0]  # First channel
+    transmittance = sample.input_img[1]  # Second channel
+    distance = sample.input_img[2]  # Third channel
+    
+    # Compute antenna gain only if needed
+    antenna_gain = None
+    if "g" in channels or "a" in channels:
+        radiation_pattern = sample.radiation_pattern
+        antenna_gain = calculate_antenna_gain(
+            radiation_pattern,
+            sample.W,
+            sample.H,
+            sample.azimuth,
+            sample.x_ant,
+            sample.y_ant
+        )
+    
+    # Compute sparse measurements only if needed and not dropped
+    sparse_channel = None
+    if "s" in channels and not drop_sparse and sample.output_img is not None:
         sparsity = random.uniform(sparse_range[0], sparse_range[1])
         # Only sample from valid mask region
         valid_indices = torch.nonzero(sample.mask)
@@ -752,9 +767,42 @@ def featurizer(
                 rows = selected_indices[:, 0]
                 cols = selected_indices[:, 1]
                 sparse_channel[rows, cols] = output_img[rows, cols]
-                input_tensor[8] = sparse_channel
     
-    input_tensor = normalize_input(input_tensor, num_channels)
+    # Build input tensor dynamically based on channels string
+    input_tensor = torch.zeros((num_channels, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
+    
+    for idx, ch in enumerate(channels):
+        if ch == "r":
+            if drop_trans_ref:
+                input_tensor[idx] = torch.zeros_like(reflectance)
+            else:
+                input_tensor[idx] = reflectance
+        elif ch == "t":
+            if drop_trans_ref:
+                input_tensor[idx] = torch.zeros_like(transmittance)
+            else:
+                input_tensor[idx] = transmittance
+        elif ch == "d":
+            input_tensor[idx] = distance
+        elif ch == "g":
+            input_tensor[idx] = antenna_gain
+        elif ch == "f":
+            input_tensor[idx] = torch.full((sample.H, sample.W), sample.freq_MHz, dtype=torch.float32, device=torch.device("cpu"))
+        elif ch == "m":
+            input_tensor[idx] = sample.mask
+        elif ch == "p":
+            if sample.floor_plan is not None:
+                input_tensor[idx] = sample.floor_plan
+            else:
+                input_tensor[idx] = ((reflectance > 0) | (transmittance > 0)).float()
+        elif ch == "a":
+            if sample.use_approximator_feature:
+                input_tensor[idx] = approximation_feature_func(sample)
+        elif ch == "s":
+            if sparse_channel is not None:
+                input_tensor[idx] = sparse_channel
+    
+    input_tensor = normalize_input(input_tensor, channels)
     
     return input_tensor
 

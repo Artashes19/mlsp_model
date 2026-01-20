@@ -38,7 +38,7 @@ def run_devbugfix(resize_backend=None):
     from src.utils.mlsp.config_overrides import get_config
     config = get_config()
     
-    print(f"Running devbugfix_khoren PathlossDataset (num_channels={config.num_channels}, resize={config.resize_backend})...")
+    print(f"Running devbugfix_khoren PathlossDataset (channels={config.channels}, resize={config.resize_backend})...")
     
     from src.datamodules.mlsp import MLSPDatamodule
     from src.datamodules.datasets.mlsp import PathlossDataset
@@ -74,7 +74,7 @@ def run_devbugfix(resize_backend=None):
         sparse_range=[0.0, 0.0],
         modality_dropout_prob=0.0,  # No dropout
         sparse_dropout_given_dropout=0.0,
-        # num_channels from config (default 9, or 3 if korean_mode.yaml loaded)
+        channels=config.channels,  # channels from config (default "rtdgfmpas", or "rtd" if korean_mode.yaml loaded)
     )
     
     results = {}

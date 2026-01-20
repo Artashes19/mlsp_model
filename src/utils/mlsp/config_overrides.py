@@ -5,19 +5,22 @@ Usage:
     Set env var MLSP_OVERRIDES_CONFIG to path of a YAML file, e.g.:
         export MLSP_OVERRIDES_CONFIG=/path/to/korean_mode.yaml
     
-    If not set, defaults are used (torchvision resize, 9 channels).
+    If not set, defaults are used (torchvision resize, all 9 channels).
 
 Example YAML config (korean_mode.yaml):
     resize_backend: pil
-    num_channels: 3
+    channels: "rtd"
 """
 import os
 from typing import Literal, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import yaml
 
 # Environment variable name
 OVERRIDES_ENV_VAR = "MLSP_OVERRIDES_CONFIG"
+
+# Default channels string (all 9 channels)
+DEFAULT_CHANNELS = "rtdgfmpas"
 
 
 @dataclass
@@ -26,8 +29,15 @@ class OverridesConfig:
     # Resize backend: "torchvision" (default) or "pil" (korean-model compatible)
     resize_backend: Literal["torchvision", "pil"] = "torchvision"
     
-    # Number of output channels from featurizer: 9 (default) or 3 (korean-model compatible)
-    num_channels: int = 9
+    # Channels to use (default all 9: rtdgfmpas)
+    # r=reflectance, t=transmittance, d=distance, g=antenna gain, f=frequency,
+    # m=mask, p=floor plan, a=approximation feature, s=sparse measurements
+    channels: str = DEFAULT_CHANNELS
+    
+    @property
+    def num_channels(self) -> int:
+        """Number of channels (computed from channels string length)."""
+        return len(self.channels)
 
 
 # Global singleton instance
@@ -42,9 +52,21 @@ def _load_config() -> OverridesConfig:
         with open(config_path, "r") as f:
             overrides = yaml.safe_load(f) or {}
         
+        # Support both old num_channels and new channels format
+        channels = overrides.get("channels", DEFAULT_CHANNELS)
+        if "num_channels" in overrides and "channels" not in overrides:
+            # Legacy support: convert num_channels to channels
+            num_ch = int(overrides["num_channels"])
+            if num_ch == 3:
+                channels = "rtd"
+            elif num_ch == 9:
+                channels = DEFAULT_CHANNELS
+            else:
+                channels = DEFAULT_CHANNELS[:num_ch]
+        
         config = OverridesConfig(
             resize_backend=overrides.get("resize_backend", "torchvision"),
-            num_channels=int(overrides.get("num_channels", 9)),
+            channels=channels,
         )
         print(f"[config_overrides] Loaded from {config_path}: {config}")
         return config

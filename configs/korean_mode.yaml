@@ -5,4 +5,5 @@
 resize_backend: pil
 
 # Use 3 channels only: R, T, D (no antenna gain, FSPL, sparse, etc.)
-num_channels: 3
+# r=reflectance, t=transmittance, d=distance
+channels: "rtd"

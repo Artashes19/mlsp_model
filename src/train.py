@@ -111,6 +111,19 @@ def train(config: DictConfig) -> str | None:
         pass
     
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
+    
+    # Compute num_channels from datamodule.channels and inject into network config
+    if "network" in config and "datamodule" in config:
+        num_channels = len(config.datamodule.channels)
+        # Update the appropriate parameter based on network type
+        if "in_ch" in config.network:
+            config.network.in_ch = num_channels
+        if "n_channels" in config.network:
+            config.network.n_channels = num_channels
+        if "in_chans" in config.network:
+            config.network.in_chans = num_channels
+        log.info(f"[network] input channels set to {num_channels} from datamodule.channels='{config.datamodule.channels}'")
+    
     ft_conf = config.algorithm.get("finetune")
     if ft_conf and bool(ft_conf["enable"]):
         ckpt_ft = os.path.abspath(str(config["ckpt_path"]))
