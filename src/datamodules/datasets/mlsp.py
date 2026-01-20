@@ -160,9 +160,6 @@ class PathlossDataset(Dataset):
         input_img[2] = torch.from_numpy(dist_m)
         
         output_img = torch.from_numpy(pathloss)
-        # Normalize targets to [0, 1] by dividing by max dB (160)
-        output_img = output_img / 160.0
-        
         freq_MHz = float(meta["frequency_MHz"])  # required above
         radiation_pattern = torch.ones(360, dtype=torch.float32)
         
@@ -211,8 +208,7 @@ class PathlossDataset(Dataset):
             output_img = read_image(output_file).float()
             if output_img.size(0) == 1:
                 output_img = output_img.squeeze(0)
-            # Normalize targets to [0, 1] by dividing by max dB (160)
-            output_img = output_img / 160.0
+            # NOTE: Do NOT normalize here - normalization happens after resize in __getitem__
         sampling_positions = pd.read_csv(position_file)
         x_ant, y_ant, azimuth = sampling_positions.loc[int(sampling_position), ["Y", "X", "Azimuth"]]
         radiation_pattern_np = np.genfromtxt(radiation_pattern_file, delimiter=',')
@@ -267,6 +263,11 @@ class PathlossDataset(Dataset):
             sample = self.augmentations(sample)
         
         output_tensor = sample.output_img if sample.output_img is not None else None
+        
+        # Normalize output AFTER resize (matching korean-model order)
+        # This must happen after normalize_size because _resize_pil expects [0, 255] range
+        if output_tensor is not None and output_tensor != "":
+            output_tensor = output_tensor / 160.0
         
         input_tensor = featurizer(
             sample=sample,

@@ -56,7 +56,7 @@ class MLSP(AlgorithmBase):
             )
             log.info(f"Using SIP2Net loss")
         else:
-            log.info("Using pure MSE objective")
+            log.info("Using pure L1/MAE objective")
         
         self.training_step_outputs = []
         self.validation_step_outputs = defaultdict(list)
@@ -245,9 +245,9 @@ class MLSP(AlgorithmBase):
     def _step(self, batch, split_name, *args, **kwargs):
         inputs, targets, masks, sample = batch
         
-        # Use bfloat16 autocast for forward pass (enables Flash Attention)
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            preds = self._network(inputs)
+        # Lightning's bf16-mixed precision handles autocast for both forward AND loss
+        # (matches korean-model's AMP setup where autocast wraps forward + loss)
+        preds = self._network(inputs)
         
         # Squeeze channel dim: [B, 1, H, W] -> [B, H, W] to match targets shape
         if preds.dim() == 4:
