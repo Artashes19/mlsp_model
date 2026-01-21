@@ -8,19 +8,20 @@ Tests verify:
 5. Visual verification via saved plots
 
 Requirements:
-- Environment variables from .env (ICASSP_ORIG_PATH, SYNTHETIC_TRAIN_DIR, etc.)
+- Environment variables from .env (ICASSP_ORIG_PATH, SYNTH_ROOT, etc.)
 - Test generates fresh manifests at startup and cleans them up at the end
 """
 import os
-import sys
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-import torch
-import numpy as np
 import matplotlib
+import numpy as np
+import torch
+
 matplotlib.use('Agg')  # Non-interactive backend for saving plots
 import matplotlib.pyplot as plt
 
@@ -30,13 +31,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Load .env file (same as run.py)
 from dotenv import load_dotenv
+
 load_dotenv(PROJECT_ROOT / ".env")
 
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 import hydra
-
 
 # Constants from featurizer normalization
 NORM_OFFSET = 87.0
@@ -71,7 +72,7 @@ def setup_test_manifests():
     
     # Get data directories from environment
     icassp_root = os.environ.get("ICASSP_ORIG_PATH", "")
-    synth_root = os.environ.get("SYNTHETIC_TRAIN_DIR", "") or os.environ.get("SYNTH_ROOT", "")
+    synth_root = os.environ.get("SYNTH_ROOT", "")
     freqs_mhz = [868, 1800, 3500]
     
     # Generate/ensure global ICASSP manifest
@@ -99,7 +100,9 @@ def setup_test_manifests():
             list(split.validation),
             None
         )
-        print(f"[TEST SETUP] Created ICASSP manifests (train_small={len(split.train_small)}, train_full={len(split.train_full)}, val={len(split.validation)} buildings)")
+        print(
+            f"[TEST SETUP] Created ICASSP manifests (train_small={len(split.train_small)}, train_full={len(split.train_full)}, val={len(split.validation)} buildings)"
+        )
     else:
         raise RuntimeError(f"ICASSP_ORIG_PATH not set or invalid: {icassp_root}")
     
@@ -114,7 +117,7 @@ def setup_test_manifests():
         )
         print(f"[TEST SETUP] Created synthetic manifest")
     else:
-        print(f"[TEST SETUP] Synthetic data not available (SYNTHETIC_TRAIN_DIR={synth_root})")
+        print(f"[TEST SETUP] Synthetic data not available (SYNTH_ROOT={synth_root})")
     
     return _TEST_MANIFESTS_DIR
 
@@ -215,7 +218,7 @@ def save_batch_visualization(
     
     channel_names = [
         "Ch0: Reflectance",
-        "Ch1: Transmittance", 
+        "Ch1: Transmittance",
         "Ch2: Distance (log)",
         "Ch3: Antenna Gain",
         "Ch4: Frequency (log)",
@@ -293,7 +296,7 @@ class TestDataloaders(unittest.TestCase):
     def setUpClass(cls):
         cls.output_dir = PROJECT_ROOT / "tests" / "test_outputs"
         cls.output_dir.mkdir(parents=True, exist_ok=True)
-        
+    
     def _check_channel_ranges(self, inputs: torch.Tensor, name: str):
         """Check that channel values are in reasonable ranges after normalization."""
         print(f"\n  Channel value ranges for {name}:")
@@ -342,7 +345,7 @@ class TestDataloaders(unittest.TestCase):
         # Note: synthetic data has smaller valid regions (~3%) than ICASSP data (~30%+)
         valid_ratio = masks.float().mean().item()
         print(f"    Valid region ratio: {valid_ratio:.2%}")
-        self.assertGreater(valid_ratio, min_valid_ratio, f"Mask should have >{min_valid_ratio*100:.0f}% valid region")
+        self.assertGreater(valid_ratio, min_valid_ratio, f"Mask should have >{min_valid_ratio * 100:.0f}% valid region")
     
     def _check_sparsity(self, inputs: torch.Tensor, cfg, name: str) -> dict:
         """Check that sparsity matches config expectations."""
@@ -354,7 +357,9 @@ class TestDataloaders(unittest.TestCase):
         sparse_prob = 1.0 - modality_dropout_prob * sparse_dropout_given_dropout
         
         print(f"\n  Sparsity check for {name}:")
-        print(f"    Config: modality_dropout_prob={modality_dropout_prob}, sparse_dropout_given_dropout={sparse_dropout_given_dropout}")
+        print(
+            f"    Config: modality_dropout_prob={modality_dropout_prob}, sparse_dropout_given_dropout={sparse_dropout_given_dropout}"
+        )
         print(f"    Effective sparse_prob: {sparse_prob:.3f}, sparse_range={sparse_range}")
         
         batch_size = inputs.shape[0]
@@ -393,7 +398,7 @@ class TestDataloaders(unittest.TestCase):
         
         if sparsities:
             avg_sparsity = np.mean(sparsities)
-            print(f"    Average sparsity (among sparse samples): {avg_sparsity:.4f} ({avg_sparsity*100:.2f}%)")
+            print(f"    Average sparsity (among sparse samples): {avg_sparsity:.4f} ({avg_sparsity * 100:.2f}%)")
             
             # Check sparsity is within configured range (with tolerance)
             min_sparse, max_sparse = sparse_range
@@ -454,22 +459,22 @@ class TestDataloaders(unittest.TestCase):
             match_rate = matching_pixels / total_sparse_pixels
             avg_max_diff = np.mean(max_diffs) if max_diffs else 0
             print(f"    Total sparse pixels: {total_sparse_pixels}")
-            print(f"    Matching pixels: {matching_pixels} ({match_rate*100:.1f}%)")
+            print(f"    Matching pixels: {matching_pixels} ({match_rate * 100:.1f}%)")
             print(f"    Average max diff per sample: {avg_max_diff:.6f}")
             
             # Use 95% threshold to allow for float precision issues in normalization
             self.assertGreater(
                 match_rate, 0.95,
-                f"Sparse values should match GT (got {match_rate*100:.1f}% match)"
+                f"Sparse values should match GT (got {match_rate * 100:.1f}% match)"
             )
         else:
             print("    No sparse measurements in this batch")
     
     def test_e0_dataloader(self):
         """Test e0 configuration (Real ICASSP Data)."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] e0 Dataloader - Real ICASSP Data")
-        print("="*60)
+        print("=" * 60)
         
         dm, cfg = create_datamodule("e0")
         
@@ -514,9 +519,9 @@ class TestDataloaders(unittest.TestCase):
     
     def test_e2_dataloader(self):
         """Test e2 configuration (Synthetic Data)."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] e2 Dataloader - Synthetic Data")
-        print("="*60)
+        print("=" * 60)
         
         dm, cfg = create_datamodule("e2")
         
@@ -560,9 +565,9 @@ class TestDataloaders(unittest.TestCase):
     
     def test_multiple_batches_consistency(self):
         """Test that multiple batches are consistent in format."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Multiple Batches Consistency")
-        print("="*60)
+        print("=" * 60)
         
         dm, cfg = create_datamodule("e0")
         loader = dm.train_dataloader()
@@ -574,11 +579,13 @@ class TestDataloaders(unittest.TestCase):
             if i >= n_batches:
                 break
             inputs, targets, masks, meta = batch
-            batch_shapes.append({
-                'inputs': inputs.shape,
-                'targets': targets.shape,
-                'masks': masks.shape
-            })
+            batch_shapes.append(
+                {
+                    'inputs': inputs.shape,
+                    'targets': targets.shape,
+                    'masks': masks.shape
+                }
+            )
             
             # Quick sanity checks
             self.assertEqual(inputs.shape[1], 9)
