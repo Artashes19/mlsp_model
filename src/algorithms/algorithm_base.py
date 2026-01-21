@@ -59,7 +59,6 @@ class AlgorithmBase(pl.LightningModule):
         self._is_compiled = False
         self._compiled_forward = None
         self._original_forward = None
-        self._flop_counter = FlopCounterMode(display=False, depth=1)
         self._start = torch.cuda.Event(enable_timing=True)
         self._end = torch.cuda.Event(enable_timing=True)
     
@@ -140,9 +139,11 @@ class AlgorithmBase(pl.LightningModule):
             
             if should_count:
                 if self.global_rank == 0:
-                    with self._flop_counter:
+                    # Create fresh FlopCounterMode to avoid memory retention
+                    flop_counter = FlopCounterMode(display=False, depth=1)
+                    with flop_counter:
                         result = fwd(*args, **kwargs)
-                    flops = self._flop_counter.get_total_flops()
+                    flops = flop_counter.get_total_flops()
                     phase = "train" if is_training else "val"
                     if is_training:
                         self._num_flops_train = flops
