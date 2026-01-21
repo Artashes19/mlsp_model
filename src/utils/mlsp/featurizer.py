@@ -481,8 +481,6 @@ def calculate_pl_init(
     # auxiliary based update disabled
     
     pl_init = free_space_pathloss + transmittance_loss
-    if sample.pl_clip != float("inf"):
-        pl_init = torch.minimum(pl_init, sample.pl_clip)
     
     return pl_init
 
@@ -796,8 +794,7 @@ def featurizer(
             else:
                 input_tensor[idx] = ((reflectance > 0) | (transmittance > 0)).float()
         elif ch == "a":
-            if sample.use_approximator_feature:
-                input_tensor[idx] = approximation_feature_func(sample)
+            input_tensor[idx] = approximation_feature_func(sample)
         elif ch == "s":
             if sparse_channel is not None:
                 input_tensor[idx] = sparse_channel

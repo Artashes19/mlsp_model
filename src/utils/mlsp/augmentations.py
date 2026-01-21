@@ -181,9 +181,6 @@ class GeometricAugmentation(BaseAugmentation):
         sample.output_img += fspl_adjustment
         sample.pixel_size *= scale_factor
         
-        if sample.pl_clip != float("inf"):
-            sample.pl_clip += fspl_adjustment
-        
         return sample
     
     def _apply_rotation(self, sample: RadarSample, angle: float) -> RadarSample:
@@ -333,8 +330,6 @@ class GeometricAugmentation(BaseAugmentation):
         sample.input_img[1][sample.mask == 1] += new_walls[sample.mask == 1]
         sample.output_img[sample.mask == 1] += new_walls_transmittance_loss[sample.mask == 1]
         sample.input_img[-1][sample.input_img[-1] != 0] += new_walls_transmittance_loss[sample.input_img[-1] != 0]
-        if sample.pl_clip != float("inf"):
-            sample.pl_clip += new_walls_transmittance_loss.max()
         
         return sample
     

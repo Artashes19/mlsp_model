@@ -106,9 +106,6 @@ def create_mock_sample(
     
     return RadarSample(
         file_name="mock_sample",
-        pl_clip=None,
-        use_approximator_feature=True,
-        use_transmittance_loss=True,
         H=H,
         W=W,
         x_ant=x_ant,

@@ -26,11 +26,7 @@ class PathlossDataset(Dataset):
         self,
         inputs_list,
         training: bool,
-        pl_clip: Optional[int],
-        use_approximator_feature: bool,
-        use_transmittance_loss: bool,
         inference: bool,
-        augment_val: bool,
         augmentations: Optional[AugmentationPipeline],
         sparse_range: list[float],
         modality_dropout_prob: float,
@@ -41,11 +37,7 @@ class PathlossDataset(Dataset):
         self.inputs_list = inputs_list
         self.training = training
         self.augmentations = augmentations
-        self.pl_clip = pl_clip
-        self.use_approximator_feature = use_approximator_feature
-        self.use_transmittance_loss = use_transmittance_loss
         self.inference = inference
-        self.augment_val = augment_val
         self.sparse_range = sparse_range
         self.modality_dropout_prob = modality_dropout_prob
         self.sparse_dropout_given_dropout = sparse_dropout_given_dropout
@@ -164,16 +156,8 @@ class PathlossDataset(Dataset):
         freq_MHz = float(meta["frequency_MHz"])  # required above
         radiation_pattern = torch.ones(360, dtype=torch.float32)
         
-        if self.pl_clip is not None and not self.inference:
-            pl_clip = torch.tensor(self.pl_clip, dtype=torch.float32)
-        else:
-            pl_clip = float("inf")
-        
         sample = RadarSample(
             file_name=file_name,
-            pl_clip=pl_clip,
-            use_approximator_feature=self.use_approximator_feature,
-            use_transmittance_loss=self.use_transmittance_loss,
             H=H,
             W=W,
             x_ant=x_ant,
@@ -215,16 +199,8 @@ class PathlossDataset(Dataset):
         radiation_pattern_np = np.genfromtxt(radiation_pattern_file, delimiter=',')
         radiation_pattern = torch.from_numpy(radiation_pattern_np).float()
         
-        if self.pl_clip is not None and not self.inference:
-            pl_clip = torch.tensor(self.pl_clip, dtype=torch.float32)
-        else:
-            pl_clip = float("inf")
-        
         sample = RadarSample(
             file_name=file_name,
-            pl_clip=pl_clip,
-            use_approximator_feature=self.use_approximator_feature,
-            use_transmittance_loss=self.use_transmittance_loss,
             H=H,
             W=W,
             x_ant=x_ant,
@@ -257,10 +233,7 @@ class PathlossDataset(Dataset):
         
         sample = normalize_size(sample=sample, target_size=self.target_size)
         
-        if (
-            self.training or
-            (self.augment_val and sample.output_img != "")
-        ) and self.augmentations is not None:
+        if self.training and self.augmentations is not None:
             sample = self.augmentations(sample)
         
         output_tensor = sample.output_img if sample.output_img is not None else None

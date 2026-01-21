@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from src.datamodules.datasets import PathlossDataset
 from src.samplers import DistributedCyclicSampler
-from src.utils.mlsp.augmentations import AugmentationPipeline, GeometricAugmentation
+from src.utils.mlsp.augmentations import AugmentationPipeline
 
 log = logging.getLogger(__name__)
 
@@ -25,14 +25,6 @@ class MLSPDatamodule(pl.LightningDataModule):
         synthetic_dir: str,
         freqs_mhz: list[int],
         freqs: list[int],
-        aug_p: float,
-        walls_aug_p: Optional[int],
-        transmittance_range: Optional[tuple[int, int]],
-        flip_vertical: bool,
-        flip_horizontal: bool,
-        angle_range: Optional[tuple[float, float]],
-        cardinal_rotation: bool,
-        scale_range: Optional[tuple[float, float]],
         inference: bool,
         use_synthetic_train: bool,
         use_small_train: bool,
@@ -45,6 +37,7 @@ class MLSPDatamodule(pl.LightningDataModule):
         train_samples_per_epoch: int,
         multi_gpu: bool,
         channels: str,
+        train_augmentations: Optional[AugmentationPipeline],
         **kwargs
     ):
         # Validate and store channels configuration
@@ -64,14 +57,8 @@ class MLSPDatamodule(pl.LightningDataModule):
         self.synthetic_dir = synthetic_dir
         self.inference = inference
         
-        self.aug_p = aug_p
-        self.walls_aug_p = walls_aug_p
-        self.transmittance_range = transmittance_range
-        self.angle_range = angle_range
-        self.scale_range = scale_range
-        self.flip_vertical = flip_vertical
-        self.flip_horizontal = flip_horizontal
-        self.cardinal_rotation = cardinal_rotation
+        # Training augmentations config (Hydra instantiable dict or None)
+        self.train_augmentations = train_augmentations
         
         # Experiment controls
         self.use_synthetic_train = use_synthetic_train
@@ -273,63 +260,31 @@ class MLSPDatamodule(pl.LightningDataModule):
                 f"use_synthetic_train={self.use_synthetic_train}"
             )
             
-            # Training augmentations
-            train_augmentations = AugmentationPipeline(
-                [
-                    GeometricAugmentation(
-                        p=self.aug_p,
-                        walls_p=self.walls_aug_p,
-                        transmittance_range=self.transmittance_range,
-                        angle_range=self.angle_range,
-                        scale_range=self.scale_range,
-                        flip_vertical=self.flip_vertical,
-                        flip_horizontal=self.flip_horizontal,
-                        cardinal_rotation=self.cardinal_rotation,
-                    ),
-                ]
-            )
-            
-            # Validation augmentations (no random transforms)
-            val_augmentations = AugmentationPipeline(
-                [
-                    GeometricAugmentation(
-                        p=0,
-                        walls_p=self.walls_aug_p,
-                        transmittance_range=self.transmittance_range,
-                        angle_range=(0, 0),
-                        scale_range=(1, 1),
-                        flip_vertical=self.flip_vertical,
-                        flip_horizontal=self.flip_horizontal,
-                        cardinal_rotation=self.cardinal_rotation,
-                    ),
-                ]
-            )
-            
             # Create training dataset
             self._train_set = PathlossDataset(
                 train_inputs,
                 training=True,
-                augmentations=train_augmentations,
+                augmentations=self.train_augmentations,
                 inference=False,
                 **self.dataset_kwargs
             )
             
-            # Create ICASSP validation dataset (always)
+            # Create ICASSP validation dataset (always, no augmentations)
             self._val_set = PathlossDataset(
                 icassp_val_inputs,
                 training=False,
-                augmentations=val_augmentations,
+                augmentations=None,
                 inference=False,
                 **self.dataset_kwargs
             )
             self._test_set = self._val_set
             
-            # Create synthetic validation dataset (only for synthetic training)
+            # Create synthetic validation dataset (only for synthetic training, no augmentations)
             if synth_val_inputs:
                 self._synth_val_set = PathlossDataset(
                     synth_val_inputs,
                     training=False,
-                    augmentations=val_augmentations,
+                    augmentations=None,
                     inference=False,
                     **self.dataset_kwargs
                 )
