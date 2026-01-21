@@ -184,7 +184,7 @@ def run_devbugfix():
     env = os.environ.copy()
     env["INDOOR_OVERRIDES_CONFIG"] = str(repo_root / "configs" / "korean_mode.yaml")
     env["OUTPUT_DIR"] = str(DEVBUGFIX_DIR)
-    env["CUDA_VISIBLE_DEVICES"] = "1"
+    env["CUDA_VISIBLE_DEVICES"] = "0"
     
     # Build Hydra command with the subset manifest
     # Use ++ to override existing values, + for new values
@@ -414,7 +414,7 @@ main()
     
     # Set environment - use GPU 1
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = "1"
+    env["CUDA_VISIBLE_DEVICES"] = "0"
     
     result = subprocess.run(
         cmd,
@@ -657,6 +657,7 @@ def run_full():
     # Pass repo_root via environment variable since the script is in /tmp
     env = os.environ.copy()
     env["COMPARE_TRAINING_REPO_ROOT"] = str(repo_root)
+    env["COMPARE_TRAINING_PRECISION"] = PRECISION
     
     cmd = [sys.executable, str(test_script_copy), "--run-korean"]
     result = subprocess.run(cmd, cwd=repo_root, env=env)
@@ -702,7 +703,7 @@ def main():
     parser.add_argument("--clean", action="store_true", help="Clean up temporary files")
     parser.add_argument("--full", action="store_true", 
                         help="Run full comparison: devbugfix training → checkout korean → korean training → compare → restore")
-    parser.add_argument("--precision", type=str, default=None, choices=["32", "16", "bf16-mixed"],
+    parser.add_argument("--precision", type=str, default='32', choices=["32", "16", "bf16-mixed"],
                         help="Training precision: 32 (fp32), 16 (fp16), or bf16-mixed (default)")
     args = parser.parse_args()
     
