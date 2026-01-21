@@ -197,6 +197,27 @@ def main() -> None:
         for idx, ch in enumerate(args.channels):
             writer.writerow([idx, ch, float(mean[idx]), float(std[idx]), float(vmin[idx]), float(vmax[idx])])
 
+    with open(out_dir / "stats_nonzero.csv", "w", newline="") as fp:
+        writer = csv.writer(fp)
+        writer.writerow(["channel_idx", "channel_letter", "nonzero_mean", "nonzero_std", "nonzero_min", "nonzero_max", "nonzero_count"])
+        for idx, ch in enumerate(args.channels):
+            channel_flat = flat[:, idx, :].ravel()
+            nz_mask = channel_flat != 0
+            nz_count = int(nz_mask.sum())
+            if nz_count == 0:
+                writer.writerow([idx, ch, float("nan"), float("nan"), float("nan"), float("nan"), nz_count])
+            else:
+                nz_vals = channel_flat[nz_mask]
+                writer.writerow([
+                    idx,
+                    ch,
+                    float(nz_vals.mean()),
+                    float(nz_vals.std()),
+                    float(nz_vals.min()),
+                    float(nz_vals.max()),
+                    nz_count,
+                ])
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
