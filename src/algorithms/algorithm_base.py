@@ -50,16 +50,14 @@ class AlgorithmBase(pl.LightningModule):
         self.validation_step_outputs = defaultdict(lambda: defaultdict(list))
         self.test_step_outputs = defaultdict(lambda: defaultdict(list))
         
-        # FLOPs and timing tracking state (per-phase)
-        self._should_count_flops_train = True
-        self._should_count_flops_val = True
+        # FLOPs and timing tracking state
+        self._should_count_flops = True  # Only count once, during first training step
         self._num_flops_train = None
         self._num_flops_val = None
         self._last_elapsed_ms = None
         self._is_compiled = False
         self._compiled_forward = None
         self._original_forward = None
-        self._flop_counter = FlopCounterMode(display=False, depth=1)
         self._start = torch.cuda.Event(enable_timing=True)
         self._end = torch.cuda.Event(enable_timing=True)
     
@@ -134,29 +132,30 @@ class AlgorithmBase(pl.LightningModule):
             # Use compiled forward if available, otherwise original
             fwd = self._compiled_forward if self._compiled_forward else self._original_forward
             
-            # Determine phase from model training state
-            is_training = self._network.training
-            should_count = self._should_count_flops_train if is_training else self._should_count_flops_val
-            
-            if should_count:
+            # Count both train and val FLOPs during first training step only
+            if self._should_count_flops and self._network.training:
                 if self.global_rank == 0:
-                    with self._flop_counter:
+                    # 1. Measure training FLOPs (already in training mode)
+                    flop_counter_train = FlopCounterMode(display=False, depth=1)
+                    with flop_counter_train:
                         result = fwd(*args, **kwargs)
-                    flops = self._flop_counter.get_total_flops()
-                    phase = "train" if is_training else "val"
-                    if is_training:
-                        self._num_flops_train = flops
-                        self._should_count_flops_train = False
-                    else:
-                        self._num_flops_val = flops
-                        self._should_count_flops_val = False
-                    log.info(f"[FLOPs] Measured network FLOPs ({phase}): {flops:.2e}")
+                    self._num_flops_train = flop_counter_train.get_total_flops()
+                    log.info(f"[FLOPs] Measured network FLOPs (train): {self._num_flops_train:.2e}")
+                    
+                    # 2. Measure validation FLOPs by temporarily switching to eval mode
+                    self._network.eval()
+                    flop_counter_val = FlopCounterMode(display=False, depth=1)
+                    with torch.no_grad():
+                        with flop_counter_val:
+                            _ = fwd(*args, **kwargs)
+                    self._num_flops_val = flop_counter_val.get_total_flops()
+                    log.info(f"[FLOPs] Measured network FLOPs (val): {self._num_flops_val:.2e}")
+                    
+                    # 3. Switch back to training mode
+                    self._network.train()
                 else:
                     result = fwd(*args, **kwargs)
-                    if is_training:
-                        self._should_count_flops_train = False
-                    else:
-                        self._should_count_flops_val = False
+                self._should_count_flops = False
             else:
                 result = fwd(*args, **kwargs)
             
