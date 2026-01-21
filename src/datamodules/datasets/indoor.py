@@ -169,7 +169,7 @@ class PathlossDataset(Dataset):
             radiation_pattern=radiation_pattern,
             pixel_size=pixel_size,
             mask=torch.from_numpy(mask_np),
-            floor_plan=data["mask"],
+            floor_plan=torch.from_numpy(data["mask"]),
         )
         sample = self.pad_sample(sample)
         return sample
