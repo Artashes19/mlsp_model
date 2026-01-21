@@ -56,7 +56,7 @@ echo "Cleaning up previous results..."
 rm -rf /tmp/training_comparison/devbugfix/* /tmp/training_comparison/korean/2026-* /tmp/training_comparison/korean/data_subset 2>/dev/null || true
 
 # Set environment variable for korean_mode
-export MLSP_OVERRIDES_CONFIG="$REPO_ROOT/configs/korean_mode.yaml"
+export INDOOR_OVERRIDES_CONFIG="$REPO_ROOT/configs/korean_mode.yaml"
 
 # Run the comparison
 echo ""

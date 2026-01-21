@@ -32,22 +32,22 @@ def run_devbugfix(resize_backend=None):
     
     # Only override if explicitly specified (otherwise use config/default)
     if resize_backend is not None:
-        from src.utils.mlsp.augmentations import set_resize_backend
+        from src.utils.indoor.augmentations import set_resize_backend
         set_resize_backend(resize_backend)
     
-    from src.utils.mlsp.config_overrides import get_config
+    from src.utils.indoor.config_overrides import get_config
     config = get_config()
     
     print(f"Running devbugfix_khoren PathlossDataset (channels={config.channels}, resize={config.resize_backend})...")
     
-    from src.datamodules.mlsp import MLSPDatamodule
-    from src.datamodules.datasets.mlsp import PathlossDataset
+    from src.datamodules.indoor import IndoorDatamodule
+    from src.datamodules.datasets.indoor import PathlossDataset
     
     icassp_root = os.environ.get("ICASSP_ORIG_PATH", "")
     manifest_path = os.path.join(icassp_root, "manifests", "icassp_val_21_22_23_24_25.csv")
     
     # Use the real get_inputs_list to build inputs from manifest
-    inputs_list = MLSPDatamodule.get_inputs_list(
+    inputs_list = IndoorDatamodule.get_inputs_list(
         freqs_mhz=[868],  # Just one freq for simplicity
         freqs=[1],
         manifest_path=manifest_path,
@@ -221,7 +221,7 @@ def main():
     parser.add_argument("--run-korean", action="store_true", help="Run korean-model data loader")
     parser.add_argument("--compare", action="store_true", help="Compare saved outputs")
     parser.add_argument("--resize-backend", choices=["torchvision", "pil"], default=None,
-                        help="Override resize backend (default: use MLSP_OVERRIDES_CONFIG or torchvision)")
+                        help="Override resize backend (default: use INDOOR_OVERRIDES_CONFIG or torchvision)")
     args = parser.parse_args()
     
     if not any([args.run_devbugfix, args.run_korean, args.compare]):

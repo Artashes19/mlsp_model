@@ -10,7 +10,7 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
 from src.algorithms.algorithm_base import AlgorithmBase
-from src.datamodules.mlsp import MLSPDatamodule
+from src.datamodules.indoor import IndoorDatamodule
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def inference_prep(
     
     # Instantiate datamodule via hydra
     log.info(f"[inference] Instantiating datamodule: {config.datamodule._target_}")
-    datamodule: MLSPDatamodule = hydra.utils.instantiate(
+    datamodule: IndoorDatamodule = hydra.utils.instantiate(
         config.datamodule,
         multi_gpu=False,
     )

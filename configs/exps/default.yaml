@@ -3,11 +3,11 @@ default:
 
   defaults:
     - trainer: default
-    - datamodule: mlsp
+    - datamodule: indoor
     - optimizer: adam
     - scheduler: null
-    - algorithm: mlsp
-    - network: mlsp_unet
+    - algorithm: indoor
+    - network: unet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0 ]
     - loggers: [ aim ]
     - strategy: null

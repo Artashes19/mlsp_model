@@ -1,4 +1,4 @@
-_target_: src.datamodules.MLSPDatamodule
+_target_: src.datamodules.IndoorDatamodule
 
 name: indoor_dataset
 
@@ -27,9 +27,9 @@ sparse_dropout_given_dropout: 0.5
 
 # Training augmentations (Hydra-instantiated)
 train_augmentations:
-  _target_: src.utils.mlsp.augmentations.AugmentationPipeline
+  _target_: src.utils.indoor.augmentations.AugmentationPipeline
   augmentations:
-    - _target_: src.utils.mlsp.augmentations.GeometricAugmentation
+    - _target_: src.utils.indoor.augmentations.GeometricAugmentation
       p: 0.0
       walls_p: 0.0
       transmittance_range: [ 2, 18 ]

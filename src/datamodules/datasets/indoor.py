@@ -11,10 +11,10 @@ from torch.utils.data import Dataset
 from torchvision.io import read_image
 
 from src.utils import normalize_size, RadarSample
-from src.utils.mlsp.augmentations import AugmentationPipeline
-from src.utils.mlsp.featurizer import featurizer
-from src.utils.mlsp.types import RadarSampleInputs
-from src.utils.mlsp.config_overrides import get_config
+from src.utils.indoor.augmentations import AugmentationPipeline
+from src.utils.indoor.featurizer import featurizer
+from src.utils.indoor.types import RadarSampleInputs
+from src.utils.indoor.config_overrides import get_config
 
 INITIAL_PIXEL_SIZE = 0.25
 IMG_TARGET_SIZE = 256

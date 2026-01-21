@@ -1,15 +1,15 @@
 import random
-from typing import List, Literal, Optional
+from typing import List, Optional, Literal
 
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
-from PIL import Image
 from torchvision.transforms.functional import InterpolationMode
+from PIL import Image
 
-from src.utils.mlsp.config_overrides import get_config
-from src.utils.mlsp.featurizer import calculate_transmittance_loss
-from src.utils.mlsp.types import RadarSample
+from src.utils.indoor.featurizer import calculate_transmittance_loss
+from src.utils.indoor.types import RadarSample
+from src.utils.indoor.config_overrides import get_config
 
 # Legacy global for backward compatibility (prefer get_config().resize_backend)
 _RESIZE_BACKEND_OVERRIDE: Optional[Literal["torchvision", "pil"]] = None
@@ -66,7 +66,6 @@ def resize_bilinear(img, new_size):
     if _get_resize_backend() == "pil":
         return _resize_pil(img, new_size)
     return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
-
 
 def resize_db(img, new_size):
     # Prevent overflow in 10^(x/10) for very large dB values (~>385 dB overflows float32)
@@ -125,16 +124,14 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     sample.x_ant = int(sample.x_ant * scale_x)
     sample.y_ant = int(sample.y_ant * scale_y)
     
-    sample.input_img = torch.zeros(
-        (max(3, C), target_size, target_size), dtype=torch.float32, device=torch.device("cpu")
-        )
+    sample.input_img = torch.zeros((max(3, C), target_size, target_size), dtype=torch.float32, device=torch.device("cpu"))
     sample.input_img[0:1] = reflectance_resized
     sample.input_img[1:2] = transmittance_resized
     sample.input_img[2:3] = distance_resized
     
     if sample.floor_plan is not None:
         sample.floor_plan = resize_bilinear(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
-    
+
     if sample.output_img != "":
         sample.output_img = resize_bilinear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
     
@@ -215,7 +212,7 @@ class GeometricAugmentation(BaseAugmentation):
             fp_expanded = sample.floor_plan.unsqueeze(0)
             rot_fp = rotate_bilinear(fp_expanded, angle).squeeze(0)
             sample.floor_plan = rot_fp
-        
+
         if sample.mask is not None:
             mask_expanded = sample.mask.unsqueeze(0)
             rot_mask = rotate_bilinear(mask_expanded, angle).squeeze(0)
@@ -244,7 +241,7 @@ class GeometricAugmentation(BaseAugmentation):
                 sample.floor_plan = TF.hflip(sample.floor_plan)
             if flip_v:
                 sample.floor_plan = TF.vflip(sample.floor_plan)
-        
+
         if sample.output_img is not None:
             output_expanded = sample.output_img.unsqueeze(0)
             if flip_h:

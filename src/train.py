@@ -12,8 +12,8 @@ from pytorch_lightning.loggers import Logger
 from pytorch_lightning.strategies import ParallelStrategy
 
 from src.algorithms.algorithm_base import AlgorithmBase
-from src.algorithms.mlsp import MLSP
-from src.datamodules.mlsp import MLSPDatamodule
+from src.algorithms.indoor import Indoor
+from src.datamodules.indoor import IndoorDatamodule
 from src.utils import EpochCounter, load_experiment_config, log_hyperparameters, print_config
 
 log = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ def train(config: DictConfig) -> str | None:
     multi_gpu = gpus == -1 or (isinstance(gpus, Iterable) and len(gpus) > 1) or (isinstance(gpus, int) and gpus > 1)
     
     log.info(f"Instantiating datamodule <{config.datamodule._target_}>")
-    datamodule: MLSPDatamodule = hydra.utils.instantiate(
+    datamodule: IndoorDatamodule = hydra.utils.instantiate(
         config.datamodule,
         epoch_counter=epoch_counter,
         multi_gpu=multi_gpu,
@@ -131,9 +131,9 @@ def train(config: DictConfig) -> str | None:
             raise RuntimeError("Finetune is enabled but no ckpt_path was provided.")
         if not os.path.isfile(ckpt_ft):
             raise RuntimeError(f"Finetune checkpoint not found: {ckpt_ft}")
-        # Recreate MLSP via Lightning's load_from_checkpoint with current config
+        # Recreate Indoor via Lightning's load_from_checkpoint with current config
         compiled_obj = hydra.utils.instantiate(config.algorithm.compiled)
-        algorithm: AlgorithmBase = MLSP.load_from_checkpoint(
+        algorithm: AlgorithmBase = Indoor.load_from_checkpoint(
             ckpt_ft,
             strict=False,
             out_norm=float(config.algorithm["out_norm"]),

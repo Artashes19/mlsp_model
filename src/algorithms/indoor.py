@@ -10,15 +10,15 @@ from omegaconf import DictConfig, OmegaConf
 from torch.optim.lr_scheduler import LRScheduler
 
 from src.algorithms.algorithm_base import AlgorithmBase
-from src.datamodules.datasets.mlsp import IMG_TARGET_SIZE
+from src.datamodules.datasets.indoor import IMG_TARGET_SIZE
 from src.utils import CompileParams
-from src.utils.mlsp.augmentations import resize_bilinear
-from src.utils.mlsp.loss import create_sip2net_loss, se
+from src.utils.indoor.augmentations import resize_bilinear
+from src.utils.indoor.loss import create_sip2net_loss, se
 
 log = logging.getLogger(__name__)
 
 
-class MLSP(AlgorithmBase):
+class Indoor(AlgorithmBase):
     
     def __init__(
         self,

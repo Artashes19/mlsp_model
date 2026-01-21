@@ -10,12 +10,12 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from src.datamodules.datasets import PathlossDataset
 from src.samplers import DistributedCyclicSampler
-from src.utils.mlsp.augmentations import AugmentationPipeline
+from src.utils.indoor.augmentations import AugmentationPipeline
 
 log = logging.getLogger(__name__)
 
 
-class MLSPDatamodule(pl.LightningDataModule):
+class IndoorDatamodule(pl.LightningDataModule):
     
     def __init__(
         self,

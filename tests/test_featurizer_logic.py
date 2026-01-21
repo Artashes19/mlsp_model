@@ -27,8 +27,8 @@ from dotenv import load_dotenv
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-from src.utils.mlsp.types import RadarSample
-from src.utils.mlsp.featurizer import featurizer, normalize_input
+from src.utils.indoor.types import RadarSample
+from src.utils.indoor.featurizer import featurizer, normalize_input
 
 # Normalization constants from featurizer
 NORM_OFFSET = 87.0
@@ -655,7 +655,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         cls.GlobalHydra = GlobalHydra
         
         # Import dataset for reading samples
-        from src.datamodules.datasets.mlsp import PathlossDataset
+        from src.datamodules.datasets.indoor import PathlossDataset
         
         cls.PathlossDataset = PathlossDataset
         

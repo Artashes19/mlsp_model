@@ -8,8 +8,8 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from omegaconf import OmegaConf
-from src.utils.mlsp.featurizer import featurizer
-from src.utils.mlsp.types import RadarSample
+from src.utils.indoor.featurizer import featurizer
+from src.utils.indoor.types import RadarSample
 
 # Normalized values when input is zero
 # Channels 0,1: simple /255 normalization
@@ -111,7 +111,7 @@ def test_modality_dropout(modality_dropout_prob: float, sparse_dropout_given_dro
 def test_default_config_values():
     """Verify default config values match expected defaults."""
     # Load base datamodule config
-    dm_cfg = OmegaConf.load(PROJECT_ROOT / "configs" / "exps" / "datamodule" / "mlsp.yaml")
+    dm_cfg = OmegaConf.load(PROJECT_ROOT / "configs" / "exps" / "datamodule" / "indoor.yaml")
     
     # Load e0 experiment config and merge
     exp_cfg = OmegaConf.load(PROJECT_ROOT / "configs" / "exps" / "e0.yaml")

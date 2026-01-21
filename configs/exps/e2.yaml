@@ -5,11 +5,11 @@ e2:
 
   defaults:
     - trainer: default
-    - datamodule: mlsp
+    - datamodule: indoor
     - optimizer: adam
     - scheduler: wsd_s_pretraining_bs120
-    - algorithm: mlsp
-    - network: mlsp_txunet
+    - algorithm: indoor
+    - network: txunet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every ]
     - loggers: [ aim ]
     - strategy: null

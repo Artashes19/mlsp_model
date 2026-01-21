@@ -8,7 +8,7 @@ from scipy.interpolate import griddata, RBFInterpolator
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel as C, RBF
 
-from src.utils.mlsp.types import RadarSample
+from src.utils.indoor.types import RadarSample
 
 
 @njit
