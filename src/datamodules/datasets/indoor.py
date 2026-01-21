@@ -112,7 +112,7 @@ class PathlossDataset(Dataset):
             )
         reflectance = data["reflectance"].astype(np.float32)
         transmittance = data["transmittance"].astype(np.float32)
-        mask_np = (data["mask"].astype(np.float32) if "mask" in data else np.ones_like(reflectance, dtype=np.float32))
+        mask_np = np.ones_like(reflectance, dtype=np.float32)
         pathloss = data["pathloss"].astype(np.float32)
         # Validate shapes match
         H, W = reflectance.shape
@@ -169,6 +169,7 @@ class PathlossDataset(Dataset):
             radiation_pattern=radiation_pattern,
             pixel_size=pixel_size,
             mask=torch.from_numpy(mask_np),
+            floor_plan=data["mask"],
         )
         sample = self.pad_sample(sample)
         return sample
