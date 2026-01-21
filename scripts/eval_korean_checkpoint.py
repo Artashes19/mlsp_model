@@ -19,8 +19,8 @@ from tqdm import tqdm
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from src.algorithms.mlsp import MLSP
-from src.datamodules.mlsp import MLSPDatamodule
+from src.algorithms.indoor import Indoor
+from src.datamodules.indoor import IndoorDatamodule
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,18 +59,18 @@ def load_algorithm(
     algorithm_cfg: DictConfig,
     network_cfg: DictConfig,
     device: torch.device
-) -> MLSP:
-    """Load MLSP algorithm from checkpoint using config."""
+) -> Indoor:
+    """Load Indoor algorithm from checkpoint using config."""
     network_conf = OmegaConf.to_yaml(network_cfg)
 
     # Instantiate compiled params from config
     compiled = hydra.utils.instantiate(algorithm_cfg.compiled)
 
-    log.info(f"Loading MLSP algorithm from {checkpoint_path}")
+    log.info(f"Loading Indoor algorithm from {checkpoint_path}")
     log.info(f"Network config: {network_cfg.depths}")
 
     # Create algorithm instance
-    algorithm = MLSP(
+    algorithm = Indoor(
         out_norm=float(algorithm_cfg.out_norm),
         use_sip2net=bool(algorithm_cfg.use_sip2net),
         sip2net_params=OmegaConf.to_container(algorithm_cfg.sip2net_params, resolve=True),
@@ -112,8 +112,8 @@ def create_datamodule(
     datamodule_cfg: DictConfig,
     manifest_path: str,
     val_buildings: list[int]
-) -> MLSPDatamodule:
-    """Create MLSPDatamodule for validation using config."""
+) -> IndoorDatamodule:
+    """Create IndoorDatamodule for validation using config."""
     # Create a temporary filtered manifest for validation buildings
     temp_dir = tempfile.mkdtemp()
     val_manifest = os.path.join(temp_dir, "val_manifest.csv")
@@ -141,14 +141,14 @@ def create_datamodule(
     cfg.pop("_target_", None)
     cfg.pop("name", None)
 
-    datamodule = MLSPDatamodule(**cfg)
+    datamodule = IndoorDatamodule(**cfg)
     return datamodule
 
 
 @torch.no_grad()
 def evaluate(
-    algorithm: MLSP,
-    datamodule: MLSPDatamodule,
+    algorithm: Indoor,
+    datamodule: IndoorDatamodule,
     device: torch.device,
     out_norm: float
 ) -> dict:
@@ -182,7 +182,7 @@ def evaluate(
         targets = targets.to(device)
         masks = masks.to(device)
 
-        # Forward pass with bfloat16 (same as MLSP._step)
+        # Forward pass with bfloat16 (same as Indoor._step)
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             preds = algorithm._network(inputs)
 
@@ -190,7 +190,7 @@ def evaluate(
         if preds.dim() == 4:
             preds = preds.squeeze(1)
 
-        # Clamp prediction to [0, 1] (same as MLSP._step for validation)
+        # Clamp prediction to [0, 1] (same as Indoor._step for validation)
         preds = torch.clamp(preds, 0.0, 1.0)
 
         # Compute squared error for each sample in batch
@@ -215,7 +215,7 @@ def evaluate(
             building_se[b] += se
             building_count[b] += count
 
-    # Compute RMSE (same as MLSP.get_metrics)
+    # Compute RMSE (same as Indoor.get_metrics)
     mse = total_se / (total_count + 1e-8)
     rmse_normalized = np.sqrt(mse)
     rmse_db = rmse_normalized * out_norm

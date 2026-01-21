@@ -12,9 +12,8 @@ Example YAML config (korean_mode.yaml):
     channels: "rtd"
 """
 import os
-from dataclasses import dataclass
 from typing import Literal, Optional
-
+from dataclasses import dataclass
 import yaml
 
 # Environment variable name

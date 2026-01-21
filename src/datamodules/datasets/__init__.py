@@ -1,1 +1,1 @@
-from .mlsp import PathlossDataset
+from .indoor import PathlossDataset

@@ -12,9 +12,9 @@ import sys
 import unittest
 from pathlib import Path
 
-import torch
-import numpy as np
 import matplotlib
+import torch
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -24,10 +24,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Load .env file (same as run.py)
 from dotenv import load_dotenv
+
 load_dotenv(PROJECT_ROOT / ".env")
 
-from src.utils.mlsp.types import RadarSample
-from src.utils.mlsp.featurizer import featurizer, normalize_input
+from src.utils.indoor.types import RadarSample
+from src.utils.indoor.featurizer import featurizer, normalize_input
 
 # Normalization constants from featurizer
 NORM_OFFSET = 87.0
@@ -86,7 +87,7 @@ def create_mock_sample(
         torch.arange(W, dtype=torch.float32),
         indexing='ij'
     )
-    dist_px = torch.sqrt((xx - x_ant)**2 + (yy - y_ant)**2)
+    dist_px = torch.sqrt((xx - x_ant) ** 2 + (yy - y_ant) ** 2)
     dist_m = dist_px * pixel_size
     
     # Stack into input_img (3 channels: reflectance, transmittance, distance)
@@ -105,9 +106,6 @@ def create_mock_sample(
     
     return RadarSample(
         file_name="mock_sample",
-        pl_clip=None,
-        use_approximator_feature=True,
-        use_transmittance_loss=True,
         H=H,
         W=W,
         x_ant=x_ant,
@@ -177,9 +175,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_output_shape(self):
         """Test that featurizer outputs correct shape (9 channels)."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Featurizer Output Shape")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         output = featurizer(sample, sparse_range=[0.0, 0.01])
@@ -191,9 +189,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_reflectance_channel(self):
         """Test channel 0 (reflectance) normalization."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Reflectance Channel (Ch0)")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample(reflectance_value=255.0)  # Max value
         output = featurizer(sample, sparse_range=[0.0, 0.01])
@@ -220,9 +218,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_transmittance_channel(self):
         """Test channel 1 (transmittance) normalization."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Transmittance Channel (Ch1)")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample(transmittance_value=127.5)  # Mid value
         output = featurizer(sample, sparse_range=[0.0, 0.01])
@@ -244,9 +242,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_distance_channel(self):
         """Test channel 2 (distance) - log transformation."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Distance Channel (Ch2)")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         output = featurizer(sample, sparse_range=[0.0, 0.01])
@@ -270,9 +268,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_mask_channel(self):
         """Test channel 5 (mask) - should be binary with realistic padding."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Mask Channel (Ch5)")
-        print("="*60)
+        print("=" * 60)
         
         # Create sample with realistic padding: 100x100 image with 100x80 valid region
         # (simulates Nx640 image padded to 640x640)
@@ -304,9 +302,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_floor_plan_generation(self):
         """Test channel 6 (floor plan) - auto-generated from reflectance/transmittance."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Floor Plan Generation (Ch6)")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         # No floor_plan provided, should be auto-generated
@@ -321,7 +319,7 @@ class TestFeaturizerLogic(unittest.TestCase):
         # transmittance is 0.5 in [30:70, 30:70] (subset)
         # So floor plan should be 1 in [20:80, 20:80]
         
-        expected_ones = (80-20) * (80-20)  # 3600 pixels
+        expected_ones = (80 - 20) * (80 - 20)  # 3600 pixels
         actual_ones = (ch6 > 0.5).sum().item()
         
         print(f"  Expected floor plan pixels: {expected_ones}")
@@ -331,9 +329,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_approximation_feature(self):
         """Test channel 7 (approximation/FSPL) - should be computed from FSPL."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Approximation Feature (Ch7)")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         output = featurizer(sample, sparse_range=[0.0, 0.01])
@@ -363,13 +361,15 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_sparse_channel_no_sparse(self):
         """Test channel 8 when sparse is dropped via modality dropout."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Sparse Channel - No Sparse (modality dropout)")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         # Force sparse to be dropped: modality_dropout_prob=1.0, sparse_dropout_given_dropout=1.0
-        output = featurizer(sample, sparse_range=[0.0, 0.01], modality_dropout_prob=1.0, sparse_dropout_given_dropout=1.0)
+        output = featurizer(
+            sample, sparse_range=[0.0, 0.01], modality_dropout_prob=1.0, sparse_dropout_given_dropout=1.0
+        )
         
         ch8 = output[8]
         
@@ -387,9 +387,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_sparse_channel_with_sparse(self):
         """Test channel 8 with sparse enabled (no modality dropout)."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Sparse Channel - With Sparse (no dropout)")
-        print("="*60)
+        print("=" * 60)
         
         output_val = 80.0  # Ground truth pathloss value
         sample = create_mock_sample(output_value=output_val)
@@ -411,8 +411,8 @@ class TestFeaturizerLogic(unittest.TestCase):
         expected_sparsity = 0.05
         actual_sparsity = n_meas / total_valid
         
-        print(f"  Expected sparsity: {expected_sparsity*100:.1f}%")
-        print(f"  Actual sparsity: {actual_sparsity*100:.2f}% ({n_meas}/{total_valid} pixels)")
+        print(f"  Expected sparsity: {expected_sparsity * 100:.1f}%")
+        print(f"  Actual sparsity: {actual_sparsity * 100:.2f}% ({n_meas}/{total_valid} pixels)")
         
         # Check sparsity is close to expected (allow some variance due to mask filtering)
         self.assertGreater(actual_sparsity, expected_sparsity * 0.5)
@@ -423,7 +423,9 @@ class TestFeaturizerLogic(unittest.TestCase):
             sparse_vals_norm = ch8[is_meas]
             sparse_vals_denorm = sparse_vals_norm * NORM_SCALE + NORM_OFFSET
             
-            print(f"  Sparse values (denormalized): min={sparse_vals_denorm.min():.2f}, max={sparse_vals_denorm.max():.2f}")
+            print(
+                f"  Sparse values (denormalized): min={sparse_vals_denorm.min():.2f}, max={sparse_vals_denorm.max():.2f}"
+            )
             print(f"  Expected value (output_val): {output_val:.2f}")
             
             # All sparse values should equal the ground truth
@@ -434,9 +436,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_sparse_correspondence_exact(self):
         """Test that sparse measurements exactly match ground truth at sampled locations."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Sparse Correspondence - Exact Match")
-        print("="*60)
+        print("=" * 60)
         
         # Create sample with gradient output to test exact correspondence
         sample = create_mock_sample()
@@ -477,14 +479,15 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_custom_approximation_function(self):
         """Test using a custom approximation function."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Custom Approximation Function")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         
         # Custom function that returns constant value
         constant_val = 42.0
+        
         def custom_approx(s):
             return torch.full((s.H, s.W), constant_val)
         
@@ -510,9 +513,9 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_full_mock_sample_visualization(self):
         """Generate visualization of featurizer output for visual inspection."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Full Mock Sample Visualization")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         
@@ -526,23 +529,23 @@ class TestFeaturizerLogic(unittest.TestCase):
     
     def test_normalize_input_function(self):
         """Test the normalize_input function directly."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] normalize_input Function")
-        print("="*60)
+        print("=" * 60)
         
         H, W = 50, 50
         input_tensor = torch.zeros((9, H, W), dtype=torch.float32)
         
         # Set known values for each channel
         input_tensor[0] = 255.0  # Reflectance max
-        input_tensor[1] = 0.0    # Transmittance zero
-        input_tensor[2] = 10.0   # Distance 10m
+        input_tensor[1] = 0.0  # Transmittance zero
+        input_tensor[2] = 10.0  # Distance 10m
         input_tensor[3] = -10.0  # Antenna gain -10 dBi
         input_tensor[4] = 868.0  # Frequency 868 MHz
-        input_tensor[5] = 1.0    # Mask
-        input_tensor[6] = 1.0    # Floor plan
-        input_tensor[7] = 87.0   # FSPL at normalization center
-        input_tensor[8] = 87.0   # Sparse at normalization center
+        input_tensor[5] = 1.0  # Mask
+        input_tensor[6] = 1.0  # Floor plan
+        input_tensor[7] = 87.0  # FSPL at normalization center
+        input_tensor[8] = 87.0  # Sparse at normalization center
         
         normalized = normalize_input(input_tensor)
         
@@ -568,9 +571,9 @@ class TestEdgeCases(unittest.TestCase):
     
     def test_small_image(self):
         """Test with very small image size."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Small Image (10x10)")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample(H=10, W=10, x_ant=5.0, y_ant=5.0)
         # Adjust structure for small size
@@ -587,9 +590,9 @@ class TestEdgeCases(unittest.TestCase):
     
     def test_antenna_at_corner(self):
         """Test with antenna at image corner."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Antenna at Corner")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample(x_ant=0.0, y_ant=0.0)
         output = featurizer(sample, sparse_range=[0.0, 0.01])
@@ -610,9 +613,9 @@ class TestEdgeCases(unittest.TestCase):
     
     def test_zero_sparsity_range(self):
         """Test with zero sparsity range."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Zero Sparsity Range")
-        print("="*60)
+        print("=" * 60)
         
         sample = create_mock_sample()
         output = featurizer(sample, sparse_range=[0.0, 0.0])
@@ -631,7 +634,7 @@ class TestEdgeCases(unittest.TestCase):
 class TestFeaturizerWithRealData(unittest.TestCase):
     """
     Tests for the featurizer function using real ICASSP and synthetic data.
-    These tests require the environment variables ICASSP_ORIG_PATH and SYNTHETIC_TRAIN_DIR to be set.
+    These tests require the environment variables ICASSP_ORIG_PATH and SYNTH_ROOT to be set.
     """
     
     _test_manifests_dir = None
@@ -645,13 +648,15 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         from hydra import compose, initialize_config_dir
         from hydra.core.global_hydra import GlobalHydra
         import hydra as hydra_module
+        
         cls.hydra_module = hydra_module
         cls.compose = compose
         cls.initialize_config_dir = initialize_config_dir
         cls.GlobalHydra = GlobalHydra
         
         # Import dataset for reading samples
-        from src.datamodules.datasets.mlsp import PathlossDataset
+        from src.datamodules.datasets.indoor import PathlossDataset
+        
         cls.PathlossDataset = PathlossDataset
         
         # Generate test manifests
@@ -666,7 +671,6 @@ class TestFeaturizerWithRealData(unittest.TestCase):
     def _setup_test_manifests(cls):
         """Generate fresh manifest files for testing."""
         import tempfile
-        import shutil
         
         from src.data_exploration.generate_manifest import (
             ensure_icassp_manifest,
@@ -685,7 +689,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         
         # Get data directories from environment
         icassp_root = os.environ.get("ICASSP_ORIG_PATH", "")
-        synth_root = os.environ.get("SYNTHETIC_TRAIN_DIR", "") or os.environ.get("SYNTH_ROOT", "")
+        synth_root = os.environ.get("SYNTH_ROOT", "")
         freqs_mhz = [868, 1800, 3500]
         
         # Generate/ensure global ICASSP manifest
@@ -733,6 +737,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
     def _cleanup_test_manifests(cls):
         """Remove the temporary test manifests directory."""
         import shutil
+        
         if cls._test_manifests_dir and cls._test_manifests_dir.exists():
             print(f"[TEST TEARDOWN] Removing test manifests from {cls._test_manifests_dir}")
             shutil.rmtree(cls._test_manifests_dir)
@@ -804,9 +809,9 @@ class TestFeaturizerWithRealData(unittest.TestCase):
     
     def test_featurizer_with_icassp_data(self):
         """Test featurizer with real ICASSP data (e0 config)."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Featurizer with Real ICASSP Data")
-        print("="*60)
+        print("=" * 60)
         
         try:
             dm, cfg = self._create_datamodule("e0")
@@ -820,7 +825,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
-            print(f"\n  Sample {i+1}/{n_samples}:")
+            print(f"\n  Sample {i + 1}/{n_samples}:")
             sample, dataset = self._get_raw_sample_from_datamodule(dm, idx=i)
             
             print(f"    File: {sample.file_name}")
@@ -869,9 +874,9 @@ class TestFeaturizerWithRealData(unittest.TestCase):
     
     def test_featurizer_with_synthetic_data(self):
         """Test featurizer with real synthetic data (e2 config)."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Featurizer with Real Synthetic Data")
-        print("="*60)
+        print("=" * 60)
         
         try:
             dm, cfg = self._create_datamodule("e2")
@@ -885,7 +890,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
-            print(f"\n  Sample {i+1}/{n_samples}:")
+            print(f"\n  Sample {i + 1}/{n_samples}:")
             sample, dataset = self._get_raw_sample_from_datamodule(dm, idx=i)
             
             print(f"    File: {sample.file_name}")
@@ -935,9 +940,9 @@ class TestFeaturizerWithRealData(unittest.TestCase):
     
     def test_sparse_correspondence_with_real_data(self):
         """Test that sparse measurements match ground truth on real data."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Sparse Correspondence with Real Data")
-        print("="*60)
+        print("=" * 60)
         
         try:
             dm, cfg = self._create_datamodule("e0")
@@ -987,9 +992,9 @@ class TestFeaturizerWithRealData(unittest.TestCase):
     
     def test_channel_statistics_real_data(self):
         """Compute and verify channel statistics across multiple real samples."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("[TEST] Channel Statistics on Real Data")
-        print("="*60)
+        print("=" * 60)
         
         try:
             dm, cfg = self._create_datamodule("e0")
@@ -1009,7 +1014,10 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         
         for i in range(n_samples):
             sample, _ = self._get_raw_sample_from_datamodule(dm, idx=i)
-            output = featurizer(sample, sparse_range=sparse_range, modality_dropout_prob=modality_dropout_prob, sparse_dropout_given_dropout=sparse_dropout_given_dropout)
+            output = featurizer(
+                sample, sparse_range=sparse_range, modality_dropout_prob=modality_dropout_prob,
+                sparse_dropout_given_dropout=sparse_dropout_given_dropout
+            )
             
             for ch in range(9):
                 ch_data = output[ch]
@@ -1024,7 +1032,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         
         print(f"\n  Statistics across {n_samples} samples:")
         print(f"  {'Channel':<15} {'Min Range':<20} {'Max Range':<20} {'Mean Range':<20}")
-        print("  " + "-"*75)
+        print("  " + "-" * 75)
         
         for ch in range(9):
             min_range = f"[{min(channel_mins[ch]):.3f}, {max(channel_mins[ch]):.3f}]"

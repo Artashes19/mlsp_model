@@ -1,0 +1,31 @@
+# @package _global_
+name: inference
+seed: 42
+print_config: True
+ignore_warnings: True
+
+# Inference parameters
+ckpt_path: null  # Required: path to checkpoint file
+gpu: 0  # GPU device index
+split: val  # Dataset split: train, val, or test
+
+# Output directory (derived from checkpoint path)
+predictions_dir: ${oc.env:PREDICTIONS_DIR}
+
+# Defaults for model components
+defaults:
+    - /exps/datamodule@datamodule: indoor
+    - /exps/algorithm@algorithm: indoor
+    - /exps/network@network: txunet
+    - _self_
+
+# Override datamodule for inference mode
+datamodule:
+    inference: False  # We'll handle splits manually
+    batch_size: 1  # Process one sample at a time for inference
+
+hydra:
+    run:
+        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+    job:
+        chdir: True

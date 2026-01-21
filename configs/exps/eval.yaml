@@ -1,8 +1,8 @@
 # Evaluation config for Korean checkpoint
 defaults:
-  - algorithm: mlsp
-  - network: mlsp_txunet
-  - datamodule: mlsp
+  - algorithm: indoor
+  - network: txunet
+  - datamodule: indoor
   - _self_
 
 # Checkpoint to evaluate

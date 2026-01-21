@@ -71,15 +71,15 @@ def verify_samples_have_full_mask(icassp_root: Path, sample_names: list[str]) ->
     sys.path.insert(0, str(repo_root))
     
     # Set korean mode for 3-channel featurizer
-    os.environ["MLSP_OVERRIDES_CONFIG"] = str(repo_root / "configs" / "korean_mode.yaml")
+    os.environ["INDOOR_OVERRIDES_CONFIG"] = str(repo_root / "configs" / "korean_mode.yaml")
     
-    from src.datamodules.mlsp import MLSPDatamodule
-    from src.datamodules.datasets.mlsp import PathlossDataset
+    from src.datamodules.indoor import IndoorDatamodule
+    from src.datamodules.datasets.indoor import PathlossDataset
     
     # Build inputs list for the samples - use available manifest
     manifest_path = icassp_root / "manifests" / "icassp_train_val_21_22_23_24_25.csv"
     
-    inputs_list = MLSPDatamodule.get_inputs_list(
+    inputs_list = IndoorDatamodule.get_inputs_list(
         freqs_mhz=[868],
         freqs=[1],
         manifest_path=str(manifest_path),
@@ -95,15 +95,7 @@ def verify_samples_have_full_mask(icassp_root: Path, sample_names: list[str]) ->
     dataset = PathlossDataset(
         inputs_list=inputs_list,
         training=False,
-        mlsp_task1=False,
-        mlsp_task_idx=1,
-        task_idx=1,
-        pl_clip=None,
-        use_approximator_feature=False,
-        use_transmittance_loss=False,
         inference=True,
-        reps_per_epoch=1,
-        augment_val=False,
         augmentations=None,
         sparse_range=[0.0, 0.0],
         modality_dropout_prob=0.0,
@@ -178,7 +170,7 @@ def run_devbugfix():
     
     # Set korean mode and output dir via environment
     env = os.environ.copy()
-    env["MLSP_OVERRIDES_CONFIG"] = str(repo_root / "configs" / "korean_mode.yaml")
+    env["INDOOR_OVERRIDES_CONFIG"] = str(repo_root / "configs" / "korean_mode.yaml")
     env["OUTPUT_DIR"] = str(DEVBUGFIX_DIR)
     env["CUDA_VISIBLE_DEVICES"] = "1"
     

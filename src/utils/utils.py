@@ -147,7 +147,7 @@ def load_experiment_config(
     are merged and `exp_cfg` overrides them.
 
     Notes:
-    - Handles simple dict entries like {'datamodule': 'mlsp'}
+    - Handles simple dict entries like {'datamodule': 'indoor'}
     - Handles list entries like {'callbacks': ['model_checkpoint_0', 'model_checkpoint_every']}
     - Ignores `_self_` (we merge `exp_cfg` itself at the end)
     """
@@ -191,14 +191,14 @@ def load_experiment_config(
                     merged = OmegaConf.merge(merged, OmegaConf.create({group: {v: piece}}))
             
             else:
-                # Simple group: e.g. {'datamodule': 'mlsp'}
+                # Simple group: e.g. {'datamodule': 'indoor'}
                 cfg_path = config_root / group / f"{value}.yaml"
                 if not cfg_path.is_file():
                     raise FileNotFoundError(f"Config file not found: {cfg_path}")
                 piece = OmegaConf.load(cfg_path)
                 
                 # Typical Hydra behavior without explicit @package:
-                # group name becomes the key: datamodule: <contents of mlsp.yaml>
+                # group name becomes the key: datamodule: <contents of indoor.yaml>
                 merged = OmegaConf.merge(merged, OmegaConf.create({group: piece}))
     
     # Now merge the experiment itself on top of all defaults

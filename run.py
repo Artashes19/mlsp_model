@@ -62,6 +62,18 @@ def main(config: DictConfig) -> None:
         if config.get("print_config"):
             utils.print_config(config, fields=tuple(config.keys()), resolve=True)
         return manifest_prep(config, project_root)
+    elif config["name"] == "inference":
+        from src.inference import inference_prep
+        
+        if config.get("print_config"):
+            utils.print_config(config, fields=tuple(config.keys()), resolve=True)
+        return inference_prep(config, project_root)
+    elif config["name"] == "evaluate":
+        from src.evaluate import evaluate_prep
+        
+        if config.get("print_config"):
+            utils.print_config(config, fields=tuple(config.keys()), resolve=True)
+        return evaluate_prep(config, project_root)
 
 
 if __name__ == "__main__":

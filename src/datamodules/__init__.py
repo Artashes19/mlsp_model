@@ -1,1 +1,1 @@
-from .mlsp import MLSPDatamodule
+from .indoor import IndoorDatamodule

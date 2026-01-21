@@ -1,6 +1,6 @@
-_target_: src.algorithms.MLSP
+_target_: src.algorithms.Indoor
 
-name: mlsp
+name: indoor
 
 out_norm: 160
 fixed_scale: False
