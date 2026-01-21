@@ -1,0 +1,16 @@
+# @package _global_
+name: evaluate
+seed: 42
+print_config: True
+
+# Evaluation parameters
+inference_dir: null  # Required: path to inference output directory
+
+# Output normalization (to convert from [0,1] to dB)
+out_norm: 160.0
+
+hydra:
+    run:
+        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+    job:
+        chdir: True
