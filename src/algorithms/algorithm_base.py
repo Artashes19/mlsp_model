@@ -50,9 +50,11 @@ class AlgorithmBase(pl.LightningModule):
         self.validation_step_outputs = defaultdict(lambda: defaultdict(list))
         self.test_step_outputs = defaultdict(lambda: defaultdict(list))
         
-        # FLOPs and timing tracking state
-        self._should_count_flops = True
-        self._num_flops = None
+        # FLOPs and timing tracking state (per-phase)
+        self._should_count_flops_train = True
+        self._should_count_flops_val = True
+        self._num_flops_train = None
+        self._num_flops_val = None
         self._last_elapsed_ms = None
         self._is_compiled = False
         self._compiled_forward = None
@@ -132,15 +134,29 @@ class AlgorithmBase(pl.LightningModule):
             # Use compiled forward if available, otherwise original
             fwd = self._compiled_forward if self._compiled_forward else self._original_forward
             
-            if self._should_count_flops:
+            # Determine phase from model training state
+            is_training = self._network.training
+            should_count = self._should_count_flops_train if is_training else self._should_count_flops_val
+            
+            if should_count:
                 if self.global_rank == 0:
                     with self._flop_counter:
                         result = fwd(*args, **kwargs)
-                    self._num_flops = self._flop_counter.get_total_flops()
-                    log.info(f"[FLOPs] Measured network FLOPs: {self._num_flops:.2e}")
+                    flops = self._flop_counter.get_total_flops()
+                    phase = "train" if is_training else "val"
+                    if is_training:
+                        self._num_flops_train = flops
+                        self._should_count_flops_train = False
+                    else:
+                        self._num_flops_val = flops
+                        self._should_count_flops_val = False
+                    log.info(f"[FLOPs] Measured network FLOPs ({phase}): {flops:.2e}")
                 else:
                     result = fwd(*args, **kwargs)
-                self._should_count_flops = False
+                    if is_training:
+                        self._should_count_flops_train = False
+                    else:
+                        self._should_count_flops_val = False
             else:
                 result = fwd(*args, **kwargs)
             
@@ -196,9 +212,13 @@ class AlgorithmBase(pl.LightningModule):
         if not self._is_compiled and not self._compile.disable:
             self._compile_network()
         
+        # Select the appropriate FLOP count based on phase
+        is_training = split_name == "train"
+        num_flops = self._num_flops_train if is_training else self._num_flops_val
+        
         # Calculate FLOP/s using cached FLOPs and timing from network forward
-        if self._num_flops is not None and self._last_elapsed_ms is not None and self._last_elapsed_ms > 0:
-            flops = self._num_flops / (self._last_elapsed_ms / 1000)
+        if num_flops is not None and self._last_elapsed_ms is not None and self._last_elapsed_ms > 0:
+            flops = num_flops / (self._last_elapsed_ms / 1000)
             output["flops"] = flops
             progress_bar_dict = {
                 "flops": flops,
