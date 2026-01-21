@@ -90,33 +90,34 @@ class MLSP(AlgorithmBase):
     def pred(self, batch):
         inputs, targets, masks, sample = batch
         
-        # Use pixel_size for exact reverse scaling (no floating point errors)
-        original_pixel_size = 0.25  # Known constant
+        # Calculate original dimensions from pixel_size
+        original_pixel_size = 0.25
         current_pixel_size = sample["pixel_size"]
         reverse_scale_factor = original_pixel_size / current_pixel_size
         
-        # Get exact original dimensions
-        current_h, current_w = 640, 640  # Normalized size
-        old_h = int(current_h * reverse_scale_factor)
-        old_w = int(current_w * reverse_scale_factor)
+        # Network output is 256x256, calculate original dimensions
+        old_h = int(IMG_TARGET_SIZE * reverse_scale_factor)
+        old_w = int(IMG_TARGET_SIZE * reverse_scale_factor)
         
-        # Calculate pre-padding dimensions
-        scale_factor_forward = min(IMG_TARGET_SIZE / old_h, IMG_TARGET_SIZE / old_w)
-        resized_w = int(old_w * scale_factor_forward)
-        
-        # Use bfloat16 autocast for forward pass (enables Flash Attention)
+        # Forward pass with bfloat16 autocast
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = self.network(inputs.cuda(self._gpu).unsqueeze(0)).squeeze(0)
         
-        # Cut prediction to remove padding (640x640 → 640xresized_w)
-        pred_cut = pred[:, :resized_w]
+        # Resize to original dimensions with bilinear interpolation
+        pred_final = resize_bilinear(pred.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
+        pred_np = pred_final.detach().float().cpu().numpy()
         
-        # Resize prediction back to exact original dimensions
-        pred_final = resize_bilinear(pred_cut.unsqueeze(0), new_size=(old_h, old_w)).squeeze(0)
-        pred = pred_final.detach().cpu().numpy()
+        # Convert inputs, targets, masks to numpy
+        inputs_np = inputs.detach().cpu().numpy()
+        targets_np = targets.detach().cpu().numpy() if targets is not None and targets != "" else None
+        masks_np = masks.detach().cpu().numpy()
         
         return {
-            "pred": pred
+            "pred": pred_np,
+            "inputs": inputs_np,
+            "targets": targets_np,
+            "masks": masks_np,
+            "sample": sample,
         }
     
     def load_state_dict(
