@@ -15,6 +15,7 @@ Usage:
 import argparse
 import os
 import sys
+import subprocess
 from pathlib import Path
 
 import torch
@@ -24,16 +25,41 @@ SAVE_DIR = Path("/tmp/branch_comparison")
 DEVBUGFIX_FILE = SAVE_DIR / "devbugfix_outputs.pt"
 KOREAN_FILE = SAVE_DIR / "korean_outputs.pt"
 NUM_SAMPLES = 10
+REPO_ROOT = Path(__file__).parent.parent.resolve()
 
 
-def run_devbugfix():
+def _run_cmd(cmd, cwd: Path | None = None) -> str:
+    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{result.stdout}\n{result.stderr}")
+    return result.stdout
+
+
+def _has_korean_module(repo_root: Path) -> bool:
+    return (repo_root / "data" / "dataset.py").is_file()
+
+
+def _ensure_korean_worktree(repo_root: Path, worktree_path: Path, branch: str = "korean-model") -> None:
+    output = _run_cmd(["git", "worktree", "list", "--porcelain"], cwd=repo_root)
+    worktree_paths = [
+        line.split(" ", 1)[1] for line in output.splitlines() if line.startswith("worktree ")
+    ]
+    if str(worktree_path) in worktree_paths:
+        return
+    if worktree_path.exists():
+        git_marker = worktree_path / ".git"
+        if not git_marker.exists():
+            raise RuntimeError(f"Worktree path exists and is not a git worktree: {worktree_path}")
+    else:
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    _run_cmd(["git", "worktree", "add", str(worktree_path), branch], cwd=repo_root)
+
+
+def run_devbugfix(channels: str):
     """Run devbugfix_khoren's REAL PathlossDataset pipeline."""
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    sys.path.insert(0, str(REPO_ROOT))
     
-    from src.utils.indoor.config_overrides import get_config
-    config = get_config()
-    
-    print(f"Running devbugfix_khoren PathlossDataset (channels={config.channels})...")
+    print(f"Running devbugfix_khoren PathlossDataset (channels={channels})...")
     
     from src.datamodules.indoor import IndoorDatamodule
     from src.datamodules.datasets.indoor import PathlossDataset
@@ -61,7 +87,7 @@ def run_devbugfix():
         sparse_range=[0.0, 0.0],
         modality_dropout_prob=0.0,  # No dropout
         sparse_dropout_given_dropout=0.0,
-        channels=config.channels,  # channels from config (default "rtdgfmpas", or "rtd" if korean_mode.yaml loaded)
+        channels=channels,
     )
     
     results = {}
@@ -83,7 +109,7 @@ def run_korean():
     """Run korean-model's REAL IndoorRadioMapDataset pipeline."""
     print("Running korean-model IndoorRadioMapDataset...")
     
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    sys.path.insert(0, str(REPO_ROOT))
     from data.dataset import IndoorRadioMapDataset, SamplePaths
     
     icassp_root = Path(os.environ.get("ICASSP_ORIG_PATH", ""))
@@ -133,6 +159,57 @@ def run_korean():
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     torch.save(results, KOREAN_FILE)
     print(f"\nSaved {len(results)} samples to {KOREAN_FILE}")
+
+
+def run_korean_via_worktree():
+    worktree_path = Path("/tmp/branch_comparison/korean_model_worktree")
+    _ensure_korean_worktree(REPO_ROOT, worktree_path)
+    inline = """
+import os
+from pathlib import Path
+import torch
+from data.dataset import IndoorRadioMapDataset, SamplePaths
+
+icassp_root = Path(os.environ.get("ICASSP_ORIG_PATH", ""))
+input_dir = icassp_root / "Inputs" / "Task_2_ICASSP"
+output_dir = icassp_root / "Outputs" / "Task_2_ICASSP"
+
+input_files = sorted(input_dir.glob("*.png"))
+output_map = {p.stem: p for p in output_dir.glob("*.png")}
+
+all_samples = [
+    SamplePaths(input_path=inp, output_path=output_map.get(inp.stem))
+    for inp in input_files
+    if inp.stem in output_map
+]
+
+val_buildings = {"B21", "B22", "B23", "B24", "B25"}
+samples = [
+    s for s in all_samples
+    if "_f1_" in s.input_path.name and any(s.input_path.name.startswith(b) for b in val_buildings)
+]
+samples = sorted(samples, key=lambda x: x.input_path.name)[:10]
+
+dataset = IndoorRadioMapDataset(
+    root=icassp_root,
+    split="train",
+    resize_hw=(256, 256),
+    file_pairs=samples,
+)
+
+results = {}
+for i in range(len(samples)):
+    x, y, m, meta = dataset[i]
+    fname = samples[i].input_path.name
+    results[fname] = {"input": x.clone(), "mask": m.clone()}
+
+Path("/tmp/branch_comparison").mkdir(parents=True, exist_ok=True)
+torch.save(results, "/tmp/branch_comparison/korean_outputs.pt")
+"""
+    cmd = [sys.executable, "-c", inline]
+    result = subprocess.run(cmd, cwd=str(worktree_path))
+    if result.returncode != 0:
+        raise RuntimeError("Failed to run korean-model loader in worktree.")
 
 
 def compare():
@@ -197,6 +274,9 @@ def compare():
         print(f"  {key}: input_diff={max_input_diff:.2e} (mean={mean_input_diff:.2e}){mask_diff_str} [{status}]")
     
     print(f"\n{'='*60}")
+    if not all_input_diffs:
+        print("INPUT - No comparable inputs (shape mismatches).")
+        return 1
     print(f"INPUT - Overall max diff: {max(all_input_diffs):.2e}")
     print(f"INPUT - Overall mean of max diffs: {np.mean(all_input_diffs):.2e}")
     if all_mask_diffs:
@@ -214,17 +294,26 @@ def main():
     parser = argparse.ArgumentParser(description="Cross-branch data loader comparison")
     parser.add_argument("--run-devbugfix", action="store_true", help="Run devbugfix_khoren featurizer")
     parser.add_argument("--run-korean", action="store_true", help="Run korean-model data loader")
+    parser.add_argument("--run-korean-local", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--compare", action="store_true", help="Compare saved outputs")
+    parser.add_argument("--channels", type=str, default="rtd", help="Channels for devbugfix run")
     args = parser.parse_args()
+    
+    if args.run_korean_local:
+        run_korean()
+        return 0
     
     if not any([args.run_devbugfix, args.run_korean, args.compare]):
         parser.print_help()
         return 1
     
     if args.run_devbugfix:
-        run_devbugfix()
+        run_devbugfix(args.channels)
     if args.run_korean:
-        run_korean()
+        if _has_korean_module(REPO_ROOT):
+            run_korean()
+        else:
+            run_korean_via_worktree()
     if args.compare:
         return compare()
     return 0

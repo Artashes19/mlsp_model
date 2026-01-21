@@ -13,8 +13,6 @@ from src.utils.indoor.types import RadarSample
 def resize_bilinear(img, new_size):
     return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
 
-def resize_nearest(img, new_size):
-    return TF.resize(img, new_size, interpolation=InterpolationMode.NEAREST)
 
 def resize_db(img, new_size):
     # Prevent overflow in 10^(x/10) for very large dB values (~>385 dB overflows float32)
@@ -31,9 +29,6 @@ def resize_db(img, new_size):
 
 def rotate_bilinear(img, angle):
     return TF.rotate(img, angle, interpolation=InterpolationMode.BILINEAR, fill=0, expand=True)
-
-def rotate_nearest(img, angle):
-    return TF.rotate(img, angle, interpolation=InterpolationMode.NEAREST, fill=0, expand=True)
 
 
 def rotate_linear(img, angle):
@@ -71,19 +66,21 @@ def normalize_size(sample: RadarSample, target_size) -> RadarSample:
     reflectance_resized = resize_bilinear(reflectance, new_size)
     transmittance_resized = resize_bilinear(transmittance, new_size)
     distance_resized = resize_bilinear(distance, new_size)
-    mask_resized = resize_nearest(sample.mask.unsqueeze(0), new_size).squeeze(0)
+    mask_resized = resize_bilinear(sample.mask.unsqueeze(0), new_size).squeeze(0)
     
     sample.x_ant = int(sample.x_ant * scale_x)
     sample.y_ant = int(sample.y_ant * scale_y)
     
-    sample.input_img = torch.zeros((max(3, C), target_size, target_size), dtype=torch.float32, device=torch.device("cpu"))
+    sample.input_img = torch.zeros(
+        (max(3, C), target_size, target_size), dtype=torch.float32, device=torch.device("cpu")
+        )
     sample.input_img[0:1] = reflectance_resized
     sample.input_img[1:2] = transmittance_resized
     sample.input_img[2:3] = distance_resized
     
     if sample.floor_plan is not None:
         sample.floor_plan = resize_bilinear(sample.floor_plan.unsqueeze(0), new_size).squeeze(0)
-
+    
     if sample.output_img != "":
         sample.output_img = resize_bilinear(sample.output_img.unsqueeze(0), new_size).squeeze(0)
     
@@ -164,10 +161,10 @@ class GeometricAugmentation(BaseAugmentation):
             fp_expanded = sample.floor_plan.unsqueeze(0)
             rot_fp = rotate_bilinear(fp_expanded, angle).squeeze(0)
             sample.floor_plan = rot_fp
-
+        
         if sample.mask is not None:
             mask_expanded = sample.mask.unsqueeze(0)
-            rot_mask = rotate_nearest(mask_expanded, angle).squeeze(0)
+            rot_mask = rotate_bilinear(mask_expanded, angle).squeeze(0)
             sample.mask = rot_mask
         
         _, new_H, new_W = rot_reflectance.shape
@@ -193,7 +190,7 @@ class GeometricAugmentation(BaseAugmentation):
                 sample.floor_plan = TF.hflip(sample.floor_plan)
             if flip_v:
                 sample.floor_plan = TF.vflip(sample.floor_plan)
-
+        
         if sample.output_img is not None:
             output_expanded = sample.output_img.unsqueeze(0)
             if flip_h:
