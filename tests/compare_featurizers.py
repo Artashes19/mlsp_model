@@ -26,19 +26,14 @@ KOREAN_FILE = SAVE_DIR / "korean_outputs.pt"
 NUM_SAMPLES = 10
 
 
-def run_devbugfix(resize_backend=None):
+def run_devbugfix():
     """Run devbugfix_khoren's REAL PathlossDataset pipeline."""
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    
-    # Only override if explicitly specified (otherwise use config/default)
-    if resize_backend is not None:
-        from src.utils.indoor.augmentations import set_resize_backend
-        set_resize_backend(resize_backend)
     
     from src.utils.indoor.config_overrides import get_config
     config = get_config()
     
-    print(f"Running devbugfix_khoren PathlossDataset (channels={config.channels}, resize={config.resize_backend})...")
+    print(f"Running devbugfix_khoren PathlossDataset (channels={config.channels})...")
     
     from src.datamodules.indoor import IndoorDatamodule
     from src.datamodules.datasets.indoor import PathlossDataset
@@ -220,8 +215,6 @@ def main():
     parser.add_argument("--run-devbugfix", action="store_true", help="Run devbugfix_khoren featurizer")
     parser.add_argument("--run-korean", action="store_true", help="Run korean-model data loader")
     parser.add_argument("--compare", action="store_true", help="Compare saved outputs")
-    parser.add_argument("--resize-backend", choices=["torchvision", "pil"], default=None,
-                        help="Override resize backend (default: use INDOOR_OVERRIDES_CONFIG or torchvision)")
     args = parser.parse_args()
     
     if not any([args.run_devbugfix, args.run_korean, args.compare]):
@@ -229,7 +222,7 @@ def main():
         return 1
     
     if args.run_devbugfix:
-        run_devbugfix(resize_backend=args.resize_backend)
+        run_devbugfix()
     if args.run_korean:
         run_korean()
     if args.compare:

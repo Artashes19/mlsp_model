@@ -240,7 +240,6 @@ class PathlossDataset(Dataset):
         output_tensor = sample.output_img if sample.output_img is not None else None
         
         # Normalize output AFTER resize (matching korean-model order)
-        # This must happen after normalize_size because _resize_pil expects [0, 255] range
         if output_tensor is not None and output_tensor != "":
             output_tensor = output_tensor / 160.0
         

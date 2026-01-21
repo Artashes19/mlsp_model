@@ -21,10 +21,9 @@ import matplotlib
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.datamodules.mlsp import MLSPDatamodule
-from src.datamodules.datasets.mlsp import PathlossDataset
-from src.utils.mlsp.augmentations import set_resize_backend
-from src.utils.mlsp.config_overrides import get_config
+from src.datamodules.indoor import IndoorDatamodule
+from src.datamodules.datasets.indoor import PathlossDataset
+from src.utils.indoor.config_overrides import get_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,7 +107,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    set_resize_backend(get_config().resize_backend)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -118,7 +116,7 @@ def main() -> None:
 
     inputs_list = []
     if args.synthetic_manifest:
-        inputs_list = MLSPDatamodule.get_inputs_list(
+        inputs_list = IndoorDatamodule.get_inputs_list(
             freqs_mhz=[],
             freqs=[],
             manifest_path=args.synthetic_manifest,
@@ -142,7 +140,7 @@ def main() -> None:
         else:
             freqs_mhz = [args.freq_mhz]
             freqs = [args.freq_idx]
-        inputs_list = MLSPDatamodule.get_inputs_list(
+        inputs_list = IndoorDatamodule.get_inputs_list(
             freqs_mhz=freqs_mhz,
             freqs=freqs,
             manifest_path=args.manifest,
@@ -231,12 +229,18 @@ def main() -> None:
         plt.savefig(out_dir / f"mean_map_ch{idx}_{ch}.png", dpi=150)
         plt.close()
 
-        plt.figure(figsize=(5, 4))
-        plt.hist(flat[:, idx, :].ravel(), bins=100)
-        plt.title(f"Histogram: channel {idx} ({ch})")
-        plt.tight_layout()
-        plt.savefig(out_dir / f"hist_ch{idx}_{ch}.png", dpi=150)
-        plt.close()
+        hist_vals = flat[:, idx, :].ravel()
+        if np.isfinite(hist_vals).any():
+            finite_vals = hist_vals[np.isfinite(hist_vals)]
+            vmin = float(np.min(finite_vals))
+            vmax = float(np.max(finite_vals))
+            if np.isfinite(vmin) and np.isfinite(vmax) and (vmax - vmin) >= 1e-6:
+                plt.figure(figsize=(5, 4))
+                plt.hist(finite_vals, bins=100)
+                plt.title(f"Histogram: channel {idx} ({ch})")
+                plt.tight_layout()
+                plt.savefig(out_dir / f"hist_ch{idx}_{ch}.png", dpi=150)
+                plt.close()
 
 
 if __name__ == "__main__":

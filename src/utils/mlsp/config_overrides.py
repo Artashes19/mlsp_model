@@ -8,12 +8,11 @@ Usage:
     If not set, defaults are used (torchvision resize, all 9 channels).
 
 Example YAML config (korean_mode.yaml):
-    resize_backend: pil
     channels: "rtd"
 """
 import os
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Optional
 
 import yaml
 
@@ -27,9 +26,6 @@ DEFAULT_CHANNELS = "rtdgfmpas"
 @dataclass
 class OverridesConfig:
     """All configurable overrides for korean-model equivalence."""
-    # Resize backend: "torchvision" (default) or "pil" (korean-model compatible)
-    resize_backend: Literal["torchvision", "pil"] = "torchvision"
-    
     # Channels to use (default all 9: rtdgfmpas)
     # r=reflectance, t=transmittance, d=distance, g=antenna gain, f=frequency,
     # m=mask, p=floor plan, a=approximation feature, s=sparse measurements
@@ -65,10 +61,7 @@ def _load_config() -> OverridesConfig:
             else:
                 channels = DEFAULT_CHANNELS[:num_ch]
         
-        config = OverridesConfig(
-            resize_backend=overrides.get("resize_backend", "torchvision"),
-            channels=channels,
-        )
+        config = OverridesConfig(channels=channels)
         print(f"[config_overrides] Loaded from {config_path}: {config}")
         return config
     

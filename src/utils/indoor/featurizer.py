@@ -765,6 +765,7 @@ def featurizer(
                 rows = selected_indices[:, 0]
                 cols = selected_indices[:, 1]
                 sparse_channel[rows, cols] = output_img[rows, cols]
+                sample.mask[rows, cols] = 0
     
     # Build input tensor dynamically based on channels string
     input_tensor = torch.zeros((num_channels, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
