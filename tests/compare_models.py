@@ -28,35 +28,27 @@ if str(REPO_ROOT) not in sys.path:
 import torch
 
 
-def get_current_branch() -> str:
-    """Get current git branch name."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
+def _run_cmd(cmd, cwd: Path | None = None) -> str:
+    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{result.stdout}\n{result.stderr}")
+    return result.stdout
 
 
-def checkout_branch(branch: str) -> None:
-    """Checkout to a git branch."""
-    subprocess.run(["git", "checkout", branch], check=True)
-
-
-def stash_changes() -> bool:
-    """Stash uncommitted changes. Returns True if there were changes to stash."""
-    result = subprocess.run(
-        ["git", "stash", "push", "-m", "test_model_equivalence_temp"],
-        capture_output=True,
-        text=True,
-    )
-    return "No local changes to save" not in result.stdout
-
-
-def pop_stash() -> None:
-    """Pop stashed changes."""
-    subprocess.run(["git", "stash", "pop"], check=True)
+def _ensure_korean_worktree(repo_root: Path, worktree_path: Path, branch: str = "korean-model") -> None:
+    output = _run_cmd(["git", "worktree", "list", "--porcelain"], cwd=repo_root)
+    worktree_paths = [
+        line.split(" ", 1)[1] for line in output.splitlines() if line.startswith("worktree ")
+    ]
+    if str(worktree_path) in worktree_paths:
+        return
+    if worktree_path.exists():
+        git_marker = worktree_path / ".git"
+        if not git_marker.exists():
+            raise RuntimeError(f"Worktree path exists and is not a git worktree: {worktree_path}")
+    else:
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    _run_cmd(["git", "worktree", "add", str(worktree_path), branch], cwd=repo_root)
 
 
 def clear_module_cache(module_prefixes: list[str]) -> None:
@@ -93,10 +85,6 @@ def test_model_equivalence():
     batch_size = 2
     height = 64
     width = 64
-    
-    # Get current branch (should be devbugfix_khoren)
-    original_branch = get_current_branch()
-    print(f"Current branch: {original_branch}")
     
     # Create temp directory for saving artifacts
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -156,56 +144,59 @@ def test_model_equivalence():
         
         # ============ PHASE 2: korean-model ============
         print("\n" + "=" * 60)
-        print("PHASE 2: Checking out korean-model branch")
+        print("PHASE 2: Running korean-model in worktree")
         print("=" * 60)
-        
-        # Now stash changes so we can switch branches
-        had_changes = stash_changes()
-        if had_changes:
-            print("Stashed local changes to allow branch switch")
-        
-        checkout_branch("korean-model")
-        print("Switched to korean-model branch")
-        
-        # Set SAME seed before model creation - this gives identical weights!
-        torch.manual_seed(model_seed)
-        
-        # Add models directory to path and import
-        models_path = REPO_ROOT / "models"
-        if str(models_path) not in sys.path:
-            sys.path.insert(0, str(models_path))
-        
-        from radio_unet_tx import TxUNet
-        
-        # Note: korean-model has extra sra_strides param, set to None
-        model_korean = TxUNet(
-            in_ch=config["in_ch"],
-            out_ch=config["out_ch"],
-            base_ch=config["base_ch"],
-            depths=tuple(config["depths"]),
-            heads=tuple(config["heads"]),
-            expand=float(config["expand"]),
-            use_checkpoint=config["use_checkpoint"],
-            ln_eps=float(config["ln_eps"]),
-            window0=config["window0"],
-            window0_stride=config["window0_stride"],
-            sra_strides=None,  # korean-model specific param
-            sra0_enabled=config["sra0_enabled"],
-            sra0_stride=config["sra0_stride"],
-        )
-        model_korean.eval()
-        
-        # Load same input
-        x = torch.load(input_path, weights_only=True)
-        
-        # Forward pass
-        with torch.no_grad():
-            output_korean = model_korean(x)
-        
-        print(f"Input shape: {x.shape}")
-        print(f"Output shape: {output_korean.shape}")
-        print(f"Output mean: {output_korean.mean().item():.6f}")
-        print(f"Output std: {output_korean.std().item():.6f}")
+        worktree_path = Path("/tmp/branch_comparison/korean_model_worktree")
+        _ensure_korean_worktree(REPO_ROOT, worktree_path)
+        output_korean_path = Path(tmpdir) / "output_korean.pt"
+        inline = f"""
+import sys
+import torch
+from pathlib import Path
+
+model_seed = {model_seed}
+input_path = Path(r\"{str(input_path)}\")
+output_path = Path(r\"{str(output_korean_path)}\")
+
+repo_root = Path.cwd()
+models_path = repo_root / "models"
+if str(models_path) not in sys.path:
+    sys.path.insert(0, str(models_path))
+
+from radio_unet_tx import TxUNet
+
+torch.manual_seed(model_seed)
+model_korean = TxUNet(
+    in_ch={config['in_ch']},
+    out_ch={config['out_ch']},
+    base_ch={config['base_ch']},
+    depths={tuple(config['depths'])},
+    heads={tuple(config['heads'])},
+    expand={float(config['expand'])},
+    use_checkpoint={config['use_checkpoint']},
+    ln_eps={float(config['ln_eps'])},
+    window0={config['window0']},
+    window0_stride={config['window0_stride']},
+    sra_strides=None,
+    sra0_enabled={config['sra0_enabled']},
+    sra0_stride={config['sra0_stride']},
+)
+model_korean.eval()
+
+x = torch.load(input_path, weights_only=True)
+with torch.no_grad():
+    output_korean = model_korean(x)
+
+torch.save(output_korean, output_path)
+print("Input shape:", x.shape)
+print("Output shape:", output_korean.shape)
+print("Output mean:", output_korean.mean().item())
+print("Output std:", output_korean.std().item())
+"""
+        result = subprocess.run([sys.executable, "-c", inline], cwd=str(worktree_path))
+        if result.returncode != 0:
+            raise RuntimeError("Failed to run korean-model inference in worktree.")
+        output_korean = torch.load(output_korean_path, weights_only=True)
         
         # ============ PHASE 3: Compare outputs ============
         print("\n" + "=" * 60)
@@ -243,15 +234,6 @@ def test_model_equivalence():
             print("✗ FAILURE: Models produce different outputs!")
             print(f"  (max difference {max_abs_diff:.2e} >= tolerance {tolerance:.2e})")
         print("=" * 60)
-        
-        # ============ PHASE 4: Restore original branch ============
-        print(f"\nRestoring original branch: {original_branch}")
-        checkout_branch(original_branch)
-        print(f"Switched back to {original_branch}")
-        
-        if had_changes:
-            pop_stash()
-            print("Restored stashed changes")
         
         assert outputs_match, f"Outputs differ by more than {tolerance}"
 
