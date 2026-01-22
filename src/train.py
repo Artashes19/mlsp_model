@@ -15,6 +15,7 @@ from src.algorithms.algorithm_base import AlgorithmBase
 from src.algorithms.indoor import Indoor
 from src.datamodules.indoor import IndoorDatamodule
 from src.utils import EpochCounter, load_experiment_config, log_hyperparameters, print_config
+from src.utils.indoor.featurizer import get_num_channels
 
 log = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ def train(config: DictConfig) -> str | None:
     
     # Compute num_channels from datamodule.channels and inject into network config
     if "network" in config and "datamodule" in config:
-        num_channels = len(config.datamodule.channels)
+        num_channels = get_num_channels(config.datamodule.channels)
         # Update the appropriate parameter based on network type
         if "in_ch" in config.network:
             config.network.in_ch = num_channels

@@ -1,6 +1,6 @@
 _target_: src.networks.TxUNetModel
 
-in_ch: 9
+in_ch: 10
 out_ch: 1
 base_ch: 48
 depths: [ 4, 6, 6, 8 ]
