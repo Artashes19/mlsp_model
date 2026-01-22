@@ -154,7 +154,7 @@ class PathlossDataset(Dataset):
         
         output_img = torch.from_numpy(pathloss)
         freq_MHz = float(meta["frequency_MHz"])  # required above
-        radiation_pattern = torch.ones(360, dtype=torch.float32)
+        radiation_pattern = torch.zeros(360, dtype=torch.float32)
         
         sample = RadarSample(
             file_name=file_name,
