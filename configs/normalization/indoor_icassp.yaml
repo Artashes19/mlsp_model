@@ -1,0 +1,15 @@
+channels: "rtdgfmps"
+normalization_mode: "standardize"
+normalization_stats:
+  r:
+    mean_nz: 3.7867698669433594
+    std_nz: 2.767766237258911
+  t:
+    mean_nz: 4.606301307678223
+    std_nz: 4.71476936340332
+  d:
+    log_mean: 3.426378011703491
+    log_std: 0.8987999558448792
+  s:
+    mean_nz: 94.60576629638672
+    std_nz: 27.352371215820312

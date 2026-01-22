@@ -9,6 +9,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel as C, RBF
 
 from src.utils.indoor.types import RadarSample
+from src.utils.indoor.config_overrides import get_config
 
 
 @njit
@@ -521,42 +522,103 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> t
     """
     Normalize input tensor based on channel types.
     
-    Channel letters and their normalization:
-        r - reflectance: /255
-        t - transmittance: /255
-        d - distance: /255
-        g - antenna gain: /min_antenna_gain (-55)
-        f - frequency: 3 one-hot channels (no normalization, already 0/1)
-        m - mask: no normalization
-        p - floor plan: no normalization
-        s - sparse measurements: (x - 87) / 160
+    Modes:
+        legacy: fixed scaling (original behavior)
+        standardize: per-channel z-score
+            - r/t/s: z-score on non-zero values, zeros remain 0
+            - d: log(d + eps) then z-score
+            - f/m/p: unchanged (one-hot/binary)
     """
-    min_antenna_gain = -55.0
+    config = get_config()
     normalized = input_tensor.clone()
+    
+    if config.normalization_mode == "legacy":
+        min_antenna_gain = -55.0
+        tensor_idx = 0
+        for ch in channels:
+            if ch == "r":
+                normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+                tensor_idx += 1
+            elif ch == "t":
+                normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+                tensor_idx += 1
+            elif ch == "d":
+                normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+                tensor_idx += 1
+            elif ch == "g":
+                normalized[tensor_idx] = normalized[tensor_idx] / min_antenna_gain
+                tensor_idx += 1
+            elif ch == "f":
+                tensor_idx += len(FREQ_VALUES)
+            elif ch == "m":
+                tensor_idx += 1
+            elif ch == "p":
+                tensor_idx += 1
+            elif ch == "s":
+                normalized[tensor_idx] = (normalized[tensor_idx] - 87) / 160.0
+                tensor_idx += 1
+        return normalized
+    
+    if config.normalization_mode != "standardize":
+        raise ValueError(f"Unknown normalization_mode: {config.normalization_mode}")
+    
+    stats = config.normalization_stats
+    eps = 1e-6
+    
+    def _get_stat(key: str, field: str) -> float:
+        if key not in stats or field not in stats[key]:
+            raise ValueError(f"Missing normalization stat: {key}.{field}")
+        return float(stats[key][field])
+    
+    r_mean = _get_stat("r", "mean_nz")
+    r_std = _get_stat("r", "std_nz")
+    t_mean = _get_stat("t", "mean_nz")
+    t_std = _get_stat("t", "std_nz")
+    d_log_mean = _get_stat("d", "log_mean")
+    d_log_std = _get_stat("d", "log_std")
+    s_mean = _get_stat("s", "mean_nz")
+    s_std = _get_stat("s", "std_nz")
+    
+    if r_std == 0 or t_std == 0 or d_log_std == 0 or s_std == 0:
+        raise ValueError("Normalization std must be non-zero for standardize mode.")
     
     tensor_idx = 0
     for ch in channels:
         if ch == "r":
-            normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+            channel = normalized[tensor_idx]
+            mask = channel != 0
+            if mask.any():
+                channel = channel.clone()
+                channel[mask] = (channel[mask] - r_mean) / r_std
+            normalized[tensor_idx] = channel
             tensor_idx += 1
         elif ch == "t":
-            normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+            channel = normalized[tensor_idx]
+            mask = channel != 0
+            if mask.any():
+                channel = channel.clone()
+                channel[mask] = (channel[mask] - t_mean) / t_std
+            normalized[tensor_idx] = channel
             tensor_idx += 1
         elif ch == "d":
-            normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+            channel = torch.log(normalized[tensor_idx] + eps)
+            normalized[tensor_idx] = (channel - d_log_mean) / d_log_std
             tensor_idx += 1
         elif ch == "g":
-            normalized[tensor_idx] = normalized[tensor_idx] / min_antenna_gain
             tensor_idx += 1
         elif ch == "f":
-            # Skip 3 channels - one-hot already normalized (0/1 values)
             tensor_idx += len(FREQ_VALUES)
         elif ch == "m":
-            tensor_idx += 1  # mask: no normalization needed
+            tensor_idx += 1
         elif ch == "p":
-            tensor_idx += 1  # floor plan: no normalization needed
+            tensor_idx += 1
         elif ch == "s":
-            normalized[tensor_idx] = (normalized[tensor_idx] - 87) / 160.0
+            channel = normalized[tensor_idx]
+            mask = channel != 0
+            if mask.any():
+                channel = channel.clone()
+                channel[mask] = (channel[mask] - s_mean) / s_std
+            normalized[tensor_idx] = channel
             tensor_idx += 1
     
     return normalized

@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.datamodules.indoor import IndoorDatamodule
 from src.datamodules.datasets.indoor import PathlossDataset
 from src.utils.indoor.config_overrides import get_config
+from src.utils.indoor.featurizer import FREQ_VALUES, get_num_channels
 
 
 def parse_args() -> argparse.Namespace:
@@ -188,26 +189,35 @@ def main() -> None:
     vmin = flat.min(axis=(0, 2))
     vmax = flat.max(axis=(0, 2))
 
+    channel_labels = []
+    for ch in args.channels:
+        if ch == "f":
+            channel_labels.extend([f"f{idx+1}" for idx in range(len(FREQ_VALUES))])
+        else:
+            channel_labels.append(ch)
+    if len(channel_labels) != get_num_channels(args.channels):
+        raise ValueError("Channel labels do not match tensor channels.")
+
     with open(out_dir / "stats.csv", "w", newline="") as fp:
         writer = csv.writer(fp)
-        writer.writerow(["channel_idx", "channel_letter", "mean", "std", "min", "max"])
-        for idx, ch in enumerate(args.channels):
-            writer.writerow([idx, ch, float(mean[idx]), float(std[idx]), float(vmin[idx]), float(vmax[idx])])
+        writer.writerow(["channel_idx", "channel_label", "mean", "std", "min", "max"])
+        for idx, label in enumerate(channel_labels):
+            writer.writerow([idx, label, float(mean[idx]), float(std[idx]), float(vmin[idx]), float(vmax[idx])])
 
     with open(out_dir / "stats_nonzero.csv", "w", newline="") as fp:
         writer = csv.writer(fp)
-        writer.writerow(["channel_idx", "channel_letter", "nonzero_mean", "nonzero_std", "nonzero_min", "nonzero_max", "nonzero_count"])
-        for idx, ch in enumerate(args.channels):
+        writer.writerow(["channel_idx", "channel_label", "nonzero_mean", "nonzero_std", "nonzero_min", "nonzero_max", "nonzero_count"])
+        for idx, label in enumerate(channel_labels):
             channel_flat = flat[:, idx, :].ravel()
             nz_mask = channel_flat != 0
             nz_count = int(nz_mask.sum())
             if nz_count == 0:
-                writer.writerow([idx, ch, float("nan"), float("nan"), float("nan"), float("nan"), nz_count])
+                writer.writerow([idx, label, float("nan"), float("nan"), float("nan"), float("nan"), nz_count])
             else:
                 nz_vals = channel_flat[nz_mask]
                 writer.writerow([
                     idx,
-                    ch,
+                    label,
                     float(nz_vals.mean()),
                     float(nz_vals.std()),
                     float(nz_vals.min()),
@@ -219,13 +229,13 @@ def main() -> None:
     import matplotlib.pyplot as plt
 
     mean_maps = stacked_np.mean(axis=0)
-    for idx, ch in enumerate(args.channels):
+    for idx, label in enumerate(channel_labels):
         plt.figure(figsize=(5, 4))
         plt.imshow(mean_maps[idx], cmap="viridis")
         plt.colorbar()
-        plt.title(f"Mean map: channel {idx} ({ch})")
+        plt.title(f"Mean map: channel {idx} ({label})")
         plt.tight_layout()
-        plt.savefig(out_dir / f"mean_map_ch{idx}_{ch}.png", dpi=150)
+        plt.savefig(out_dir / f"mean_map_ch{idx}_{label}.png", dpi=150)
         plt.close()
 
         hist_vals = flat[:, idx, :].ravel()
@@ -236,9 +246,9 @@ def main() -> None:
             if np.isfinite(vmin) and np.isfinite(vmax) and (vmax - vmin) >= 1e-6:
                 plt.figure(figsize=(5, 4))
                 plt.hist(finite_vals, bins=100)
-                plt.title(f"Histogram: channel {idx} ({ch})")
+                plt.title(f"Histogram: channel {idx} ({label})")
                 plt.tight_layout()
-                plt.savefig(out_dir / f"hist_ch{idx}_{ch}.png", dpi=150)
+                plt.savefig(out_dir / f"hist_ch{idx}_{label}.png", dpi=150)
                 plt.close()
 
 

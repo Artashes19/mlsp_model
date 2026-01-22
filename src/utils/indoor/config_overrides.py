@@ -12,7 +12,8 @@ Example YAML config (korean_mode.yaml):
 """
 import os
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 import yaml
 
 # Environment variable name
@@ -29,6 +30,12 @@ class OverridesConfig:
     # r=reflectance (1ch), t=transmittance (1ch), d=distance (1ch), g=antenna gain (1ch),
     # f=frequency one-hot (3ch), m=mask (1ch), p=floor plan (1ch), s=sparse (1ch)
     channels: str = DEFAULT_CHANNELS
+    
+    # Normalization: legacy (fixed scaling) or standardize (mean/std)
+    normalization_mode: Literal["legacy", "standardize"] = "legacy"
+    # Stats for standardize mode
+    # Expected keys: r/t/s -> mean_nz,std_nz ; d -> log_mean,log_std
+    normalization_stats: dict = field(default_factory=dict)
     
     @property
     def num_channels(self) -> int:
@@ -66,7 +73,11 @@ def _load_config() -> OverridesConfig:
             else:
                 channels = DEFAULT_CHANNELS[:num_ch]
         
-        config = OverridesConfig(channels=channels)
+        config = OverridesConfig(
+            channels=channels,
+            normalization_mode=overrides.get("normalization_mode", "legacy"),
+            normalization_stats=overrides.get("normalization_stats", {}) or {},
+        )
         print(f"[config_overrides] Loaded from {config_path}: {config}")
         return config
     
