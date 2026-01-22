@@ -5,7 +5,7 @@ name: indoor_dataset
 # Channel selection: string of letters specifying which channels to use
 # r=reflectance, t=transmittance, d=distance, g=antenna gain, f=frequency,
 # m=mask, p=floor plan, s=sparse measurements
-channels: "rtdgfmps"
+channels: "rtdgps"
 batch_size: 24
 num_workers: 64
 
