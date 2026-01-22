@@ -13,7 +13,6 @@ Example YAML config (korean_mode.yaml):
 import os
 from typing import Optional
 from dataclasses import dataclass, field
-from typing import Literal
 import yaml
 
 # Environment variable name
@@ -21,6 +20,13 @@ OVERRIDES_ENV_VAR = "INDOOR_OVERRIDES_CONFIG"
 
 # Default channels string (10 channels with one-hot frequency)
 DEFAULT_CHANNELS = "rtdgfmps"
+
+# Default normalization config path (unified)
+DEFAULT_NORMALIZATION_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "configs",
+    "indoor_normalization_unified.yaml",
+)
 
 
 @dataclass
@@ -31,8 +37,6 @@ class OverridesConfig:
     # f=frequency one-hot (3ch), m=mask (1ch), p=floor plan (1ch), s=sparse (1ch)
     channels: str = DEFAULT_CHANNELS
     
-    # Normalization: legacy (fixed scaling) or standardize (mean/std)
-    normalization_mode: Literal["legacy", "standardize"] = "legacy"
     # Stats for standardize mode
     # Expected keys: r/t/s -> mean_nz,std_nz ; d -> log_mean,log_std
     normalization_stats: dict = field(default_factory=dict)
@@ -54,34 +58,31 @@ _config: Optional[OverridesConfig] = None
 
 
 def _load_config() -> OverridesConfig:
-    """Load config from env var or return defaults."""
-    config_path = os.environ.get(OVERRIDES_ENV_VAR)
+    """Load config from env var or unified defaults."""
+    config_path = os.environ.get(OVERRIDES_ENV_VAR, DEFAULT_NORMALIZATION_PATH)
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"Normalization config not found: {config_path}")
+    with open(config_path, "r") as f:
+        overrides = yaml.safe_load(f) or {}
     
-    if config_path and os.path.isfile(config_path):
-        with open(config_path, "r") as f:
-            overrides = yaml.safe_load(f) or {}
-        
-        # Support both old num_channels and new channels format
-        channels = overrides.get("channels", DEFAULT_CHANNELS)
-        if "num_channels" in overrides and "channels" not in overrides:
-            # Legacy support: convert num_channels to channels
-            num_ch = int(overrides["num_channels"])
-            if num_ch == 3:
-                channels = "rtd"
-            elif num_ch == 9:
-                channels = DEFAULT_CHANNELS
-            else:
-                channels = DEFAULT_CHANNELS[:num_ch]
-        
-        config = OverridesConfig(
-            channels=channels,
-            normalization_mode=overrides.get("normalization_mode", "legacy"),
-            normalization_stats=overrides.get("normalization_stats", {}) or {},
-        )
-        print(f"[config_overrides] Loaded from {config_path}: {config}")
-        return config
+    # Support both old num_channels and new channels format
+    channels = overrides.get("channels", DEFAULT_CHANNELS)
+    if "num_channels" in overrides and "channels" not in overrides:
+        num_ch = int(overrides["num_channels"])
+        if num_ch == 3:
+            channels = "rtd"
+        elif num_ch == 9:
+            channels = DEFAULT_CHANNELS
+        else:
+            channels = DEFAULT_CHANNELS[:num_ch]
     
-    return OverridesConfig()  # defaults
+    normalization_stats = overrides.get("normalization_stats", {}) or {}
+    config = OverridesConfig(
+        channels=channels,
+        normalization_stats=normalization_stats,
+    )
+    print(f"[config_overrides] Loaded from {config_path}: {config}")
+    return config
 
 
 def get_config() -> OverridesConfig:

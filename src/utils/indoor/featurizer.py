@@ -520,48 +520,14 @@ def get_num_channels(channels: str) -> int:
 
 def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> torch.Tensor:
     """
-    Normalize input tensor based on channel types.
+    Normalize input tensor based on channel types (standardize only).
     
-    Modes:
-        legacy: fixed scaling (original behavior)
-        standardize: per-channel z-score
-            - r/t/s: z-score on non-zero values, zeros remain 0
-            - d: log(d + eps) then z-score
-            - f/m/p: unchanged (one-hot/binary)
+    - r/t/s: z-score on non-zero values, zeros remain 0
+    - d: log(d + eps) then z-score
+    - f/m/p: unchanged (one-hot/binary)
     """
     config = get_config()
     normalized = input_tensor.clone()
-    
-    if config.normalization_mode == "legacy":
-        min_antenna_gain = -55.0
-        tensor_idx = 0
-        for ch in channels:
-            if ch == "r":
-                normalized[tensor_idx] = normalized[tensor_idx] / 255.0
-                tensor_idx += 1
-            elif ch == "t":
-                normalized[tensor_idx] = normalized[tensor_idx] / 255.0
-                tensor_idx += 1
-            elif ch == "d":
-                normalized[tensor_idx] = normalized[tensor_idx] / 255.0
-                tensor_idx += 1
-            elif ch == "g":
-                normalized[tensor_idx] = normalized[tensor_idx] / min_antenna_gain
-                tensor_idx += 1
-            elif ch == "f":
-                tensor_idx += len(FREQ_VALUES)
-            elif ch == "m":
-                tensor_idx += 1
-            elif ch == "p":
-                tensor_idx += 1
-            elif ch == "s":
-                normalized[tensor_idx] = (normalized[tensor_idx] - 87) / 160.0
-                tensor_idx += 1
-        return normalized
-    
-    if config.normalization_mode != "standardize":
-        raise ValueError(f"Unknown normalization_mode: {config.normalization_mode}")
-    
     stats = config.normalization_stats
     eps = 1e-6
     
@@ -580,7 +546,7 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> t
     s_std = _get_stat("s", "std_nz")
     
     if r_std == 0 or t_std == 0 or d_log_std == 0 or s_std == 0:
-        raise ValueError("Normalization std must be non-zero for standardize mode.")
+        raise ValueError("Normalization std must be non-zero.")
     
     tensor_idx = 0
     for ch in channels:
