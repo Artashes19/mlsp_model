@@ -3,8 +3,9 @@ _target_: src.datamodules.IndoorDatamodule
 name: indoor_dataset
 
 # Channel selection: string of letters specifying which channels to use
-# r=reflectance, t=transmittance, d=distance, g=antenna gain, f=frequency,
-# m=mask, p=floor plan, s=sparse measurements
+# r=reflectance (1ch), t=transmittance (1ch), d=distance (1ch), g=antenna gain (1ch),
+# f=frequency one-hot (3ch for 868/1800/3500 MHz), m=mask (1ch), p=floor plan (1ch), s=sparse (1ch)
+# Total with "rtdgfmps": 10 channels
 channels: "rtdgfmps"
 batch_size: 24
 num_workers: 64

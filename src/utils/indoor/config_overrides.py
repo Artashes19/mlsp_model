@@ -18,22 +18,28 @@ import yaml
 # Environment variable name
 OVERRIDES_ENV_VAR = "INDOOR_OVERRIDES_CONFIG"
 
-# Default channels string (all 8 channels)
+# Default channels string (10 channels with one-hot frequency)
 DEFAULT_CHANNELS = "rtdgfmps"
 
 
 @dataclass
 class OverridesConfig:
     """All configurable overrides for korean-model equivalence."""
-    # Channels to use (default all 8: rtdgfmps)
-    # r=reflectance, t=transmittance, d=distance, g=antenna gain, f=frequency,
-    # m=mask, p=floor plan, s=sparse measurements
+    # Channels to use (default "rtdgfmps" = 10 channels)
+    # r=reflectance (1ch), t=transmittance (1ch), d=distance (1ch), g=antenna gain (1ch),
+    # f=frequency one-hot (3ch), m=mask (1ch), p=floor plan (1ch), s=sparse (1ch)
     channels: str = DEFAULT_CHANNELS
     
     @property
     def num_channels(self) -> int:
-        """Number of channels (computed from channels string length)."""
-        return len(self.channels)
+        """Number of channels (computed from channels string, 'f' counts as 3 for one-hot)."""
+        count = 0
+        for ch in self.channels:
+            if ch == "f":
+                count += 3  # one-hot frequency encoding
+            else:
+                count += 1
+        return count
 
 
 # Global singleton instance

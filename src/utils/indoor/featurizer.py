@@ -499,6 +499,24 @@ def calculate_antenna_gain(radiation_pattern, W, H, azimuth, x_ant, y_ant):
     return antenna_gain
 
 
+# Frequency values for one-hot encoding (MHz)
+FREQ_VALUES = [868, 1800, 3500]
+
+
+def get_num_channels(channels: str) -> int:
+    """
+    Calculate the actual number of tensor channels from a channels string.
+    'f' expands to 3 channels (one-hot encoding for frequencies).
+    """
+    count = 0
+    for ch in channels:
+        if ch == "f":
+            count += len(FREQ_VALUES)  # 3 one-hot channels
+        else:
+            count += 1
+    return count
+
+
 def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> torch.Tensor:
     """
     Normalize input tensor based on channel types.
@@ -508,7 +526,7 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> t
         t - transmittance: /255
         d - distance: /255
         g - antenna gain: /min_antenna_gain (-55)
-        f - frequency: log10(x) - 1.9
+        f - frequency: 3 one-hot channels (no normalization, already 0/1)
         m - mask: no normalization
         p - floor plan: no normalization
         s - sparse measurements: (x - 87) / 160
@@ -516,23 +534,30 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> t
     min_antenna_gain = -55.0
     normalized = input_tensor.clone()
     
-    for idx, ch in enumerate(channels):
+    tensor_idx = 0
+    for ch in channels:
         if ch == "r":
-            normalized[idx] = normalized[idx] / 255.0
+            normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+            tensor_idx += 1
         elif ch == "t":
-            normalized[idx] = normalized[idx] / 255.0
+            normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+            tensor_idx += 1
         elif ch == "d":
-            normalized[idx] = normalized[idx] / 255.0
+            normalized[tensor_idx] = normalized[tensor_idx] / 255.0
+            tensor_idx += 1
         elif ch == "g":
-            normalized[idx] = normalized[idx] / min_antenna_gain
+            normalized[tensor_idx] = normalized[tensor_idx] / min_antenna_gain
+            tensor_idx += 1
         elif ch == "f":
-            normalized[idx] = torch.log10(normalized[idx]) - 1.9
+            # Skip 3 channels - one-hot already normalized (0/1 values)
+            tensor_idx += len(FREQ_VALUES)
         elif ch == "m":
-            pass  # mask: no normalization needed
+            tensor_idx += 1  # mask: no normalization needed
         elif ch == "p":
-            pass  # floor plan: no normalization needed
+            tensor_idx += 1  # floor plan: no normalization needed
         elif ch == "s":
-            normalized[idx] = (normalized[idx] - 87) / 160.0
+            normalized[tensor_idx] = (normalized[tensor_idx] - 87) / 160.0
+            tensor_idx += 1
     
     return normalized
 
@@ -697,16 +722,18 @@ def featurizer(
     Build input tensor with selected channels.
     
     Channel letters:
-        r - reflectance
-        t - transmittance
-        d - distance
-        g - antenna gain
-        f - frequency
-        m - mask
-        p - floor plan
-        s - sparse measurements
+        r - reflectance (1 channel)
+        t - transmittance (1 channel)
+        d - distance (1 channel)
+        g - antenna gain (1 channel)
+        f - frequency one-hot (3 channels for 868, 1800, 3500 MHz)
+        m - mask (1 channel)
+        p - floor plan (1 channel)
+        s - sparse measurements (1 channel)
+    
+    Total channels with default "rtdgfmps": 10 (due to f expanding to 3)
     """
-    num_channels = len(channels)
+    num_channels = get_num_channels(channels)
     
     # Modality dropout logic:
     # With prob modality_dropout_prob, turn off one modality (trans+ref OR sparse)
@@ -765,33 +792,47 @@ def featurizer(
     # Build input tensor dynamically based on channels string
     input_tensor = torch.zeros((num_channels, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
     
-    for idx, ch in enumerate(channels):
+    tensor_idx = 0
+    for ch in channels:
         if ch == "r":
             if drop_trans_ref:
-                input_tensor[idx] = torch.zeros_like(reflectance)
+                input_tensor[tensor_idx] = torch.zeros_like(reflectance)
             else:
-                input_tensor[idx] = reflectance
+                input_tensor[tensor_idx] = reflectance
+            tensor_idx += 1
         elif ch == "t":
             if drop_trans_ref:
-                input_tensor[idx] = torch.zeros_like(transmittance)
+                input_tensor[tensor_idx] = torch.zeros_like(transmittance)
             else:
-                input_tensor[idx] = transmittance
+                input_tensor[tensor_idx] = transmittance
+            tensor_idx += 1
         elif ch == "d":
-            input_tensor[idx] = distance
+            input_tensor[tensor_idx] = distance
+            tensor_idx += 1
         elif ch == "g":
-            input_tensor[idx] = antenna_gain
+            input_tensor[tensor_idx] = antenna_gain
+            tensor_idx += 1
         elif ch == "f":
-            input_tensor[idx] = torch.full((sample.H, sample.W), sample.freq_MHz, dtype=torch.float32, device=torch.device("cpu"))
+            # One-hot encoding for frequency (3 channels)
+            freq_idx = FREQ_VALUES.index(int(sample.freq_MHz))
+            for i in range(len(FREQ_VALUES)):
+                if i == freq_idx:
+                    input_tensor[tensor_idx + i] = torch.ones((sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
+                # else: already zeros from initialization
+            tensor_idx += len(FREQ_VALUES)
         elif ch == "m":
-            input_tensor[idx] = sample.mask
+            input_tensor[tensor_idx] = sample.mask
+            tensor_idx += 1
         elif ch == "p":
             if sample.floor_plan is not None:
-                input_tensor[idx] = sample.floor_plan
+                input_tensor[tensor_idx] = sample.floor_plan
             else:
-                input_tensor[idx] = ((reflectance > 0) | (transmittance > 0)).float()
+                input_tensor[tensor_idx] = ((reflectance > 0) | (transmittance > 0)).float()
+            tensor_idx += 1
         elif ch == "s":
             if sparse_channel is not None:
-                input_tensor[idx] = sparse_channel
+                input_tensor[tensor_idx] = sparse_channel
+            tensor_idx += 1
     
     input_tensor = normalize_input(input_tensor, channels)
     

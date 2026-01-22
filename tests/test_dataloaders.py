@@ -197,15 +197,17 @@ def save_batch_visualization(
     """
     Save a visualization of all input channels + target + mask as subplots.
     
-    Channels (8 total):
+    Channels (10 total with one-hot frequency):
     0: Reflectance (normalized)
     1: Transmittance (normalized)
-    2: Distance (log transformed)
+    2: Distance (normalized)
     3: Antenna gain (normalized)
-    4: Frequency (log transformed)
-    5: Mask
-    6: Floor plan
-    7: Sparse measurements (normalized)
+    4: Freq 868 MHz (one-hot)
+    5: Freq 1800 MHz (one-hot)
+    6: Freq 3500 MHz (one-hot)
+    7: Mask
+    8: Floor plan
+    9: Sparse measurements (normalized)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -218,19 +220,21 @@ def save_batch_visualization(
     channel_names = [
         "Ch0: Reflectance",
         "Ch1: Transmittance",
-        "Ch2: Distance (log)",
+        "Ch2: Distance",
         "Ch3: Antenna Gain",
-        "Ch4: Frequency (log)",
-        "Ch5: Mask",
-        "Ch6: Floor Plan",
-        "Ch7: Sparse Meas.",
+        "Ch4: Freq 868",
+        "Ch5: Freq 1800",
+        "Ch6: Freq 3500",
+        "Ch7: Mask",
+        "Ch8: Floor Plan",
+        "Ch9: Sparse Meas.",
     ]
     
-    fig, axes = plt.subplots(3, 4, figsize=(20, 15))
+    fig, axes = plt.subplots(4, 3, figsize=(15, 20))
     axes = axes.flatten()
     
-    # Plot all 8 input channels
-    for i in range(8):
+    # Plot all 10 input channels
+    for i in range(10):
         ax = axes[i]
         im = ax.imshow(sample_input[i], cmap='viridis')
         ax.set_title(f"{channel_names[i]}\nmin={sample_input[i].min():.3f}, max={sample_input[i].max():.3f}")
@@ -238,22 +242,15 @@ def save_batch_visualization(
         plt.colorbar(im, ax=ax, fraction=0.046)
     
     # Plot target (ground truth pathloss)
-    ax = axes[8]
+    ax = axes[10]
     im = ax.imshow(sample_target, cmap='hot')
     ax.set_title(f"Target (GT Pathloss)\nmin={sample_target.min():.1f}, max={sample_target.max():.1f}")
     ax.axis('off')
     plt.colorbar(im, ax=ax, fraction=0.046)
     
-    # Plot output mask
-    ax = axes[9]
-    im = ax.imshow(sample_mask, cmap='gray')
-    ax.set_title(f"Output Mask\nunique={np.unique(sample_mask)}")
-    ax.axis('off')
-    plt.colorbar(im, ax=ax, fraction=0.046)
-    
     # Plot sparse vs target overlay
-    ax = axes[10]
-    sparse_norm = sample_input[7]
+    ax = axes[11]
+    sparse_norm = sample_input[9]  # Sparse is now at index 9
     sparse_denorm = sparse_norm * NORM_SCALE + NORM_OFFSET
     # Create an overlay: target in background, sparse points as markers
     ax.imshow(sample_target, cmap='hot', alpha=0.7)
@@ -265,10 +262,6 @@ def save_batch_visualization(
     total_valid = (sample_mask > 0).sum()
     sparsity_pct = (n_sparse / total_valid * 100) if total_valid > 0 else 0
     ax.set_title(f"Sparse Overlay\n{n_sparse} pts ({sparsity_pct:.2f}%)")
-    ax.axis('off')
-    
-    # Hide unused axis
-    axes[11].axis('off')
     
     plt.tight_layout()
     fig_path = output_dir / f"{batch_name}_sample{sample_idx}.png"
@@ -364,8 +357,8 @@ class TestDataloaders(unittest.TestCase):
         print(f"    Effective sparse_prob: {sparse_prob:.3f}, sparse_range={sparse_range}")
         
         batch_size = inputs.shape[0]
-        sparse_channel = inputs[:, 7]  # Channel 7 is sparse measurements
-        mask_channel = inputs[:, 5]  # Channel 5 is mask
+        sparse_channel = inputs[:, 9]  # Channel 9 is sparse measurements (with one-hot freq)
+        mask_channel = inputs[:, 7]  # Channel 7 is mask (with one-hot freq)
         
         samples_with_sparse = 0
         sparsities = []
@@ -423,7 +416,7 @@ class TestDataloaders(unittest.TestCase):
         """Check that sparse measurement values match ground truth."""
         print(f"\n  Sparse-GT correspondence check for {name}:")
         
-        sparse_channel = inputs[:, 7]
+        sparse_channel = inputs[:, 9]  # Sparse is now at index 9
         # Denormalize sparse values: val = val_norm * 160 + 87
         sparse_denorm = sparse_channel * NORM_SCALE + NORM_OFFSET
         
@@ -499,7 +492,7 @@ class TestDataloaders(unittest.TestCase):
         print(f"    masks: {masks.shape}")
         
         # 1. Check channel count
-        self.assertEqual(inputs.shape[1], 8, "e0 inputs must have 8 channels")
+        self.assertEqual(inputs.shape[1], 10, "e0 inputs must have 10 channels (with one-hot freq)")
         
         # 2. Check channel ranges
         self._check_channel_ranges(inputs, "e0")
@@ -545,7 +538,7 @@ class TestDataloaders(unittest.TestCase):
         print(f"    masks: {masks.shape}")
         
         # 1. Check channel count
-        self.assertEqual(inputs.shape[1], 8, "e2 inputs must have 8 channels")
+        self.assertEqual(inputs.shape[1], 10, "e2 inputs must have 10 channels (with one-hot freq)")
         
         # 2. Check channel ranges
         self._check_channel_ranges(inputs, "e2")
