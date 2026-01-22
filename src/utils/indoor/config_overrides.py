@@ -23,7 +23,7 @@ DEFAULT_CHANNELS = "rtdgfmps"
 
 # Default normalization config path (unified)
 DEFAULT_NORMALIZATION_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
     "configs",
     "indoor_normalization_unified.yaml",
 )
