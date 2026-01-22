@@ -41,7 +41,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         **kwargs
     ):
         # Validate and store channels configuration
-        valid_channels = "rtdgfmpas"
+        valid_channels = "rtdgfmps"
         if not channels:
             raise ValueError("channels cannot be empty")
         if len(channels) != len(set(channels)):

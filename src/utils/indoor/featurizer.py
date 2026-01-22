@@ -499,7 +499,7 @@ def calculate_antenna_gain(radiation_pattern, W, H, azimuth, x_ant, y_ant):
     return antenna_gain
 
 
-def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmpas") -> torch.Tensor:
+def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> torch.Tensor:
     """
     Normalize input tensor based on channel types.
     
@@ -511,7 +511,6 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmpas") -> 
         f - frequency: log10(x) - 1.9
         m - mask: no normalization
         p - floor plan: no normalization
-        a - approximation feature: (x - 87) / 160
         s - sparse measurements: (x - 87) / 160
     """
     min_antenna_gain = -55.0
@@ -532,8 +531,6 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmpas") -> 
             pass  # mask: no normalization needed
         elif ch == "p":
             pass  # floor plan: no normalization needed
-        elif ch == "a":
-            normalized[idx] = (normalized[idx] - 87) / 160.0
         elif ch == "s":
             normalized[idx] = (normalized[idx] - 87) / 160.0
     
@@ -691,11 +688,10 @@ def get_fspl(sample: RadarSample) -> torch.Tensor:
 
 def featurizer(
     sample: RadarSample,
-    approximation_feature_func=get_fspl,
     sparse_range: tuple[float, float] = (0.0, 0.01),
     modality_dropout_prob: float = 0.6666,
     sparse_dropout_given_dropout: float = 0.5,
-    channels: str = "rtdgfmpas"
+    channels: str = "rtdgfmps"
 ) -> torch.Tensor:
     """
     Build input tensor with selected channels.
@@ -708,7 +704,6 @@ def featurizer(
         f - frequency
         m - mask
         p - floor plan
-        a - approximation feature (FSPL)
         s - sparse measurements
     """
     num_channels = len(channels)
@@ -733,7 +728,7 @@ def featurizer(
     
     # Compute antenna gain only if needed
     antenna_gain = None
-    if "g" in channels or "a" in channels:
+    if "g" in channels:
         radiation_pattern = sample.radiation_pattern
         antenna_gain = calculate_antenna_gain(
             radiation_pattern,
@@ -794,8 +789,6 @@ def featurizer(
                 input_tensor[idx] = sample.floor_plan
             else:
                 input_tensor[idx] = ((reflectance > 0) | (transmittance > 0)).float()
-        elif ch == "a":
-            input_tensor[idx] = approximation_feature_func(sample)
         elif ch == "s":
             if sparse_channel is not None:
                 input_tensor[idx] = sparse_channel

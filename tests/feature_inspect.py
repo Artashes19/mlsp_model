@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
         "--channels",
         type=str,
         default=config.channels,
-        help="Channel string, e.g., rtdgfmpas or rtd.",
+        help="Channel string, e.g., rtdgfmps or rtd.",
     )
     parser.add_argument(
         "--sparse-range",
@@ -154,7 +154,6 @@ def main() -> None:
         mlsp_task_idx=1,
         task_idx=1,
         pl_clip=None,
-        use_approximator_feature=True,
         use_transmittance_loss=False,
         inference=True,
         reps_per_epoch=1,

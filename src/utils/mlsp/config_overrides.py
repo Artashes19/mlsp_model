@@ -5,7 +5,7 @@ Usage:
     Set env var INDOOR_OVERRIDES_CONFIG to path of a YAML file, e.g.:
         export INDOOR_OVERRIDES_CONFIG=/path/to/korean_mode.yaml
     
-    If not set, defaults are used (torchvision resize, all 9 channels).
+    If not set, defaults are used (torchvision resize, all 8 channels).
 
 Example YAML config (korean_mode.yaml):
     channels: "rtd"
@@ -19,16 +19,16 @@ import yaml
 # Environment variable name
 OVERRIDES_ENV_VAR = "INDOOR_OVERRIDES_CONFIG"
 
-# Default channels string (all 9 channels)
-DEFAULT_CHANNELS = "rtdgfmpas"
+# Default channels string (all 8 channels)
+DEFAULT_CHANNELS = "rtdgfmps"
 
 
 @dataclass
 class OverridesConfig:
     """All configurable overrides for korean-model equivalence."""
-    # Channels to use (default all 9: rtdgfmpas)
+    # Channels to use (default all 8: rtdgfmps)
     # r=reflectance, t=transmittance, d=distance, g=antenna gain, f=frequency,
-    # m=mask, p=floor plan, a=approximation feature, s=sparse measurements
+    # m=mask, p=floor plan, s=sparse measurements
     channels: str = DEFAULT_CHANNELS
     
     @property

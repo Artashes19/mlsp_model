@@ -42,7 +42,7 @@ class PathlossDataset(Dataset):
         self.modality_dropout_prob = modality_dropout_prob
         self.sparse_dropout_given_dropout = sparse_dropout_given_dropout
         
-        # Channel configuration (e.g., "rtdgfmpas" for all 9 channels)
+        # Channel configuration (e.g., "rtdgfmps" for all 8 channels)
         self.channels = channels
         
         self.target_size = IMG_TARGET_SIZE
