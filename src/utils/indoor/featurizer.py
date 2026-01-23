@@ -1,4 +1,5 @@
 import random
+from typing import Optional
 
 import math
 import numpy as np
@@ -688,10 +689,12 @@ def get_fspl(sample: RadarSample) -> torch.Tensor:
 
 def featurizer(
     sample: RadarSample,
-    sparse_range: tuple[float, float] = (0.0, 0.01),
-    modality_dropout_prob: float = 0.6666,
-    sparse_dropout_given_dropout: float = 0.5,
-    channels: str = "rtdgfmps"
+    sparse_range: tuple[float, float],
+    modality_dropout_prob: float,
+    sparse_dropout_given_dropout: float,
+    channels: str,
+    force_drop_sparse: Optional[bool],
+    force_drop_trans_ref: Optional[bool],
 ) -> torch.Tensor:
     """
     Build input tensor with selected channels.
@@ -705,6 +708,12 @@ def featurizer(
         m - mask
         p - floor plan
         s - sparse measurements
+    
+    Args:
+        force_drop_sparse: If True, force sparse channel to be all zeros.
+            If False, force sparse channel to be enabled. If None, use random dropout.
+        force_drop_trans_ref: If True, force trans+ref channels to be all zeros.
+            If False, force trans+ref channels to be enabled. If None, use random dropout.
     """
     num_channels = len(channels)
     
@@ -714,12 +723,20 @@ def featurizer(
     drop_trans_ref = False
     drop_sparse = False
     
-    if random.random() < modality_dropout_prob:
-        # Dropout one modality
-        if random.random() < sparse_dropout_given_dropout:
-            drop_sparse = True
-        else:
-            drop_trans_ref = True
+    # Apply force flags if set, otherwise use random dropout
+    if force_drop_sparse is not None:
+        drop_sparse = force_drop_sparse
+    if force_drop_trans_ref is not None:
+        drop_trans_ref = force_drop_trans_ref
+    
+    # Only apply random dropout if neither force flag is set
+    if force_drop_sparse is None and force_drop_trans_ref is None:
+        if random.random() < modality_dropout_prob:
+            # Dropout one modality
+            if random.random() < sparse_dropout_given_dropout:
+                drop_sparse = True
+            else:
+                drop_trans_ref = True
     
     # Precompute base data from sample
     reflectance = sample.input_img[0]  # First channel

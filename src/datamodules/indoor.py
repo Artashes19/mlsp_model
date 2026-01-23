@@ -84,9 +84,18 @@ class IndoorDatamodule(pl.LightningDataModule):
         self._multi_gpu = multi_gpu
         
         self._train_set = None
-        self._val_set = None
-        self._synth_val_set = None
         self._test_set = None
+        
+        # Three ICASSP validation sets with different channel configs
+        self._val_set_no_sparse = None       # sparse disabled
+        self._val_set_no_trans_ref = None    # trans+ref disabled
+        self._val_set_all_enabled = None     # all channels enabled
+        
+        # Three synthetic validation sets (when use_synthetic_train)
+        self._synth_val_set_no_sparse = None
+        self._synth_val_set_no_trans_ref = None
+        self._synth_val_set_all_enabled = None
+        
         self._data_prepared = False
         
         self.prepare_data()
@@ -186,6 +195,54 @@ class IndoorDatamodule(pl.LightningDataModule):
         )
         return inputs_list
     
+    def _create_validation_sets(
+        self,
+        val_inputs: list,
+    ) -> tuple[PathlossDataset, PathlossDataset, PathlossDataset]:
+        """
+        Create three validation datasets with different channel configurations.
+        
+        Args:
+            val_inputs: List of input samples for validation.
+        
+        Returns:
+            Tuple of (no_sparse, no_trans_ref, all_enabled) datasets:
+            - no_sparse: sparse channel disabled
+            - no_trans_ref: transmittance and reflectance disabled
+            - all_enabled: all channels enabled
+        """
+        # Val set 1: sparse disabled
+        no_sparse = PathlossDataset(
+            val_inputs,
+            training=False,
+            augmentations=None,
+            inference=False,
+            force_drop_sparse=True,
+            force_drop_trans_ref=False,
+            **self.dataset_kwargs
+        )
+        # Val set 2: trans+ref disabled
+        no_trans_ref = PathlossDataset(
+            val_inputs,
+            training=False,
+            augmentations=None,
+            inference=False,
+            force_drop_sparse=False,
+            force_drop_trans_ref=True,
+            **self.dataset_kwargs
+        )
+        # Val set 3: all enabled
+        all_enabled = PathlossDataset(
+            val_inputs,
+            training=False,
+            augmentations=None,
+            inference=False,
+            force_drop_sparse=False,
+            force_drop_trans_ref=False,
+            **self.dataset_kwargs
+        )
+        return no_sparse, no_trans_ref, all_enabled
+    
     def prepare_data(self) -> None:
         if self._data_prepared:
             return
@@ -213,6 +270,8 @@ class IndoorDatamodule(pl.LightningDataModule):
                 training=False,
                 augmentations=None,
                 inference=True,
+                force_drop_sparse=None,
+                force_drop_trans_ref=None,
                 **self.dataset_kwargs
             )
             log.info(f"Prepared inference dataset: test={len(self._test_set)}")
@@ -260,41 +319,39 @@ class IndoorDatamodule(pl.LightningDataModule):
                 f"use_synthetic_train={self.use_synthetic_train}"
             )
             
-            # Create training dataset
+            # Create training dataset (use random dropout via None)
             self._train_set = PathlossDataset(
                 train_inputs,
                 training=True,
                 augmentations=self.train_augmentations,
                 inference=False,
+                force_drop_sparse=None,
+                force_drop_trans_ref=None,
                 **self.dataset_kwargs
             )
             
-            # Create ICASSP validation dataset (always, no augmentations)
-            self._val_set = PathlossDataset(
-                icassp_val_inputs,
-                training=False,
-                augmentations=None,
-                inference=False,
-                **self.dataset_kwargs
-            )
-            self._test_set = self._val_set
+            # Create 3 ICASSP validation datasets with different channel configs
+            (
+                self._val_set_no_sparse,
+                self._val_set_no_trans_ref,
+                self._val_set_all_enabled,
+            ) = self._create_validation_sets(val_inputs=icassp_val_inputs)
+            self._test_set = self._val_set_all_enabled
             
-            # Create synthetic validation dataset (only for synthetic training, no augmentations)
+            # Create 3 synthetic validation datasets (only for synthetic training)
             if synth_val_inputs:
-                self._synth_val_set = PathlossDataset(
-                    synth_val_inputs,
-                    training=False,
-                    augmentations=None,
-                    inference=False,
-                    **self.dataset_kwargs
-                )
-                log.info(f"[datasets] prepared synthetic validation set: n={len(self._synth_val_set)}")
+                (
+                    self._synth_val_set_no_sparse,
+                    self._synth_val_set_no_trans_ref,
+                    self._synth_val_set_all_enabled,
+                ) = self._create_validation_sets(val_inputs=synth_val_inputs)
+                log.info(f"[datasets] prepared synthetic validation sets: n={len(self._synth_val_set_no_sparse)}")
         
         log.info(
             f"[prepare_data] done in {(time.perf_counter() - t0_prepare):.2f}s "
             f"(train_set={len(self._train_set) if self._train_set is not None else 0}, "
-            f"val_set={len(self._val_set) if self._val_set is not None else 0}, "
-            f"synth_val_set={len(self._synth_val_set) if self._synth_val_set is not None else 0}, "
+            f"val_sets={len(self._val_set_no_sparse) if self._val_set_no_sparse is not None else 0}, "
+            f"synth_val_sets={len(self._synth_val_set_no_sparse) if self._synth_val_set_no_sparse is not None else 0}, "
             f"test_set={len(self._test_set) if self._test_set is not None else 0})"
         )
         
@@ -309,24 +366,45 @@ class IndoorDatamodule(pl.LightningDataModule):
         return self._test_set
     
     @property
-    def val_set(self):
-        return self._val_set
+    def val_set_no_sparse(self):
+        return self._val_set_no_sparse
     
     @property
-    def synth_val_set(self):
-        return self._synth_val_set
+    def val_set_no_trans_ref(self):
+        return self._val_set_no_trans_ref
+    
+    @property
+    def val_set_all_enabled(self):
+        return self._val_set_all_enabled
+    
+    @property
+    def synth_val_set_no_sparse(self):
+        return self._synth_val_set_no_sparse
+    
+    @property
+    def synth_val_set_no_trans_ref(self):
+        return self._synth_val_set_no_trans_ref
+    
+    @property
+    def synth_val_set_all_enabled(self):
+        return self._synth_val_set_all_enabled
     
     def val_dataloader(self) -> list[DataLoader]:
         """
-        Returns validation dataloaders.
-        - For real training: [ICASSP val]
-        - For synthetic training: [ICASSP val, Synthetic val]
+        Returns validation dataloaders with different channel configurations.
+        
+        Order:
+        - Index 0: ICASSP, sparse disabled
+        - Index 1: ICASSP, trans+ref disabled
+        - Index 2: ICASSP, all enabled
+        - Index 3: Synthetic, sparse disabled (only when use_synthetic_train)
+        - Index 4: Synthetic, trans+ref disabled (only when use_synthetic_train)
+        - Index 5: Synthetic, all enabled (only when use_synthetic_train)
         """
         dataloaders = []
         
-        # ICASSP validation (always)
-        if self._val_set:
-            sampler = DistributedSampler(self._val_set, shuffle=False) if self._multi_gpu else None
+        def _make_dataloader(dataset):
+            sampler = DistributedSampler(dataset, shuffle=False) if self._multi_gpu else None
             dl_kwargs = dict(
                 batch_size=self._batch_size,
                 num_workers=self._num_workers,
@@ -336,21 +414,23 @@ class IndoorDatamodule(pl.LightningDataModule):
             )
             if self._num_workers and self._num_workers > 0:
                 dl_kwargs.update(persistent_workers=True, prefetch_factor=2)
-            dataloaders.append(DataLoader(self._val_set, **dl_kwargs))
+            return DataLoader(dataset, **dl_kwargs)
         
-        # Synthetic validation (only when use_synthetic_train)
-        if self._synth_val_set:
-            sampler = DistributedSampler(self._synth_val_set, shuffle=False) if self._multi_gpu else None
-            dl_kwargs = dict(
-                batch_size=self._batch_size,
-                num_workers=self._num_workers,
-                sampler=sampler,
-                drop_last=False,
-                pin_memory=True,
-            )
-            if self._num_workers and self._num_workers > 0:
-                dl_kwargs.update(persistent_workers=True, prefetch_factor=2)
-            dataloaders.append(DataLoader(self._synth_val_set, **dl_kwargs))
+        # ICASSP validation sets (always, 3 dataloaders)
+        if self._val_set_no_sparse:
+            dataloaders.append(_make_dataloader(self._val_set_no_sparse))
+        if self._val_set_no_trans_ref:
+            dataloaders.append(_make_dataloader(self._val_set_no_trans_ref))
+        if self._val_set_all_enabled:
+            dataloaders.append(_make_dataloader(self._val_set_all_enabled))
+        
+        # Synthetic validation sets (only when use_synthetic_train, 3 dataloaders)
+        if self._synth_val_set_no_sparse:
+            dataloaders.append(_make_dataloader(self._synth_val_set_no_sparse))
+        if self._synth_val_set_no_trans_ref:
+            dataloaders.append(_make_dataloader(self._synth_val_set_no_trans_ref))
+        if self._synth_val_set_all_enabled:
+            dataloaders.append(_make_dataloader(self._synth_val_set_all_enabled))
         
         return dataloaders
     

@@ -32,6 +32,8 @@ class PathlossDataset(Dataset):
         modality_dropout_prob: float,
         sparse_dropout_given_dropout: float,
         channels: str,
+        force_drop_sparse: Optional[bool],
+        force_drop_trans_ref: Optional[bool],
         **kwargs
     ):
         self.inputs_list = inputs_list
@@ -44,6 +46,10 @@ class PathlossDataset(Dataset):
         
         # Channel configuration (e.g., "rtdgfmps" for all 8 channels)
         self.channels = channels
+        
+        # Force dropout flags for validation sets
+        self.force_drop_sparse = force_drop_sparse
+        self.force_drop_trans_ref = force_drop_trans_ref
         
         self.target_size = IMG_TARGET_SIZE
     
@@ -248,7 +254,9 @@ class PathlossDataset(Dataset):
             sparse_range=self.sparse_range,
             modality_dropout_prob=self.modality_dropout_prob,
             sparse_dropout_given_dropout=self.sparse_dropout_given_dropout,
-            channels=self.channels
+            channels=self.channels,
+            force_drop_sparse=self.force_drop_sparse,
+            force_drop_trans_ref=self.force_drop_trans_ref,
         )
         mask = sample.mask
         # Store original dimensions for algorithm to use
