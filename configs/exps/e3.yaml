@@ -19,7 +19,7 @@ e3:
     use_small_train: True
     train_samples_per_epoch: 960
     # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
-    modality_dropout_prob: 0.6666
+    modality_dropout_prob: 0.0
     # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
     sparse_dropout_given_dropout: 0.5
 
