@@ -501,7 +501,7 @@ class TxUNetModel(nn.Module):
         # 3×3 conv: in_ch → C
         # Produces F₀ which is used for residual in head
         self.stem = nn.Sequential(
-            nn.Conv2d(in_ch, 2 * c, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(in_ch, 2 * c, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(2 * c, c, kernel_size=3, padding=1)
         )
