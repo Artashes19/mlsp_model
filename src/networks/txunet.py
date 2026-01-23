@@ -1,8 +1,8 @@
 from __future__ import annotations, annotations
 
-import math
 from typing import Sequence
 
+import math
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
@@ -254,14 +254,14 @@ class GatedDepthwiseFFN(nn.Module):
         self.proj = nn.Conv2d(hidden, dim, kernel_size=1, bias=True)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        u = self.branch1(x)            # [B, Hid, H, W]
+        u = self.branch1(x)  # [B, Hid, H, W]
         v = self.act(self.branch2(x))  # [B, Hid, H, W]
         
         # Clamp u to prevent explosion in multiplicative gate
         u = torch.clamp(u, -256.0, 256.0)
         
-        g = u * v                       # Gated: [B, Hid, H, W]
-        return self.proj(g) + x         # Internal residual: [B, C, H, W]
+        g = u * v  # Gated: [B, Hid, H, W]
+        return self.proj(g) + x  # Internal residual: [B, C, H, W]
 
 
 # ---------- Windowed Attention Wrapper ----------
@@ -500,7 +500,11 @@ class TxUNetModel(nn.Module):
         # ============ STEM ============
         # 3×3 conv: in_ch → C
         # Produces F₀ which is used for residual in head
-        self.stem = nn.Conv2d(in_ch, c, kernel_size=3, padding=1)
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_ch, 2 * c, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(2 * c, c, kernel_size=3, padding=1)
+        )
         
         # ============ ENCODER ============
         # Level 0: [B, C, H, W]
