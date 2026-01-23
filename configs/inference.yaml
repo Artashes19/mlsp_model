@@ -7,7 +7,15 @@ ignore_warnings: True
 # Inference parameters
 ckpt_path: null  # Required: path to checkpoint file
 gpu: 0  # GPU device index
-split: val  # Dataset split: train, val, or test
+
+# Dataset splits to run inference on (must be a list)
+split:
+  - val_no_sparse
+  - val_no_trans_ref
+  - val_all_enabled
+  - synth_val_no_sparse
+  - synth_val_no_trans_ref
+  - synth_val_all_enabled
 
 # Output directory (derived from checkpoint path)
 predictions_dir: ${oc.env:PREDICTIONS_DIR}

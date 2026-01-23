@@ -2,17 +2,44 @@ import logging
 import os
 import re
 import time
+from typing import Optional
 
 import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.datamodules.indoor import IndoorDatamodule
 
 log = logging.getLogger(__name__)
+
+
+def _get_dataset_by_split(
+    datamodule: IndoorDatamodule,
+    split: str,
+) -> Optional[Dataset]:
+    """
+    Get dataset by split name. Returns None if split is not available.
+    """
+    split_map = {
+        "train": datamodule.train_set,
+        "test": datamodule.test_set,
+        # ICASSP validation sets
+        "val_no_sparse": datamodule.val_set_no_sparse,
+        "val_no_trans_ref": datamodule.val_set_no_trans_ref,
+        "val_all_enabled": datamodule.val_set_all_enabled,
+        # Synthetic validation sets
+        "synth_val_no_sparse": datamodule.synth_val_set_no_sparse,
+        "synth_val_no_trans_ref": datamodule.synth_val_set_no_trans_ref,
+        "synth_val_all_enabled": datamodule.synth_val_set_all_enabled,
+    }
+    if split not in split_map:
+        log.warning(f"[inference] Unknown split name: {split}")
+        return None
+    return split_map[split]  # May return None if dataset not initialized
 
 
 def parse_output_dir(
@@ -54,36 +81,27 @@ def inference_prep(
     project_root: str,
 ) -> None:
     """
-    Run inference on a dataset split using a trained checkpoint.
+    Run inference on multiple dataset splits using a trained checkpoint.
     
     Steps:
-    1. Parse checkpoint path to derive output directory
-    2. Instantiate datamodule for chosen split
-    3. Instantiate algorithm and load checkpoint weights
-    4. Loop through dataset samples and save predictions as .npz files
+    1. Parse checkpoint path and splits from config
+    2. Instantiate datamodule and algorithm (once)
+    3. Load checkpoint weights
+    4. For each split: loop through dataset samples and save predictions as .npz files
     """
     t0 = time.perf_counter()
     
     # Get inference parameters
     ckpt_path = os.path.abspath(str(config["ckpt_path"]))
     gpu = int(config.get("gpu", 0))
-    split = str(config.get("split", "val"))
+    splits = list(config["split"])  # Must be a list
     predictions_dir = os.path.expanduser(str(config["predictions_dir"]))
     
     # Validate checkpoint exists
     if not os.path.isfile(ckpt_path):
         raise RuntimeError(f"Checkpoint not found: {ckpt_path}")
     
-    # Derive output directory
-    output_dir = parse_output_dir(
-        ckpt_path=ckpt_path,
-        predictions_dir=predictions_dir,
-        datamodule_name=str(config.datamodule.name),
-        split_name=split,
-    )
-    os.makedirs(output_dir, exist_ok=True)
-    log.info(f"[inference] Output directory: {output_dir}")
-    log.info(f"[inference] Using split: {split}")
+    log.info(f"[inference] Splits to process: {splits}")
     
     # Instantiate datamodule via hydra
     log.info(f"[inference] Instantiating datamodule: {config.datamodule._target_}")
@@ -91,18 +109,6 @@ def inference_prep(
         config.datamodule,
         multi_gpu=False,
     )
-    
-    # Select dataset based on split
-    if split == "train":
-        dataset = datamodule.train_set
-    elif split == "val":
-        dataset = datamodule.val_set
-    elif split == "test":
-        dataset = datamodule.test_set
-    else:
-        raise ValueError(f"Invalid split: {split}. Must be one of: train, val, test")
-    
-    log.info(f"[inference] Dataset size: {len(dataset)}")
     
     # Compute num_channels from datamodule.channels
     num_channels = len(config.datamodule.channels)
@@ -134,37 +140,56 @@ def inference_prep(
     algorithm.cuda(gpu)
     log.info(f"[inference] Using GPU: {gpu}")
     
-    # Run inference
-    log.info(f"[inference] Starting inference on {len(dataset)} samples...")
-    
-    with torch.no_grad():
-        for idx in tqdm(range(len(dataset)), desc="Inference"):
-            # Get sample from dataset
-            batch = dataset[idx]
-            
-            # Run prediction
-            result = algorithm.pred(batch=batch)
-            
-            # Extract file name for output
-            sample_meta = batch[3]  # (inputs, targets, masks, sample_meta)
-            file_name = sample_meta["file_name"]
-            
-            # Clean file name for use as filename (remove path separators, etc.)
-            safe_file_name = re.sub(r"[^\w\-_.]", "_", str(file_name))
-            
-            # Save to .npz file
-            output_path = os.path.join(output_dir, f"{safe_file_name}.npz")
-            
-            np.savez(
-                output_path,
-                pred=result["pred"],
-                inputs=result["inputs"],
-                targets=result["targets"],
-                masks=result["masks"],
-                file_name=result["sample"]["file_name"],
-                pixel_size=result["sample"]["pixel_size"],
-            )
+    # Process each split
+    total_samples = 0
+    for split in splits:
+        dataset = _get_dataset_by_split(datamodule=datamodule, split=split)
+        if dataset is None:
+            log.warning(f"[inference] Skipping split {split}: dataset not available")
+            continue
+        
+        # Derive output directory for this split
+        output_dir = parse_output_dir(
+            ckpt_path=ckpt_path,
+            predictions_dir=predictions_dir,
+            datamodule_name=str(config.datamodule.name),
+            split_name=split,
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        log.info(f"[inference] Processing split: {split} ({len(dataset)} samples)")
+        log.info(f"[inference] Output directory: {output_dir}")
+        
+        # Run inference for this split
+        with torch.no_grad():
+            for idx in tqdm(range(len(dataset)), desc=f"Inference ({split})"):
+                # Get sample from dataset
+                batch = dataset[idx]
+                
+                # Run prediction
+                result = algorithm.pred(batch=batch)
+                
+                # Extract file name for output
+                sample_meta = batch[3]  # (inputs, targets, masks, sample_meta)
+                file_name = sample_meta["file_name"]
+                
+                # Clean file name for use as filename (remove path separators, etc.)
+                safe_file_name = re.sub(r"[^\w\-_.]", "_", str(file_name))
+                
+                # Save to .npz file
+                output_path = os.path.join(output_dir, f"{safe_file_name}.npz")
+                
+                np.savez(
+                    output_path,
+                    pred=result["pred"],
+                    inputs=result["inputs"],
+                    targets=result["targets"],
+                    masks=result["masks"],
+                    file_name=result["sample"]["file_name"],
+                    pixel_size=result["sample"]["pixel_size"],
+                )
+        
+        log.info(f"[inference] Saved {len(dataset)} predictions to {output_dir}")
+        total_samples += len(dataset)
     
     elapsed = time.perf_counter() - t0
-    log.info(f"[inference] Completed in {elapsed:.2f}s")
-    log.info(f"[inference] Saved {len(dataset)} predictions to {output_dir}")
+    log.info(f"[inference] Completed in {elapsed:.2f}s ({total_samples} total samples across {len(splits)} splits)")
