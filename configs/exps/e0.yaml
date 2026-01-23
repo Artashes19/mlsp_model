@@ -6,7 +6,7 @@ e0:
     - trainer: default
     - datamodule: indoor
     - optimizer: adam
-    - scheduler: wsd_s_finetune_bs24
+    - scheduler: null
     - algorithm: indoor
     - network: txunet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0, early_stopping ]
