@@ -65,3 +65,5 @@ cache/
 .hydra/
 
 test_outputs/
+# ignore all png files
+*.png

@@ -44,7 +44,7 @@ class PathlossDataset(Dataset):
         self.modality_dropout_prob = modality_dropout_prob
         self.sparse_dropout_given_dropout = sparse_dropout_given_dropout
         
-        # Channel configuration (e.g., "rtdgfmps" for all 8 channels)
+        # Channel configuration (e.g., "rtdgfmps" for 10 channels with one-hot frequency)
         self.channels = channels
         
         # Force dropout flags for validation sets
@@ -160,7 +160,7 @@ class PathlossDataset(Dataset):
         
         output_img = torch.from_numpy(pathloss)
         freq_MHz = float(meta["frequency_MHz"])  # required above
-        radiation_pattern = torch.ones(360, dtype=torch.float32)
+        radiation_pattern = torch.zeros(360, dtype=torch.float32)
         
         sample = RadarSample(
             file_name=file_name,
