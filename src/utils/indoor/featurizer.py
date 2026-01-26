@@ -10,7 +10,13 @@ from sklearn.gaussian_process.kernels import ConstantKernel as C, RBF
 
 from src.utils.indoor.types import RadarSample
 from src.utils.indoor.config_overrides import get_config
-from src.utils.indoor.channel_config import CHANNEL_ORDER, NUM_CHANNELS
+from src.utils.indoor.channel_config import (
+    CHANNEL_ORDER,
+    NUM_CHANNELS,
+    INPUT_REFLECTANCE_CHANNEL,
+    INPUT_TRANSMITTANCE_CHANNEL,
+    INPUT_DISTANCE_CHANNEL,
+)
 
 
 @njit
@@ -748,7 +754,7 @@ def get_fspl(sample: RadarSample) -> torch.Tensor:
         sample.y_ant
     )
     fspl = calculate_fspl(
-        dist_m=sample.input_img[2],
+        dist_m=sample.input_img[INPUT_DISTANCE_CHANNEL],
         freq_MHz=sample.freq_MHz,
         antenna_gain=antenna_gain
     )
@@ -780,9 +786,9 @@ def featurizer(
             drop_trans_ref = True
     
     # Precompute base data from sample
-    reflectance = sample.input_img[0]  # First channel
-    transmittance = sample.input_img[1]  # Second channel
-    distance = sample.input_img[2]  # Third channel
+    reflectance = sample.input_img[INPUT_REFLECTANCE_CHANNEL]
+    transmittance = sample.input_img[INPUT_TRANSMITTANCE_CHANNEL]
+    distance = sample.input_img[INPUT_DISTANCE_CHANNEL]
     
     # Compute antenna gain only if needed
     antenna_gain = None
