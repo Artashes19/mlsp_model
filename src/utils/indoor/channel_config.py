@@ -1,23 +1,37 @@
 """
-Channel configuration for featurizer output tensors.
+Channel configuration for featurizer input and output tensors.
 
-The CHANNEL_ORDER list defines which feature goes into which channel.
-Index in the list = index in the output tensor.
+INPUT CHANNELS (sample.input_img):
+    - Channel 0: reflectance
+    - Channel 1: transmittance
+    - Channel 2: distance (meters)
 
-To reorder channels: just reorder this list.
-To add a channel: add it to the list.
-To remove a channel: remove it from the list.
+OUTPUT CHANNELS (featurizer output):
+    The CHANNEL_ORDER list defines which feature goes into which channel.
+    Index in the list = index in the output tensor.
 
-Available channel names:
-    - "reflectance"
-    - "transmittance"
-    - "distance"
-    - "antenna_gain"
-    - "freq_sin_1", "freq_cos_1", "freq_sin_2", "freq_cos_2" (Fourier frequency encoding)
-    - "mask"
-    - "floor_plan"
-    - "sparse"
+    To reorder channels: just reorder this list.
+    To add a channel: add it to the list.
+    To remove a channel: remove it from the list.
+
+    Available channel names:
+        - "reflectance"
+        - "transmittance"
+        - "distance"
+        - "antenna_gain"
+        - "freq_sin_1", "freq_cos_1", "freq_sin_2", "freq_cos_2" (Fourier frequency encoding)
+        - "mask"
+        - "floor_plan"
+        - "sparse"
 """
+
+# ============================================================================
+# Input Channel Configuration (sample.input_img)
+# ============================================================================
+INPUT_REFLECTANCE_CHANNEL = 0
+INPUT_TRANSMITTANCE_CHANNEL = 1
+INPUT_DISTANCE_CHANNEL = 2
+NUM_INPUT_CHANNELS = 3
 
 # ============================================================================
 # Channel Order Configuration
