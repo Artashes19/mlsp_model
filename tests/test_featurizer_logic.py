@@ -65,7 +65,6 @@ def default_featurizer_args(
     sparse_range=(0.0, 0.01),
     modality_dropout_prob=0.0,
     sparse_dropout_given_dropout=0.5,
-    channels=DEFAULT_CHANNELS,
     force_drop_sparse=False,
     force_drop_trans_ref=False,
 ):
@@ -74,7 +73,6 @@ def default_featurizer_args(
         sparse_range=sparse_range,
         modality_dropout_prob=modality_dropout_prob,
         sparse_dropout_given_dropout=sparse_dropout_given_dropout,
-        channels=channels,
         force_drop_sparse=force_drop_sparse,
         force_drop_trans_ref=force_drop_trans_ref,
     )

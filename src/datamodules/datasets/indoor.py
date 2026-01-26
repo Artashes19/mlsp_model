@@ -254,7 +254,6 @@ class PathlossDataset(Dataset):
             sparse_range=self.sparse_range,
             modality_dropout_prob=self.modality_dropout_prob,
             sparse_dropout_given_dropout=self.sparse_dropout_given_dropout,
-            channels=self.channels,
             force_drop_sparse=self.force_drop_sparse,
             force_drop_trans_ref=self.force_drop_trans_ref,
         )

@@ -21,14 +21,17 @@ import matplotlib
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(REPO_ROOT))
 
+# Load .env file
+from dotenv import load_dotenv
+load_dotenv(REPO_ROOT / ".env")
+
 from src.datamodules.indoor import IndoorDatamodule
 from src.datamodules.datasets.indoor import PathlossDataset
 from src.utils.indoor.config_overrides import get_config
-from src.utils.indoor.featurizer import FREQ_VALUES, get_num_channels
+from src.utils.indoor.channel_config import CHANNEL_ORDER, NUM_CHANNELS
 
 
 def parse_args() -> argparse.Namespace:
-    config = get_config()
     parser = argparse.ArgumentParser(description="Inspect MLSP feature tensors.")
     parser.add_argument(
         "--manifest",
@@ -76,12 +79,6 @@ def parse_args() -> argparse.Namespace:
         "--all-freqs",
         action="store_true",
         help="Include all frequencies from the manifest.",
-    )
-    parser.add_argument(
-        "--channels",
-        type=str,
-        default=config.channels,
-        help="Channel string, e.g., rtdgfmps (11ch with Fourier freq) or rtd (3ch).",
     )
     parser.add_argument(
         "--sparse-range",
@@ -148,22 +145,20 @@ def main() -> None:
         )
         inputs_list = sorted(inputs_list, key=lambda x: x["file_name"])[: args.num_samples]
 
+    # Default channels string for featurizer (all channels enabled)
+    channels = "rtdgfmps"
+    
     dataset = PathlossDataset(
         inputs_list=inputs_list,
         training=False,
-        mlsp_task1=False,
-        mlsp_task_idx=1,
-        task_idx=1,
-        pl_clip=None,
-        use_transmittance_loss=False,
         inference=True,
-        reps_per_epoch=1,
-        augment_val=False,
         augmentations=None,
         sparse_range=list(args.sparse_range),
         modality_dropout_prob=args.modality_dropout_prob,
         sparse_dropout_given_dropout=args.sparse_dropout_given_dropout,
-        channels=args.channels,
+        channels=channels,
+        force_drop_sparse=False,
+        force_drop_trans_ref=False,
     )
 
     tensors = []
@@ -189,13 +184,9 @@ def main() -> None:
     vmin = flat.min(axis=(0, 2))
     vmax = flat.max(axis=(0, 2))
 
-    channel_labels = []
-    for ch in args.channels:
-        if ch == "f":
-            channel_labels.extend([f"f{idx+1}" for idx in range(len(FREQ_VALUES))])
-        else:
-            channel_labels.append(ch)
-    if len(channel_labels) != get_num_channels(args.channels):
+    # Use channel labels from CHANNEL_ORDER
+    channel_labels = CHANNEL_ORDER
+    if len(channel_labels) != NUM_CHANNELS:
         raise ValueError("Channel labels do not match tensor channels.")
 
     with open(out_dir / "stats.csv", "w", newline="") as fp:

@@ -767,7 +767,6 @@ def featurizer(
     sparse_range: tuple[float, float],
     modality_dropout_prob: float,
     sparse_dropout_given_dropout: float,
-    channels: str,
     force_drop_sparse: Optional[bool],
     force_drop_trans_ref: Optional[bool],
 ) -> torch.Tensor:
