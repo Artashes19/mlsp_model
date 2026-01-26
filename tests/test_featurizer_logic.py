@@ -1136,6 +1136,8 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         channel_maxs = [[] for _ in range(NUM_CHANNELS)]
         channel_means = [[] for _ in range(NUM_CHANNELS)]
         channel_nonzero_fracs = [[] for _ in range(NUM_CHANNELS)]
+        mask_is_binary = []  # Track whether mask is strictly binary per sample
+        floor_plan_is_binary = []  # Track whether floor plan is strictly binary per sample
         
         sparse_range = tuple(cfg.datamodule.sparse_range)
         
@@ -1152,6 +1154,13 @@ class TestFeaturizerWithRealData(unittest.TestCase):
                 channel_maxs[ch_idx].append(ch_data.max().item())
                 channel_means[ch_idx].append(ch_data.mean().item())
                 channel_nonzero_fracs[ch_idx].append((ch_data != 0).float().mean().item())
+            
+            # Check mask and floor plan are strictly binary (only 0.0 and 1.0)
+            mask_unique = torch.unique(output[MASK_CHANNEL]).tolist()
+            mask_is_binary.append(all(v in [0.0, 1.0] for v in mask_unique))
+            
+            floor_unique = torch.unique(output[FLOOR_PLAN_CHANNEL]).tolist()
+            floor_plan_is_binary.append(all(v in [0.0, 1.0] for v in floor_unique))
         
         print(f"\n  Statistics across {n_samples} samples:")
         print(f"  {'Channel':<15} {'Min Range':<20} {'Max Range':<20} {'Mean Range':<20}")
@@ -1167,15 +1176,15 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         # Validate ALL channels, not just mask/floor_plan
         # =========================================================================
         
-        # Mask channel should be binary [0, 1]
-        self.assertTrue(all(m <= 1.0 for m in channel_maxs[MASK_CHANNEL]), "Mask max should be <= 1.0")
-        self.assertTrue(all(m >= 0.0 for m in channel_mins[MASK_CHANNEL]), "Mask min should be >= 0.0")
-        print("  Mask: binary [0, 1] ✓")
+        # Mask channel should be strictly binary (only 0.0 and 1.0, no intermediate values like 0.4)
+        self.assertTrue(all(mask_is_binary), 
+            f"Mask should be strictly binary (only 0 and 1), but {sum(not b for b in mask_is_binary)}/{n_samples} samples had non-binary values")
+        print("  Mask: strictly binary {0, 1} ✓")
         
-        # Floor plan should be binary [0, 1]
-        self.assertTrue(all(m <= 1.0 for m in channel_maxs[FLOOR_PLAN_CHANNEL]), "Floor plan max should be <= 1.0")
-        self.assertTrue(all(m >= 0.0 for m in channel_mins[FLOOR_PLAN_CHANNEL]), "Floor plan min should be >= 0.0")
-        print("  Floor plan: binary [0, 1] ✓")
+        # Floor plan should be strictly binary (only 0.0 and 1.0)
+        self.assertTrue(all(floor_plan_is_binary),
+            f"Floor plan should be strictly binary (only 0 and 1), but {sum(not b for b in floor_plan_is_binary)}/{n_samples} samples had non-binary values")
+        print("  Floor plan: strictly binary {0, 1} ✓")
         
         # Frequency channels should be in [-1, 1]
         for freq_ch_idx in [FREQ_SIN_1_CHANNEL, FREQ_COS_1_CHANNEL, FREQ_SIN_2_CHANNEL, FREQ_COS_2_CHANNEL]:
