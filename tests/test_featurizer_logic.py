@@ -787,11 +787,19 @@ class TestFeaturizerWithRealData(unittest.TestCase):
                     f"Freq channel {CHANNEL_ORDER[freq_ch_idx]} max={freq_ch.max():.4f} should be <= 1")
             print(f"    Frequency channels in [-1, 1] ✓")
             
-            # Check distance channel has variation (not constant)
+            # Check distance channel has variation AND correct ordering
             dist_ch = output[DISTANCE_CHANNEL]
             self.assertGreater(dist_ch.max() - dist_ch.min(), 0.1,
                 "Distance channel should have variation (not constant)")
-            print(f"    Distance channel has variation ✓")
+            
+            # Validate distance ordering: antenna position should have minimum distance
+            ant_y = int(min(max(0, sample.y_ant), sample.H - 1))
+            ant_x = int(min(max(0, sample.x_ant), sample.W - 1))
+            dist_at_antenna = dist_ch[ant_y, ant_x].item()
+            min_dist = dist_ch.min().item()
+            self.assertAlmostEqual(dist_at_antenna, min_dist, places=4,
+                msg=f"Distance at antenna should equal minimum (got {dist_at_antenna:.4f} vs {min_dist:.4f})")
+            print(f"    Distance channel: variation ✓, ordering ✓")
             
             # Validate reflectance/transmittance are present and have plausible content
             # (With dropout=0, these should NOT be zeroed out)
@@ -889,11 +897,19 @@ class TestFeaturizerWithRealData(unittest.TestCase):
                     f"Freq channel {CHANNEL_ORDER[freq_ch_idx]} max={freq_ch.max():.4f} should be <= 1")
             print(f"    Frequency channels in [-1, 1] ✓")
             
-            # Check distance channel has variation (not constant)
+            # Check distance channel has variation AND correct ordering
             dist_ch = output[DISTANCE_CHANNEL]
             self.assertGreater(dist_ch.max() - dist_ch.min(), 0.1,
                 "Distance channel should have variation (not constant)")
-            print(f"    Distance channel has variation ✓")
+            
+            # Validate distance ordering: antenna position should have minimum distance
+            ant_y = int(min(max(0, sample.y_ant), sample.H - 1))
+            ant_x = int(min(max(0, sample.x_ant), sample.W - 1))
+            dist_at_antenna = dist_ch[ant_y, ant_x].item()
+            min_dist = dist_ch.min().item()
+            self.assertAlmostEqual(dist_at_antenna, min_dist, places=4,
+                msg=f"Distance at antenna should equal minimum (got {dist_at_antenna:.4f} vs {min_dist:.4f})")
+            print(f"    Distance channel: variation ✓, ordering ✓")
             
             # Validate reflectance/transmittance are present and have plausible content
             # (With dropout=0, these should NOT be zeroed out)
