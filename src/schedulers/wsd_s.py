@@ -12,7 +12,7 @@ class WSDScheduler(_LRScheduler):
     Warmup-Stable-Decay (WSD-S) scheduler that follows a predefined step allocation.
     It ramps the learning rate from zero to the peak during warmup and then alternates
     between stable plateaus and decay ramps that connect the plateaus linearly.
-    The final plateau is pinned at zero to ensure the schedule ends at the minimum LR.
+    The final learning rate is controlled by min_lr_factor (default 0.0).
     """
     
     def __init__(
@@ -23,6 +23,7 @@ class WSDScheduler(_LRScheduler):
         decay_steps: Sequence[int],
         peak_lr: float,
         last_epoch: int,
+        min_lr_factor: float,
         interval: str | None = None,
         frequency: int | None = None,
     ):
@@ -32,11 +33,13 @@ class WSDScheduler(_LRScheduler):
             stable_steps=stable_steps,
             decay_steps=decay_steps,
             peak_lr=peak_lr,
+            min_lr_factor=min_lr_factor,
         )
         self._warmup_steps = warmup_steps
         self._stable_steps = tuple(int(step) for step in stable_steps)
         self._decay_steps = tuple(int(step) for step in decay_steps)
         self._peak_lr = float(peak_lr)
+        self._min_lr_factor = float(min_lr_factor)
         self._phases = self._build_phases()
         self._total_steps = self._phases[-1]["end"] if self._phases else 0
         self._first_step_call = True
@@ -106,7 +109,7 @@ class WSDScheduler(_LRScheduler):
                     phase=phase,
                     step=step,
                 )
-        return 0.0
+        return self._min_lr_factor
     
     def _factor_for_phase(
         self,
@@ -127,7 +130,7 @@ class WSDScheduler(_LRScheduler):
         if phase_kind == "decay":
             return self._interpolate(
                 start_factor=1.0,
-                end_factor=0.0,
+                end_factor=self._min_lr_factor,
                 start_step=phase["start"],
                 end_step=phase["end"],
                 step=step,
@@ -192,6 +195,7 @@ class WSDScheduler(_LRScheduler):
         stable_steps: Sequence[int],
         decay_steps: Sequence[int],
         peak_lr: float,
+        min_lr_factor: float,
     ) -> None:
         if warmup_steps < 0:
             raise ValueError("warmup_steps must be non-negative")
@@ -203,3 +207,5 @@ class WSDScheduler(_LRScheduler):
             raise ValueError("decay_steps must contain only positive durations")
         if peak_lr <= 0.0:
             raise ValueError("peak_lr must be positive")
+        if not (0.0 <= min_lr_factor <= 1.0):
+            raise ValueError("min_lr_factor must be in range [0.0, 1.0]")
