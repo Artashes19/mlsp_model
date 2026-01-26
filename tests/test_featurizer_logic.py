@@ -556,6 +556,70 @@ class TestFeaturizerLogic(unittest.TestCase):
         
         # Sparse: should be ~0 at normalization center (S_MEAN)
         self.assertAlmostEqual(normalized[SPARSE_CHANNEL, 0, 0].item(), 0.0, places=1)
+    
+    def test_frequency_encoding(self):
+        """Test that frequency channels have correct Fourier encoding values."""
+        print("\n" + "=" * 60)
+        print("[TEST] Frequency Encoding Correctness")
+        print("=" * 60)
+        
+        import math
+        
+        # Fourier encoding parameters (must match featurizer.py)
+        FREQ_MIN = 100.0    # MHz
+        FREQ_MAX = 7000.0   # MHz
+        
+        def expected_fourier_encoding(freq_mhz: float) -> tuple:
+            """Compute expected Fourier encoding for a frequency."""
+            freq_clamped = max(FREQ_MIN, min(FREQ_MAX, freq_mhz))
+            log_min, log_max = math.log(FREQ_MIN), math.log(FREQ_MAX)
+            t = (math.log(freq_clamped) - log_min) / (log_max - log_min)
+            
+            activations = []
+            for level in range(2):  # FREQ_N_LEVELS = 2
+                scale = 2 ** level  # 1, 2
+                activations.append(math.sin(2 * math.pi * scale * t))
+                activations.append(math.cos(2 * math.pi * scale * t))
+            return tuple(activations)  # (sin_1, cos_1, sin_2, cos_2)
+        
+        # Test frequencies: 868, 1800, 3500 (from ICASSP/synthetic) + 2400 (novel)
+        test_frequencies = [868.0, 1800.0, 3500.0, 2400.0]
+        
+        for freq_mhz in test_frequencies:
+            print(f"\n  Testing frequency: {freq_mhz} MHz")
+            
+            sample = create_mock_sample(freq_MHz=freq_mhz)
+            output = featurizer(sample, sparse_range=[0.0, 0.0], modality_dropout_prob=0.0)
+            
+            # Get expected encoding
+            expected = expected_fourier_encoding(freq_mhz)
+            
+            # Check each frequency channel
+            freq_channels = [
+                (FREQ_SIN_1_CHANNEL, "freq_sin_1", expected[0]),
+                (FREQ_COS_1_CHANNEL, "freq_cos_1", expected[1]),
+                (FREQ_SIN_2_CHANNEL, "freq_sin_2", expected[2]),
+                (FREQ_COS_2_CHANNEL, "freq_cos_2", expected[3]),
+            ]
+            
+            for ch_idx, ch_name, expected_val in freq_channels:
+                ch_data = output[ch_idx]
+                actual_val = ch_data[0, 0].item()  # Sample one pixel
+                
+                # 1. Verify value matches expected encoding
+                self.assertAlmostEqual(actual_val, expected_val, places=4,
+                    msg=f"{ch_name} at {freq_mhz}MHz: expected {expected_val:.6f}, got {actual_val:.6f}")
+                
+                # 2. Verify all values in channel are constant (same across entire image)
+                self.assertTrue(
+                    torch.allclose(ch_data, torch.full_like(ch_data, expected_val), atol=1e-5),
+                    f"{ch_name} should be constant across image at {freq_mhz}MHz"
+                )
+            
+            print(f"    sin_1={expected[0]:.4f}, cos_1={expected[1]:.4f}, "
+                  f"sin_2={expected[2]:.4f}, cos_2={expected[3]:.4f} ✓")
+        
+        print(f"\n  All {len(test_frequencies)} frequencies verified ✓")
 
 
 class TestEdgeCases(unittest.TestCase):
