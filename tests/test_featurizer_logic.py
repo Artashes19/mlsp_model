@@ -30,6 +30,11 @@ load_dotenv(PROJECT_ROOT / ".env")
 from src.utils.indoor.types import RadarSample
 from src.utils.indoor.featurizer import featurizer, normalize_input, get_num_channels
 from src.utils.indoor.channel_config import (
+    # Input channel indices
+    INPUT_REFLECTANCE_CHANNEL,
+    INPUT_TRANSMITTANCE_CHANNEL,
+    INPUT_DISTANCE_CHANNEL,
+    # Output channel indices
     CHANNEL_ORDER,
     NUM_CHANNELS,
     REFLECTANCE_CHANNEL,
@@ -361,24 +366,30 @@ class TestFeaturizerLogic(unittest.TestCase):
         # No floor_plan provided, should be auto-generated
         self.assertIsNone(sample.floor_plan)
         
+        # Compute expected floor plan from input: (reflectance > 0) | (transmittance > 0)
+        reflectance = sample.input_img[INPUT_REFLECTANCE_CHANNEL]
+        transmittance = sample.input_img[INPUT_TRANSMITTANCE_CHANNEL]
+        expected_floor_plan = ((reflectance > 0) | (transmittance > 0)).float()
+        
         output = featurizer(sample, sparse_range=[0.0, 0.01])
         
         ch = output[FLOOR_PLAN_CHANNEL]
         
-        # Floor plan = (reflectance > 0) | (transmittance > 0)
-        # reflectance is set in [20:80, 20:80]
-        # transmittance is set in [30:70, 30:70] (subset)
-        # So floor plan should be 1 in [20:80, 20:80]
-        
-        expected_ones = (80 - 20) * (80 - 20)  # 3600 pixels
+        expected_ones = expected_floor_plan.sum().item()
         actual_ones = (ch > 0.5).sum().item()
         
-        print(f"  Expected floor plan pixels: {expected_ones}")
-        print(f"  Actual floor plan pixels: {actual_ones}")
+        print(f"  Expected floor plan pixels: {int(expected_ones)}")
+        print(f"  Actual floor plan pixels: {int(actual_ones)}")
         
-        # Floor plan should cover at least the reflectance/transmittance regions
-        self.assertGreaterEqual(actual_ones, expected_ones, 
-            "Floor plan should cover at least the reflectance/transmittance regions")
+        # Floor plan should exactly match (reflectance > 0) | (transmittance > 0)
+        self.assertEqual(actual_ones, expected_ones, 
+            f"Floor plan pixel count mismatch: expected {int(expected_ones)}, got {int(actual_ones)}")
+        
+        # Verify pixel-wise exact match
+        self.assertTrue(
+            torch.allclose(ch, expected_floor_plan, atol=1e-5),
+            "Floor plan should exactly match (reflectance > 0) | (transmittance > 0)"
+        )
     
     def test_sparse_channel_no_sparse(self):
         """Test sparse channel when sparse is dropped via modality dropout."""
@@ -411,6 +422,9 @@ class TestFeaturizerLogic(unittest.TestCase):
         output_val = 110.0  # Ground truth pathloss value (close to S_MEAN for easier testing)
         sample = create_mock_sample(output_value=output_val)
         
+        # Store original valid pixel count BEFORE featurizer mutates the mask
+        original_valid = sample.mask.sum().item()
+        
         # Force sparse measurements: no modality dropout
         sparse_range = [0.05, 0.05]  # Exactly 5% sparsity
         output = featurizer(sample, sparse_range=sparse_range, modality_dropout_prob=0.0)
@@ -420,17 +434,18 @@ class TestFeaturizerLogic(unittest.TestCase):
         # Find non-zero pixels (sparse samples from mask region)
         is_meas = ch != 0
         n_meas = is_meas.sum().item()
-        total_valid = sample.mask.sum().item()  # Use mask for valid region
         
         expected_sparsity = 0.05
-        actual_sparsity = n_meas / total_valid if total_valid > 0 else 0
+        actual_sparsity = n_meas / original_valid if original_valid > 0 else 0
         
         print(f"  Expected sparsity: {expected_sparsity * 100:.1f}%")
-        print(f"  Actual sparsity: {actual_sparsity * 100:.2f}% ({n_meas}/{int(total_valid)} valid pixels)")
+        print(f"  Actual sparsity: {actual_sparsity * 100:.2f}% ({n_meas}/{int(original_valid)} valid pixels)")
         
-        # Check sparsity is close to expected (allow variance due to sampling)
-        self.assertGreater(actual_sparsity, expected_sparsity * 0.1, "Should have some sparse measurements")
-        self.assertLess(actual_sparsity, expected_sparsity * 5.0, "Sparsity should not be too high")
+        # Check sparsity is within ±20% of expected (allows for random sampling variance)
+        self.assertGreater(actual_sparsity, expected_sparsity * 0.95, 
+            f"Sparsity {actual_sparsity:.2%} too low, expected >= {expected_sparsity * 0.95:.2%}")
+        self.assertLess(actual_sparsity, expected_sparsity * 1.05, 
+            f"Sparsity {actual_sparsity:.2%} too high, expected <= {expected_sparsity * 1.05:.2%}")
         
         if n_meas > 0:
             # Check that sparse values are z-score normalized
@@ -710,8 +725,6 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         # Get multiple raw samples
         n_samples = min(3, len(dm.train_dataloader().dataset))
         sparse_range = list(cfg.datamodule.sparse_range)
-        modality_dropout_prob = float(cfg.datamodule.modality_dropout_prob)
-        sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
             print(f"\n  Sample {i + 1}/{n_samples}:")
@@ -723,12 +736,13 @@ class TestFeaturizerWithRealData(unittest.TestCase):
             print(f"    Frequency: {sample.freq_MHz} MHz")
             print(f"    Input shape: {sample.input_img.shape}")
             
-            # Run through featurizer
+            # Run through featurizer with dropout DISABLED to ensure all channels are present
+            # This allows us to validate reflectance/transmittance content
             output = featurizer(
                 sample,
                 sparse_range=sparse_range,
-                modality_dropout_prob=modality_dropout_prob,
-                sparse_dropout_given_dropout=sparse_dropout_given_dropout
+                modality_dropout_prob=0.0,  # Force off to validate all channels
+                sparse_dropout_given_dropout=0.0
             )
             
             # Verify output
@@ -754,6 +768,46 @@ class TestFeaturizerWithRealData(unittest.TestCase):
                 f"Mask channel should be binary, got {unique_mask.tolist()}"
             )
             print(f"    Mask channel is binary ✓")
+            
+            # Check floor plan is binary
+            floor_plan_ch = output[FLOOR_PLAN_CHANNEL]
+            unique_fp = torch.unique(floor_plan_ch)
+            self.assertTrue(
+                all(v in [0.0, 1.0] for v in unique_fp.tolist()),
+                f"Floor plan should be binary, got {unique_fp.tolist()}"
+            )
+            print(f"    Floor plan channel is binary ✓")
+            
+            # Check frequency encoding channels are in valid range [-1, 1]
+            for freq_ch_idx in [FREQ_SIN_1_CHANNEL, FREQ_COS_1_CHANNEL, FREQ_SIN_2_CHANNEL, FREQ_COS_2_CHANNEL]:
+                freq_ch = output[freq_ch_idx]
+                self.assertGreaterEqual(freq_ch.min().item(), -1.0 - 1e-5,
+                    f"Freq channel {CHANNEL_ORDER[freq_ch_idx]} min={freq_ch.min():.4f} should be >= -1")
+                self.assertLessEqual(freq_ch.max().item(), 1.0 + 1e-5,
+                    f"Freq channel {CHANNEL_ORDER[freq_ch_idx]} max={freq_ch.max():.4f} should be <= 1")
+            print(f"    Frequency channels in [-1, 1] ✓")
+            
+            # Check distance channel has variation (not constant)
+            dist_ch = output[DISTANCE_CHANNEL]
+            self.assertGreater(dist_ch.max() - dist_ch.min(), 0.1,
+                "Distance channel should have variation (not constant)")
+            print(f"    Distance channel has variation ✓")
+            
+            # Validate reflectance/transmittance are present and have plausible content
+            # (With dropout=0, these should NOT be zeroed out)
+            reflectance_ch = output[REFLECTANCE_CHANNEL]
+            transmittance_ch = output[TRANSMITTANCE_CHANNEL]
+            
+            # Check that EACH channel has some non-zero content
+            # (Real buildings have walls with both reflectance and transmittance properties)
+            refl_nonzero_frac = (reflectance_ch != 0).float().mean().item()
+            trans_nonzero_frac = (transmittance_ch != 0).float().mean().item()
+            
+            self.assertGreater(refl_nonzero_frac, 0.001,
+                f"Reflectance should have non-zero content (got {refl_nonzero_frac:.4f})")
+            self.assertGreater(trans_nonzero_frac, 0.001,
+                f"Transmittance should have non-zero content (got {trans_nonzero_frac:.4f})")
+            print(f"    Reflectance non-zero: {refl_nonzero_frac:.2%}, Transmittance non-zero: {trans_nonzero_frac:.2%} ✓")
             
             # Save visualization for first sample
             if i == 0:
@@ -772,8 +826,6 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         # Get multiple raw samples
         n_samples = min(3, len(dm.train_dataloader().dataset))
         sparse_range = list(cfg.datamodule.sparse_range)
-        modality_dropout_prob = float(cfg.datamodule.modality_dropout_prob)
-        sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
             print(f"\n  Sample {i + 1}/{n_samples}:")
@@ -786,12 +838,13 @@ class TestFeaturizerWithRealData(unittest.TestCase):
             print(f"    Pixel size: {sample.pixel_size} m")
             print(f"    Input shape: {sample.input_img.shape}")
             
-            # Run through featurizer
+            # Run through featurizer with dropout DISABLED to ensure all channels are present
+            # This allows us to validate reflectance/transmittance content
             output = featurizer(
                 sample,
                 sparse_range=sparse_range,
-                modality_dropout_prob=modality_dropout_prob,
-                sparse_dropout_given_dropout=sparse_dropout_given_dropout
+                modality_dropout_prob=0.0,  # Force off to validate all channels
+                sparse_dropout_given_dropout=0.0
             )
             
             # Verify output
@@ -817,6 +870,44 @@ class TestFeaturizerWithRealData(unittest.TestCase):
                 f"Mask channel should be binary, got {unique_mask.tolist()}"
             )
             print(f"    Mask channel is binary ✓")
+            
+            # Check floor plan is binary
+            floor_plan_ch = output[FLOOR_PLAN_CHANNEL]
+            unique_fp = torch.unique(floor_plan_ch)
+            self.assertTrue(
+                all(v in [0.0, 1.0] for v in unique_fp.tolist()),
+                f"Floor plan should be binary, got {unique_fp.tolist()}"
+            )
+            print(f"    Floor plan channel is binary ✓")
+            
+            # Check frequency encoding channels are in valid range [-1, 1]
+            for freq_ch_idx in [FREQ_SIN_1_CHANNEL, FREQ_COS_1_CHANNEL, FREQ_SIN_2_CHANNEL, FREQ_COS_2_CHANNEL]:
+                freq_ch = output[freq_ch_idx]
+                self.assertGreaterEqual(freq_ch.min().item(), -1.0 - 1e-5,
+                    f"Freq channel {CHANNEL_ORDER[freq_ch_idx]} min={freq_ch.min():.4f} should be >= -1")
+                self.assertLessEqual(freq_ch.max().item(), 1.0 + 1e-5,
+                    f"Freq channel {CHANNEL_ORDER[freq_ch_idx]} max={freq_ch.max():.4f} should be <= 1")
+            print(f"    Frequency channels in [-1, 1] ✓")
+            
+            # Check distance channel has variation (not constant)
+            dist_ch = output[DISTANCE_CHANNEL]
+            self.assertGreater(dist_ch.max() - dist_ch.min(), 0.1,
+                "Distance channel should have variation (not constant)")
+            print(f"    Distance channel has variation ✓")
+            
+            # Validate reflectance/transmittance are present and have plausible content
+            # (With dropout=0, these should NOT be zeroed out)
+            # Note: Some synthetic samples may have zero reflectance/transmittance if
+            # the scene has no walls, so we check combined content
+            reflectance_ch = output[REFLECTANCE_CHANNEL]
+            transmittance_ch = output[TRANSMITTANCE_CHANNEL]
+            
+            refl_nonzero_frac = (reflectance_ch != 0).float().mean().item()
+            trans_nonzero_frac = (transmittance_ch != 0).float().mean().item()
+            
+            print(f"    Reflectance non-zero: {refl_nonzero_frac:.2%}, Transmittance non-zero: {trans_nonzero_frac:.2%}")
+            # Note: We don't assert here because synthetic samples can legitimately have
+            # zero reflectance/transmittance (empty scenes). The print helps with debugging.
             
             # Save visualization for first sample
             if i == 0:
@@ -946,16 +1037,16 @@ class TestFeaturizerWithRealData(unittest.TestCase):
         channel_mins = [[] for _ in range(NUM_CHANNELS)]
         channel_maxs = [[] for _ in range(NUM_CHANNELS)]
         channel_means = [[] for _ in range(NUM_CHANNELS)]
+        channel_nonzero_fracs = [[] for _ in range(NUM_CHANNELS)]
         
         sparse_range = list(cfg.datamodule.sparse_range)
-        modality_dropout_prob = float(cfg.datamodule.modality_dropout_prob)
-        sparse_dropout_given_dropout = float(cfg.datamodule.sparse_dropout_given_dropout)
         
         for i in range(n_samples):
             sample, _ = self._get_raw_sample_from_datamodule(dm, idx=i)
+            # Force dropout off to validate all channels have content
             output = featurizer(
-                sample, sparse_range=sparse_range, modality_dropout_prob=modality_dropout_prob,
-                sparse_dropout_given_dropout=sparse_dropout_given_dropout
+                sample, sparse_range=sparse_range, modality_dropout_prob=0.0,
+                sparse_dropout_given_dropout=0.0
             )
             
             for ch_idx in range(NUM_CHANNELS):
@@ -963,6 +1054,7 @@ class TestFeaturizerWithRealData(unittest.TestCase):
                 channel_mins[ch_idx].append(ch_data.min().item())
                 channel_maxs[ch_idx].append(ch_data.max().item())
                 channel_means[ch_idx].append(ch_data.mean().item())
+                channel_nonzero_fracs[ch_idx].append((ch_data != 0).float().mean().item())
         
         print(f"\n  Statistics across {n_samples} samples:")
         print(f"  {'Channel':<15} {'Min Range':<20} {'Max Range':<20} {'Mean Range':<20}")
@@ -974,16 +1066,51 @@ class TestFeaturizerWithRealData(unittest.TestCase):
             mean_range = f"[{min(channel_means[ch_idx]):.3f}, {max(channel_means[ch_idx]):.3f}]"
             print(f"  {ch_name:<15} {min_range:<20} {max_range:<20} {mean_range:<20}")
         
-        # Basic sanity checks using channel config indices
+        # =========================================================================
+        # Validate ALL channels, not just mask/floor_plan
+        # =========================================================================
+        
         # Mask channel should be binary [0, 1]
         self.assertTrue(all(m <= 1.0 for m in channel_maxs[MASK_CHANNEL]), "Mask max should be <= 1.0")
         self.assertTrue(all(m >= 0.0 for m in channel_mins[MASK_CHANNEL]), "Mask min should be >= 0.0")
+        print("  Mask: binary [0, 1] ✓")
         
         # Floor plan should be binary [0, 1]
         self.assertTrue(all(m <= 1.0 for m in channel_maxs[FLOOR_PLAN_CHANNEL]), "Floor plan max should be <= 1.0")
         self.assertTrue(all(m >= 0.0 for m in channel_mins[FLOOR_PLAN_CHANNEL]), "Floor plan min should be >= 0.0")
+        print("  Floor plan: binary [0, 1] ✓")
         
-        print("\n  Channel statistics verified ✓")
+        # Frequency channels should be in [-1, 1]
+        for freq_ch_idx in [FREQ_SIN_1_CHANNEL, FREQ_COS_1_CHANNEL, FREQ_SIN_2_CHANNEL, FREQ_COS_2_CHANNEL]:
+            self.assertTrue(all(m >= -1.0 - 1e-5 for m in channel_mins[freq_ch_idx]),
+                f"{CHANNEL_ORDER[freq_ch_idx]} min should be >= -1")
+            self.assertTrue(all(m <= 1.0 + 1e-5 for m in channel_maxs[freq_ch_idx]),
+                f"{CHANNEL_ORDER[freq_ch_idx]} max should be <= 1")
+        print("  Frequency channels: in [-1, 1] ✓")
+        
+        # Distance channel should have variation (max - min > 0.1 for all samples)
+        for i in range(n_samples):
+            dist_variation = channel_maxs[DISTANCE_CHANNEL][i] - channel_mins[DISTANCE_CHANNEL][i]
+            self.assertGreater(dist_variation, 0.1,
+                f"Distance channel should have variation (sample {i}: {dist_variation:.3f})")
+        print("  Distance: has variation ✓")
+        
+        # Reflectance should have non-zero content in all samples (with dropout=0)
+        self.assertTrue(all(f > 0.001 for f in channel_nonzero_fracs[REFLECTANCE_CHANNEL]),
+            f"Reflectance should have non-zero content, got fracs: {channel_nonzero_fracs[REFLECTANCE_CHANNEL]}")
+        print("  Reflectance: non-zero content ✓")
+        
+        # Transmittance should have non-zero content in all samples (with dropout=0)
+        self.assertTrue(all(f > 0.001 for f in channel_nonzero_fracs[TRANSMITTANCE_CHANNEL]),
+            f"Transmittance should have non-zero content, got fracs: {channel_nonzero_fracs[TRANSMITTANCE_CHANNEL]}")
+        print("  Transmittance: non-zero content ✓")
+        
+        # Sparse channel should have some measurements (with sparse_range from config)
+        self.assertTrue(all(f > 0.001 for f in channel_nonzero_fracs[SPARSE_CHANNEL]),
+            f"Sparse should have measurements, got fracs: {channel_nonzero_fracs[SPARSE_CHANNEL]}")
+        print("  Sparse: has measurements ✓")
+        
+        print("\n  All channel statistics verified ✓")
 
 
 if __name__ == "__main__":
