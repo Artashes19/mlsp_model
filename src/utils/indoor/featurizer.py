@@ -10,6 +10,7 @@ from sklearn.gaussian_process.kernels import ConstantKernel as C, RBF
 
 from src.utils.indoor.types import RadarSample
 from src.utils.indoor.config_overrides import get_config
+from src.utils.indoor.channel_config import CHANNEL_ORDER, NUM_CHANNELS
 
 
 @njit
@@ -534,28 +535,24 @@ def encode_frequency_fourier(freq_mhz: float) -> tuple:
     return tuple(activations)
 
 
-def get_num_channels(channels: str) -> int:
+def get_num_channels(channels: str = None) -> int:
     """
-    Calculate the actual number of tensor channels from a channels string.
-    'f' expands to FREQ_N_CHANNELS (Fourier encoding for frequencies).
+    Return the number of channels from channel_config.
+    The channels parameter is deprecated and ignored - use channel_config.CHANNEL_ORDER instead.
     """
-    count = 0
-    for ch in channels:
-        if ch == "f":
-            count += FREQ_N_CHANNELS  # 4 Fourier channels (n_levels=2)
-        else:
-            count += 1
-    return count
+    return NUM_CHANNELS
 
 
-def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> torch.Tensor:
+def normalize_input(input_tensor: torch.Tensor) -> torch.Tensor:
     """
     Normalize input tensor based on channel types (standardize only).
+    Uses CHANNEL_ORDER from channel_config to determine normalization per channel.
     
-    - r/t/s: z-score on non-zero values, zeros remain 0
-    - d: log(d + eps) then z-score
-    - f: unchanged (Fourier encoding already in [-1, 1])
-    - m/p: unchanged (binary)
+    - reflectance/transmittance/sparse: z-score on non-zero values, zeros remain 0
+    - distance: log(d + eps) then z-score
+    - freq_*: unchanged (Fourier encoding already in [-1, 1])
+    - mask/floor_plan: unchanged (binary)
+    - antenna_gain: unchanged
     """
     config = get_config()
     normalized = input_tensor.clone()
@@ -579,44 +576,32 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> t
     if r_std == 0 or t_std == 0 or d_log_std == 0 or s_std == 0:
         raise ValueError("Normalization std must be non-zero.")
     
-    tensor_idx = 0
-    for ch in channels:
-        if ch == "r":
-            channel = normalized[tensor_idx]
+    for idx, ch_name in enumerate(CHANNEL_ORDER):
+        if ch_name == "reflectance":
+            channel = normalized[idx]
             mask = channel != 0
             if mask.any():
                 channel = channel.clone()
                 channel[mask] = (channel[mask] - r_mean) / r_std
-            normalized[tensor_idx] = channel
-            tensor_idx += 1
-        elif ch == "t":
-            channel = normalized[tensor_idx]
+            normalized[idx] = channel
+        elif ch_name == "transmittance":
+            channel = normalized[idx]
             mask = channel != 0
             if mask.any():
                 channel = channel.clone()
                 channel[mask] = (channel[mask] - t_mean) / t_std
-            normalized[tensor_idx] = channel
-            tensor_idx += 1
-        elif ch == "d":
-            channel = torch.log(normalized[tensor_idx] + eps)
-            normalized[tensor_idx] = (channel - d_log_mean) / d_log_std
-            tensor_idx += 1
-        elif ch == "g":
-            tensor_idx += 1
-        elif ch == "f":
-            tensor_idx += FREQ_N_CHANNELS
-        elif ch == "m":
-            tensor_idx += 1
-        elif ch == "p":
-            tensor_idx += 1
-        elif ch == "s":
-            channel = normalized[tensor_idx]
+            normalized[idx] = channel
+        elif ch_name == "distance":
+            channel = torch.log(normalized[idx] + eps)
+            normalized[idx] = (channel - d_log_mean) / d_log_std
+        elif ch_name == "sparse":
+            channel = normalized[idx]
             mask = channel != 0
             if mask.any():
                 channel = channel.clone()
                 channel[mask] = (channel[mask] - s_mean) / s_std
-            normalized[tensor_idx] = channel
-            tensor_idx += 1
+            normalized[idx] = channel
+        # antenna_gain, freq_*, mask, floor_plan: no normalization needed
     
     return normalized
 
@@ -775,25 +760,12 @@ def featurizer(
     sparse_range: tuple[float, float] = (0.0, 0.01),
     modality_dropout_prob: float = 0.6666,
     sparse_dropout_given_dropout: float = 0.5,
-    channels: str = "rtdgfmps"
 ) -> torch.Tensor:
     """
-    Build input tensor with selected channels.
+    Build input tensor with channels defined in channel_config.CHANNEL_ORDER.
     
-    Channel letters:
-        r - reflectance (1 channel)
-        t - transmittance (1 channel)
-        d - distance (1 channel)
-        g - antenna gain (1 channel)
-        f - frequency one-hot (3 channels for 868, 1800, 3500 MHz)
-        m - mask (1 channel)
-        p - floor plan (1 channel)
-        s - sparse measurements (1 channel)
-    
-    Total channels with default "rtdgfmps": 10 (due to f expanding to 3)
+    Channel order and count are configured in src/utils/indoor/channel_config.py.
     """
-    num_channels = get_num_channels(channels)
-    
     # Modality dropout logic:
     # With prob modality_dropout_prob, turn off one modality (trans+ref OR sparse)
     # If dropout happens, sparse_dropout_given_dropout controls which one is turned off
@@ -814,7 +786,7 @@ def featurizer(
     
     # Compute antenna gain only if needed
     antenna_gain = None
-    if "g" in channels:
+    if "antenna_gain" in CHANNEL_ORDER:
         radiation_pattern = sample.radiation_pattern
         antenna_gain = calculate_antenna_gain(
             radiation_pattern,
@@ -826,8 +798,8 @@ def featurizer(
         )
     
     # Compute sparse measurements only if needed and not dropped
-    sparse_channel = None
-    if "s" in channels and not drop_sparse and sample.output_img is not None:
+    sparse_data = None
+    if "sparse" in CHANNEL_ORDER and not drop_sparse and sample.output_img is not None:
         sparsity = random.uniform(sparse_range[0], sparse_range[1])
         # Only sample from valid mask region
         valid_indices = torch.nonzero(sample.mask)
@@ -842,58 +814,56 @@ def featurizer(
                 if output_img.ndim == 3:
                     output_img = output_img.squeeze(0)
                 
-                sparse_channel = torch.zeros((sample.H, sample.W), dtype=torch.float32)
+                sparse_data = torch.zeros((sample.H, sample.W), dtype=torch.float32)
                 rows = selected_indices[:, 0]
                 cols = selected_indices[:, 1]
-                sparse_channel[rows, cols] = output_img[rows, cols]
+                sparse_data[rows, cols] = output_img[rows, cols]
                 sample.mask[rows, cols] = 0
     
-    # Build input tensor dynamically based on channels string
-    input_tensor = torch.zeros((num_channels, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
+    # Precompute Fourier frequency encoding if any freq channels are present
+    fourier_activations = None
+    freq_channels = ["freq_sin_1", "freq_cos_1", "freq_sin_2", "freq_cos_2"]
+    if any(ch in CHANNEL_ORDER for ch in freq_channels):
+        fourier_activations = encode_frequency_fourier(sample.freq_MHz)
     
-    tensor_idx = 0
-    for ch in channels:
-        if ch == "r":
+    # Build input tensor based on CHANNEL_ORDER
+    input_tensor = torch.zeros((NUM_CHANNELS, sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
+    
+    for idx, ch_name in enumerate(CHANNEL_ORDER):
+        if ch_name == "reflectance":
             if drop_trans_ref:
-                input_tensor[tensor_idx] = torch.zeros_like(reflectance)
+                input_tensor[idx] = torch.zeros_like(reflectance)
             else:
-                input_tensor[tensor_idx] = reflectance
-            tensor_idx += 1
-        elif ch == "t":
+                input_tensor[idx] = reflectance
+        elif ch_name == "transmittance":
             if drop_trans_ref:
-                input_tensor[tensor_idx] = torch.zeros_like(transmittance)
+                input_tensor[idx] = torch.zeros_like(transmittance)
             else:
-                input_tensor[tensor_idx] = transmittance
-            tensor_idx += 1
-        elif ch == "d":
-            input_tensor[tensor_idx] = distance
-            tensor_idx += 1
-        elif ch == "g":
-            input_tensor[tensor_idx] = antenna_gain
-            tensor_idx += 1
-        elif ch == "f":
-            # Fourier encoding for frequency (4 channels with n_levels=2)
-            fourier_activations = encode_frequency_fourier(sample.freq_MHz)
-            for i, activation in enumerate(fourier_activations):
-                input_tensor[tensor_idx + i] = torch.full(
-                    (sample.H, sample.W), activation, dtype=torch.float32, device=torch.device("cpu")
-                )
-            tensor_idx += FREQ_N_CHANNELS
-        elif ch == "m":
-            input_tensor[tensor_idx] = sample.mask
-            tensor_idx += 1
-        elif ch == "p":
+                input_tensor[idx] = transmittance
+        elif ch_name == "distance":
+            input_tensor[idx] = distance
+        elif ch_name == "antenna_gain":
+            input_tensor[idx] = antenna_gain
+        elif ch_name == "freq_sin_1":
+            input_tensor[idx] = torch.full((sample.H, sample.W), fourier_activations[0], dtype=torch.float32)
+        elif ch_name == "freq_cos_1":
+            input_tensor[idx] = torch.full((sample.H, sample.W), fourier_activations[1], dtype=torch.float32)
+        elif ch_name == "freq_sin_2":
+            input_tensor[idx] = torch.full((sample.H, sample.W), fourier_activations[2], dtype=torch.float32)
+        elif ch_name == "freq_cos_2":
+            input_tensor[idx] = torch.full((sample.H, sample.W), fourier_activations[3], dtype=torch.float32)
+        elif ch_name == "mask":
+            input_tensor[idx] = sample.mask
+        elif ch_name == "floor_plan":
             if sample.floor_plan is not None:
-                input_tensor[tensor_idx] = sample.floor_plan
+                input_tensor[idx] = sample.floor_plan
             else:
-                input_tensor[tensor_idx] = ((reflectance > 0) | (transmittance > 0)).float()
-            tensor_idx += 1
-        elif ch == "s":
-            if sparse_channel is not None:
-                input_tensor[tensor_idx] = sparse_channel
-            tensor_idx += 1
+                input_tensor[idx] = ((reflectance > 0) | (transmittance > 0)).float()
+        elif ch_name == "sparse":
+            if sparse_data is not None:
+                input_tensor[idx] = sparse_data
     
-    input_tensor = normalize_input(input_tensor, channels)
+    input_tensor = normalize_input(input_tensor)
     
     return input_tensor
 
