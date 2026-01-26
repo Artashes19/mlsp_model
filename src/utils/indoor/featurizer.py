@@ -500,19 +500,49 @@ def calculate_antenna_gain(radiation_pattern, W, H, azimuth, x_ant, y_ant):
     return antenna_gain
 
 
-# Frequency values for one-hot encoding (MHz)
-FREQ_VALUES = [868, 1800, 3500]
+# Fourier frequency encoding parameters
+FREQ_MIN = 100.0    # MHz
+FREQ_MAX = 7000.0   # MHz
+FREQ_N_LEVELS = 2   # Number of sin/cos pairs (4 channels total)
+FREQ_N_CHANNELS = 2 * FREQ_N_LEVELS  # 4 channels
+
+
+def encode_frequency_fourier(freq_mhz: float) -> tuple:
+    """
+    Fourier positional encoding for frequency in log-space.
+    
+    Args:
+        freq_mhz: Frequency in MHz (clamped to [FREQ_MIN, FREQ_MAX])
+    
+    Returns:
+        Tuple of FREQ_N_CHANNELS values in [-1, 1]
+        - Even indices: sin at increasing scales (1, 2, 4, ...)
+        - Odd indices: cos at increasing scales (1, 2, 4, ...)
+    """
+    freq_clamped = max(FREQ_MIN, min(FREQ_MAX, freq_mhz))
+    
+    # Normalize log-frequency to [0, 1]
+    log_min, log_max = math.log(FREQ_MIN), math.log(FREQ_MAX)
+    t = (math.log(freq_clamped) - log_min) / (log_max - log_min)
+    
+    activations = []
+    for level in range(FREQ_N_LEVELS):
+        scale = 2 ** level  # 1, 2, 4, ...
+        activations.append(math.sin(2 * math.pi * scale * t))
+        activations.append(math.cos(2 * math.pi * scale * t))
+    
+    return tuple(activations)
 
 
 def get_num_channels(channels: str) -> int:
     """
     Calculate the actual number of tensor channels from a channels string.
-    'f' expands to 3 channels (one-hot encoding for frequencies).
+    'f' expands to FREQ_N_CHANNELS (Fourier encoding for frequencies).
     """
     count = 0
     for ch in channels:
         if ch == "f":
-            count += len(FREQ_VALUES)  # 3 one-hot channels
+            count += FREQ_N_CHANNELS  # 4 Fourier channels (n_levels=2)
         else:
             count += 1
     return count
@@ -524,7 +554,8 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> t
     
     - r/t/s: z-score on non-zero values, zeros remain 0
     - d: log(d + eps) then z-score
-    - f/m/p: unchanged (one-hot/binary)
+    - f: unchanged (Fourier encoding already in [-1, 1])
+    - m/p: unchanged (binary)
     """
     config = get_config()
     normalized = input_tensor.clone()
@@ -573,7 +604,7 @@ def normalize_input(input_tensor: torch.Tensor, channels: str = "rtdgfmps") -> t
         elif ch == "g":
             tensor_idx += 1
         elif ch == "f":
-            tensor_idx += len(FREQ_VALUES)
+            tensor_idx += FREQ_N_CHANNELS
         elif ch == "m":
             tensor_idx += 1
         elif ch == "p":
@@ -841,13 +872,13 @@ def featurizer(
             input_tensor[tensor_idx] = antenna_gain
             tensor_idx += 1
         elif ch == "f":
-            # One-hot encoding for frequency (3 channels)
-            freq_idx = FREQ_VALUES.index(int(sample.freq_MHz))
-            for i in range(len(FREQ_VALUES)):
-                if i == freq_idx:
-                    input_tensor[tensor_idx + i] = torch.ones((sample.H, sample.W), dtype=torch.float32, device=torch.device("cpu"))
-                # else: already zeros from initialization
-            tensor_idx += len(FREQ_VALUES)
+            # Fourier encoding for frequency (4 channels with n_levels=2)
+            fourier_activations = encode_frequency_fourier(sample.freq_MHz)
+            for i, activation in enumerate(fourier_activations):
+                input_tensor[tensor_idx + i] = torch.full(
+                    (sample.H, sample.W), activation, dtype=torch.float32, device=torch.device("cpu")
+                )
+            tensor_idx += FREQ_N_CHANNELS
         elif ch == "m":
             input_tensor[tensor_idx] = sample.mask
             tensor_idx += 1

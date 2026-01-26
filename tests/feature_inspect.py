@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
         "--channels",
         type=str,
         default=config.channels,
-        help="Channel string, e.g., rtdgfmps (10ch with one-hot freq) or rtd (3ch).",
+        help="Channel string, e.g., rtdgfmps (11ch with Fourier freq) or rtd (3ch).",
     )
     parser.add_argument(
         "--sparse-range",

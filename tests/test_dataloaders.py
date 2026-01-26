@@ -197,17 +197,18 @@ def save_batch_visualization(
     """
     Save a visualization of all input channels + target + mask as subplots.
     
-    Channels (10 total with one-hot frequency):
+    Channels (11 total with Fourier frequency encoding):
     0: Reflectance (normalized)
     1: Transmittance (normalized)
     2: Distance (normalized)
     3: Antenna gain (normalized)
-    4: Freq 868 MHz (one-hot)
-    5: Freq 1800 MHz (one-hot)
-    6: Freq 3500 MHz (one-hot)
-    7: Mask
-    8: Floor plan
-    9: Sparse measurements (normalized)
+    4: Freq sin(1) (Fourier)
+    5: Freq cos(1) (Fourier)
+    6: Freq sin(2) (Fourier)
+    7: Freq cos(2) (Fourier)
+    8: Mask
+    9: Floor plan
+    10: Sparse measurements (normalized)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -357,8 +358,8 @@ class TestDataloaders(unittest.TestCase):
         print(f"    Effective sparse_prob: {sparse_prob:.3f}, sparse_range={sparse_range}")
         
         batch_size = inputs.shape[0]
-        sparse_channel = inputs[:, 9]  # Channel 9 is sparse measurements (with one-hot freq)
-        mask_channel = inputs[:, 7]  # Channel 7 is mask (with one-hot freq)
+        sparse_channel = inputs[:, 10]  # Channel 10 is sparse measurements (with Fourier freq)
+        mask_channel = inputs[:, 8]  # Channel 8 is mask (with Fourier freq)
         
         samples_with_sparse = 0
         sparsities = []
@@ -492,7 +493,7 @@ class TestDataloaders(unittest.TestCase):
         print(f"    masks: {masks.shape}")
         
         # 1. Check channel count
-        self.assertEqual(inputs.shape[1], 10, "e0 inputs must have 10 channels (with one-hot freq)")
+        self.assertEqual(inputs.shape[1], 11, "e0 inputs must have 11 channels (with Fourier freq)")
         
         # 2. Check channel ranges
         self._check_channel_ranges(inputs, "e0")
@@ -538,7 +539,7 @@ class TestDataloaders(unittest.TestCase):
         print(f"    masks: {masks.shape}")
         
         # 1. Check channel count
-        self.assertEqual(inputs.shape[1], 10, "e2 inputs must have 10 channels (with one-hot freq)")
+        self.assertEqual(inputs.shape[1], 11, "e2 inputs must have 11 channels (with Fourier freq)")
         
         # 2. Check channel ranges
         self._check_channel_ranges(inputs, "e2")

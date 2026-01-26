@@ -14,8 +14,8 @@ from src.utils.indoor.types import RadarSample
 # Normalized values when input is zero
 # Channels 0,1: simple /255 normalization
 CH01_ZERO = 0.0 / 255.0  # reflectance & transmittance
-# Channel 9 (sparse with one-hot freq): (x - 87) / 160
-CH9_ZERO = (0.0 - 87.0) / 160.0  # sparse measurements
+# Channel 10 (sparse with Fourier freq): normalized sparse measurements
+CH10_ZERO = (0.0 - 110.146) / 42.037  # sparse measurements (z-scored)
 
 
 def create_dummy_sample(H=64, W=64):
@@ -62,9 +62,9 @@ def count_modality_states(n_samples: int, modality_dropout_prob: float, sparse_d
         ch1_all_zero = ((tensor[1] - CH01_ZERO).abs() < 1e-4).all()
         transref_dropped = ch0_all_zero and ch1_all_zero
         
-        # Check sparse (channel 9 with one-hot freq) - if all values equal normalized zero
-        ch9_all_zero = ((tensor[9] - CH9_ZERO).abs() < 1e-4).all()
-        sparse_dropped = ch9_all_zero
+        # Check sparse (channel 10 with Fourier freq) - if all values equal normalized zero
+        ch10_all_zero = ((tensor[10] - CH10_ZERO).abs() < 1e-4).all()
+        sparse_dropped = ch10_all_zero
         
         if transref_dropped and not sparse_dropped:
             transref_off += 1
