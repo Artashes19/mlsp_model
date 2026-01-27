@@ -769,6 +769,7 @@ def featurizer(
     sparse_dropout_given_dropout: float,
     force_drop_sparse: Optional[bool],
     force_drop_trans_ref: Optional[bool],
+    precomputed_sparse: Optional[torch.Tensor],
 ) -> torch.Tensor:
     """
     Build input tensor with channels defined in channel_config.CHANNEL_ORDER.
@@ -788,6 +789,8 @@ def featurizer(
             If False, force sparse channel to be enabled. If None, use random dropout.
         force_drop_trans_ref: If True, force trans+ref channels to be all zeros.
             If False, force trans+ref channels to be enabled. If None, use random dropout.
+        precomputed_sparse: Optional pre-loaded sparse measurements tensor (H, W).
+            If provided, use this instead of generating random sparse samples.
     """
     # Modality dropout logic:
     # With prob modality_dropout_prob, turn off one modality (trans+ref OR sparse)
@@ -830,26 +833,34 @@ def featurizer(
     
     # Compute sparse measurements only if needed and not dropped
     sparse_data = None
-    if "sparse" in CHANNEL_ORDER and not drop_sparse and sample.output_img is not None:
-        sparsity = random.uniform(sparse_range[0], sparse_range[1])
-        # Only sample from valid mask region
-        valid_indices = torch.nonzero(sample.mask)
-        if valid_indices.numel() > 0:
-            num_samples = int(valid_indices.size(0) * sparsity)
-            if num_samples > 0:
-                perm = torch.randperm(valid_indices.size(0))
-                selected_indices = valid_indices[perm[:num_samples]]
-                
-                # Get ground truth values (handling potential shape mismatch if output_img is (C,H,W))
-                output_img = sample.output_img
-                if output_img.ndim == 3:
-                    output_img = output_img.squeeze(0)
-                
-                sparse_data = torch.zeros((sample.H, sample.W), dtype=torch.float32)
-                rows = selected_indices[:, 0]
-                cols = selected_indices[:, 1]
-                sparse_data[rows, cols] = output_img[rows, cols]
-                sample.mask[rows, cols] = 0
+    if "sparse" in CHANNEL_ORDER and not drop_sparse:
+        if precomputed_sparse is not None:
+            # Use pre-loaded sparse measurements (e.g., from test data)
+            sparse_data = precomputed_sparse
+            # Update mask: set mask to 0 where sparse measurements exist
+            sparse_mask = sparse_data != 0
+            sample.mask[sparse_mask] = 0
+        elif sample.output_img is not None:
+            # Generate random sparse samples from ground truth
+            sparsity = random.uniform(sparse_range[0], sparse_range[1])
+            # Only sample from valid mask region
+            valid_indices = torch.nonzero(sample.mask)
+            if valid_indices.numel() > 0:
+                num_samples = int(valid_indices.size(0) * sparsity)
+                if num_samples > 0:
+                    perm = torch.randperm(valid_indices.size(0))
+                    selected_indices = valid_indices[perm[:num_samples]]
+                    
+                    # Get ground truth values (handling potential shape mismatch if output_img is (C,H,W))
+                    output_img = sample.output_img
+                    if output_img.ndim == 3:
+                        output_img = output_img.squeeze(0)
+                    
+                    sparse_data = torch.zeros((sample.H, sample.W), dtype=torch.float32)
+                    rows = selected_indices[:, 0]
+                    cols = selected_indices[:, 1]
+                    sparse_data[rows, cols] = output_img[rows, cols]
+                    sample.mask[rows, cols] = 0
     
     # Precompute Fourier frequency encoding if any freq channels are present
     fourier_activations = None

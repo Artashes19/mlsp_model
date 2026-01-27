@@ -249,6 +249,22 @@ class PathlossDataset(Dataset):
         if output_tensor is not None and output_tensor != "":
             output_tensor = output_tensor / 160.0
         
+        # Load pre-computed sparse measurements if sparse_file is provided
+        precomputed_sparse = None
+        if isinstance(inp, dict):
+            sparse_file = inp.get("sparse_file", "")
+            if sparse_file and os.path.exists(sparse_file):
+                sparse_img = read_image(sparse_file).float()
+                if sparse_img.size(0) == 1:
+                    sparse_img = sparse_img.squeeze(0)
+                # Resize to match target size
+                sparse_img = F.interpolate(
+                    sparse_img.unsqueeze(0).unsqueeze(0),
+                    size=(self.target_size, self.target_size),
+                    mode="nearest",
+                ).squeeze(0).squeeze(0)
+                precomputed_sparse = sparse_img
+        
         input_tensor = featurizer(
             sample=sample,
             sparse_range=self.sparse_range,
@@ -256,6 +272,7 @@ class PathlossDataset(Dataset):
             sparse_dropout_given_dropout=self.sparse_dropout_given_dropout,
             force_drop_sparse=self.force_drop_sparse,
             force_drop_trans_ref=self.force_drop_trans_ref,
+            precomputed_sparse=precomputed_sparse,
         )
         mask = sample.mask
         # Store original dimensions for algorithm to use

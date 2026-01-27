@@ -47,6 +47,8 @@ train_small_manifest_path: ${oc.env:ICASSP_TRAIN_SMALL_MANIFEST_TASK_1}
 val_manifest_path: ${oc.env:ICASSP_VAL_MANIFEST_TASK_1}
 synthetic_manifest_path: ${oc.env:SYNTH_TRAIN_MANIFEST}
 synthetic_val_manifest_path: ${oc.env:SYNTH_VAL_MANIFEST}
+test_manifest_path:
+  - ${oc.env:ICASSP_TEST_MANIFEST_TASK_1}
 synthetic_limit: null
 train_samples_per_epoch: null
 multi_gpu: False

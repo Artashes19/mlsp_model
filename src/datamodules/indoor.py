@@ -38,6 +38,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         multi_gpu: bool,
         channels: str,
         train_augmentations: Optional[AugmentationPipeline],
+        test_manifest_path: Optional[list[str]],
         **kwargs
     ):
         # Validate and store channels configuration
@@ -68,6 +69,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         self.val_manifest_path = val_manifest_path
         self.synthetic_manifest_path = synthetic_manifest_path
         self.synthetic_val_manifest_path = synthetic_val_manifest_path
+        self.test_manifest_path = test_manifest_path
         self.synthetic_limit = int(synthetic_limit) if synthetic_limit is not None else None
         self.train_samples_per_epoch = int(train_samples_per_epoch) if train_samples_per_epoch is not None else None
         
@@ -84,7 +86,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         self._multi_gpu = multi_gpu
         
         self._train_set = None
-        self._test_set = None
+        self._test_sets: list[PathlossDataset] = []
         
         # Three ICASSP validation sets with different channel configs
         self._val_set_no_sparse = None       # sparse disabled
@@ -169,23 +171,25 @@ class IndoorDatamodule(pl.LightningDataModule):
                 output_file = row.get("output_file")
                 position_file = row.get("position_file")
                 radiation_pattern_file = row.get("radiation_pattern_file")
+                sparse_file = row.get("sparse_file", "")
                 if input_file and position_file and radiation_pattern_file:
                     sample_name = row.get("file_name") or os.path.basename(input_file)
                     freq_mhz = float(
                         row.get("freq_MHz", freqs_mhz[f_idx_internal - 1] if f_idx_internal else freqs_mhz[0])
                     )
-                    inputs_list.append(
-                        {
-                            "file_name": sample_name,
-                            "freq_MHz": freq_mhz,
-                            "input_file": input_file,
-                            "output_file": output_file or "",
-                            "position_file": position_file,
-                            "radiation_pattern_file": radiation_pattern_file,
-                            "sampling_position": sp,
-                            "ids": (b, ant, f_idx_internal, sp),
-                        }
-                    )
+                    entry = {
+                        "file_name": sample_name,
+                        "freq_MHz": freq_mhz,
+                        "input_file": input_file,
+                        "output_file": output_file or "",
+                        "position_file": position_file,
+                        "radiation_pattern_file": radiation_pattern_file,
+                        "sampling_position": sp,
+                        "ids": (b, ant, f_idx_internal, sp),
+                    }
+                    if sparse_file:
+                        entry["sparse_file"] = sparse_file
+                    inputs_list.append(entry)
                     n_real += 1
         
         dt = time.perf_counter() - t0
@@ -259,22 +263,27 @@ class IndoorDatamodule(pl.LightningDataModule):
             return tuple(ids)
         
         if self.inference:
-            # For inference, load from val_manifest_path
-            inference_inputs = self.get_inputs_list(
-                freqs_mhz=self.freqs_mhz,
-                freqs=self.freqs,
-                manifest_path=self.val_manifest_path,
-            )
-            self._test_set = PathlossDataset(
-                inference_inputs,
-                training=False,
-                augmentations=None,
-                inference=True,
-                force_drop_sparse=None,
-                force_drop_trans_ref=None,
-                **self.dataset_kwargs
-            )
-            log.info(f"Prepared inference dataset: test={len(self._test_set)}")
+            # For inference, load from test_manifest_path list
+            if self.test_manifest_path:
+                for test_path in self.test_manifest_path:
+                    if test_path and os.path.isfile(test_path):
+                        test_inputs = self.get_inputs_list(
+                            freqs_mhz=self.freqs_mhz,
+                            freqs=self.freqs,
+                            manifest_path=test_path,
+                        )
+                        test_dataset = PathlossDataset(
+                            test_inputs,
+                            training=False,
+                            augmentations=None,
+                            inference=True,
+                            force_drop_sparse=False,
+                            force_drop_trans_ref=False,
+                            **self.dataset_kwargs
+                        )
+                        self._test_sets.append(test_dataset)
+                        log.info(f"[datasets] created test set from {test_path}: n={len(test_dataset)}")
+            log.info(f"Prepared inference datasets: test_sets={len(self._test_sets)}")
         else:
             # Always load ICASSP validation
             icassp_val_inputs = self.get_inputs_list(
@@ -336,7 +345,6 @@ class IndoorDatamodule(pl.LightningDataModule):
                 self._val_set_no_trans_ref,
                 self._val_set_all_enabled,
             ) = self._create_validation_sets(val_inputs=icassp_val_inputs)
-            self._test_set = self._val_set_all_enabled
             
             # Create 3 synthetic validation datasets (only for synthetic training)
             if synth_val_inputs:
@@ -346,13 +354,34 @@ class IndoorDatamodule(pl.LightningDataModule):
                     self._synth_val_set_all_enabled,
                 ) = self._create_validation_sets(val_inputs=synth_val_inputs)
                 log.info(f"[datasets] prepared synthetic validation sets: n={len(self._synth_val_set_no_sparse)}")
+            
+            # Create test datasets from test_manifest_path list
+            if self.test_manifest_path:
+                for test_path in self.test_manifest_path:
+                    if test_path and os.path.isfile(test_path):
+                        test_inputs = self.get_inputs_list(
+                            freqs_mhz=self.freqs_mhz,
+                            freqs=self.freqs,
+                            manifest_path=test_path,
+                        )
+                        test_dataset = PathlossDataset(
+                            test_inputs,
+                            training=False,
+                            augmentations=None,
+                            inference=True,
+                            force_drop_sparse=False,
+                            force_drop_trans_ref=False,
+                            **self.dataset_kwargs
+                        )
+                        self._test_sets.append(test_dataset)
+                        log.info(f"[datasets] created test set from {test_path}: n={len(test_dataset)}")
         
         log.info(
             f"[prepare_data] done in {(time.perf_counter() - t0_prepare):.2f}s "
             f"(train_set={len(self._train_set) if self._train_set is not None else 0}, "
             f"val_sets={len(self._val_set_no_sparse) if self._val_set_no_sparse is not None else 0}, "
             f"synth_val_sets={len(self._synth_val_set_no_sparse) if self._synth_val_set_no_sparse is not None else 0}, "
-            f"test_set={len(self._test_set) if self._test_set is not None else 0})"
+            f"test_sets={len(self._test_sets)})"
         )
         
         self._data_prepared = True
@@ -362,8 +391,8 @@ class IndoorDatamodule(pl.LightningDataModule):
         return self._train_set
     
     @property
-    def test_set(self):
-        return self._test_set
+    def test_sets(self) -> list[PathlossDataset]:
+        return self._test_sets
     
     @property
     def val_set_no_sparse(self):
@@ -432,6 +461,23 @@ class IndoorDatamodule(pl.LightningDataModule):
         if self._synth_val_set_all_enabled:
             dataloaders.append(_make_dataloader(self._synth_val_set_all_enabled))
         
+        return dataloaders
+    
+    def test_dataloader(self) -> list[DataLoader]:
+        """Returns test dataloaders, one per test manifest."""
+        dataloaders = []
+        for test_set in self._test_sets:
+            sampler = DistributedSampler(test_set, shuffle=False) if self._multi_gpu else None
+            dl_kwargs = dict(
+                batch_size=self._batch_size,
+                num_workers=self._num_workers,
+                sampler=sampler,
+                drop_last=False,
+                pin_memory=True,
+            )
+            if self._num_workers and self._num_workers > 0:
+                dl_kwargs.update(persistent_workers=True, prefetch_factor=2)
+            dataloaders.append(DataLoader(test_set, **dl_kwargs))
         return dataloaders
     
     def train_dataloader(self) -> DataLoader:

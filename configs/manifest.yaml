@@ -21,6 +21,10 @@ tasks: ["Task_1_ICASSP", "Task_2_ICASSP", "Task_3_ICASSP"]
 # Toggle synthetic manifest generation
 generate_synthetic: true
 
+# Test/evaluation data configuration
+icassp_eval_dir: ${oc.env:ICASSP_ORIG_EVAL_PATH}
+generate_test: false
+
 # Output directories (manifests will be written to {dataset_dir}/manifests/)
 icassp_manifest_dir: ${oc.env:ICASSP_ORIG_PATH}/manifests
 synthetic_manifest_dir: ${oc.env:SYNTH_ROOT}/manifests

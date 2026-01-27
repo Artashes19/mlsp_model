@@ -262,6 +262,115 @@ def ensure_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], 
     return -1
 
 
+# ===== TEST MANIFEST (evaluation data, no outputs) =====
+
+def _icassp_test_expected_paths(
+    root: str,
+    eval_data_name: str,
+    task: str,
+    b: int,
+    ant: int,
+    f: int,
+    sp: int,
+    sparse_dir: str,
+):
+    """Generate expected paths for test/evaluation data (no outputs)."""
+    input_dir = os.path.join(root, eval_data_name, f"Inputs/{task}")
+    positions_dir = os.path.join(root, eval_data_name, "Positions/")
+    radiation_patterns_dir = os.path.join(root, eval_data_name, "Radiation_Patterns/")
+    
+    input_file = os.path.join(input_dir, f"B{b}_Ant{ant}_f{f}_S{sp}.png")
+    position_file = os.path.join(positions_dir, f"Positions_B{b}_Ant{ant}_f{f}.csv")
+    radiation_pattern_file = os.path.join(radiation_patterns_dir, f"Ant{ant}_Pattern.csv")
+    
+    sparse_file = ""
+    if sparse_dir:
+        sparse_file = os.path.join(sparse_dir, f"B{b}_Ant{ant}_f{f}_S{sp}.png")
+    
+    return input_file, position_file, radiation_pattern_file, sparse_file
+
+
+def generate_icassp_test_manifest(
+    root: str,
+    out_csv: str,
+    freqs_mhz: Sequence[float],
+    eval_data_name: str,
+    task: str,
+    sparse_dir: str,
+) -> int:
+    """
+    Generate test manifest for evaluation data (no ground truth outputs).
+    
+    Args:
+        root: Root directory of evaluation data (e.g., /nfs/dgx/raid/iot/data/icassp2025eval)
+        out_csv: Output CSV path
+        freqs_mhz: List of frequencies in MHz
+        eval_data_name: Name of evaluation data folder (e.g., "Evaluation_Data_T2")
+        task: Task subfolder name (e.g., "Task_2_ICASSP")
+        sparse_dir: Optional path to sparse measurements directory (e.g., rate0.02/sampledGT)
+    
+    Returns:
+        Number of rows written.
+    """
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+    
+    # Determine fieldnames based on whether sparse_file is needed
+    fieldnames = [
+        "file_name",
+        "building",
+        "antenna",
+        "frequency_index",
+        "sample_index",
+        "freq_MHz",
+        "input_file",
+        "output_file",
+        "position_file",
+        "radiation_pattern_file",
+        "sampling_position",
+    ]
+    if sparse_dir:
+        fieldnames.append("sparse_file")
+    
+    with open(out_csv, "w", newline="") as fp:
+        writer = csv.writer(fp)
+        writer.writerow(fieldnames)
+        n = 0
+        for b in range(1, 26):
+            for ant in range(1, 6):
+                for f in range(1, 1 + len(freqs_mhz)):
+                    for sp in range(80):
+                        input_file, position_file, radiation_file, sparse_file = _icassp_test_expected_paths(
+                            root=root,
+                            eval_data_name=eval_data_name,
+                            task=task,
+                            b=b,
+                            ant=ant,
+                            f=f,
+                            sp=sp,
+                            sparse_dir=sparse_dir,
+                        )
+                        if os.path.exists(input_file):
+                            file_name = os.path.basename(input_file)
+                            row = [
+                                file_name,
+                                b,
+                                ant,
+                                f,
+                                sp,
+                                float(freqs_mhz[f - 1]),
+                                input_file,
+                                "",  # output_file is empty for test data
+                                position_file,
+                                radiation_file,
+                                sp,
+                            ]
+                            if sparse_dir:
+                                row.append(sparse_file)
+                            writer.writerow(row)
+                            n += 1
+    return n
+
+
 # ===== FILTER HELPERS (for per-run manifests) =====
 
 def filter_icassp_manifest(

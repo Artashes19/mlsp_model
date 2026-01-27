@@ -9,6 +9,7 @@ from src.data_exploration.generate_manifest import (
     ensure_icassp_manifest,
     ensure_manifest as ensure_synth_manifest,
     filter_icassp_manifest,
+    generate_icassp_test_manifest,
     split_synthetic_manifest,
 )
 
@@ -38,12 +39,14 @@ def manifest_prep(
     """
     icassp_data_dir = os.path.expanduser(str(config["icassp_data_dir"]))
     synthetic_dir = os.path.expanduser(str(config["synthetic_dir"]))
+    icassp_eval_dir = os.path.expanduser(str(config.get("icassp_eval_dir", "")))
     val_buildings = list(config["val_buildings"])
     train_small_n = int(config["train_small_n"])
     synthetic_val_size = int(config["synthetic_val_size"])
     freqs_mhz = list(config["freqs_mhz"])
     tasks = list(config["tasks"])
     generate_synthetic = bool(config["generate_synthetic"])
+    generate_test = bool(config.get("generate_test", False))
     
     # Output directories
     icassp_manifest_dir = os.path.expanduser(str(config["icassp_manifest_dir"]))
@@ -193,6 +196,97 @@ def manifest_prep(
             log.warning(f"[manifest] Synthetic data dir not found or not specified: {synthetic_dir}")
     else:
         log.info("[manifest] Synthetic manifest generation disabled")
+    
+    # === Test Manifests (evaluation data, no outputs) ===
+    if generate_test:
+        if icassp_eval_dir and os.path.isdir(icassp_eval_dir):
+            eval_manifest_dir = os.path.join(icassp_eval_dir, "manifests")
+            os.makedirs(eval_manifest_dir, exist_ok=True)
+            
+            # Mapping of task number to eval directory and task subfolder
+            test_task_mapping = {
+                "Task_1_ICASSP": ("Evaluation_Data_T1", "Task_1_ICASSP"),
+                "Task_2_ICASSP": ("Evaluation_Data_T2", "Task_2_ICASSP"),
+                "Task_3_ICASSP": ("Evaluation_Data_T3", "Task_3_ICASSP"),
+            }
+            
+            for task in tasks:
+                if task not in test_task_mapping:
+                    log.warning(f"[manifest] Unknown task for test manifest: {task}")
+                    continue
+                
+                eval_data_name, task_subfolder = test_task_mapping[task]
+                task_short = task.replace("_ICASSP", "")
+                
+                # Generate test manifest (no sparse)
+                test_manifest_path = os.path.join(
+                    eval_manifest_dir,
+                    f"icassp_test_{task_short}.csv",
+                )
+                t0 = time.perf_counter()
+                n_test = generate_icassp_test_manifest(
+                    root=icassp_eval_dir,
+                    out_csv=test_manifest_path,
+                    freqs_mhz=freqs_mhz,
+                    eval_data_name=eval_data_name,
+                    task=task_subfolder,
+                    sparse_dir="",
+                )
+                dt = time.perf_counter() - t0
+                log.info(
+                    f"[manifest] Test manifest: {test_manifest_path} "
+                    f"(rows={n_test}, took={dt:.2f}s)"
+                )
+                result[f"icassp_test_manifest_{task}"] = test_manifest_path
+            
+            # Generate MLSP test manifests with sparse measurements (Task 2 only)
+            if "Task_2_ICASSP" in tasks:
+                eval_data_name = "Evaluation_Data_T2"
+                task_subfolder = "Task_2_ICASSP"
+                
+                # Rate 0.02% sparse
+                sparse_dir_0_02 = os.path.join(icassp_eval_dir, eval_data_name, "rate0.02", "sampledGT")
+                if os.path.isdir(sparse_dir_0_02):
+                    mlsp_test_path_0_02 = os.path.join(eval_manifest_dir, "mlsp_test_rate0.02.csv")
+                    t0 = time.perf_counter()
+                    n_mlsp = generate_icassp_test_manifest(
+                        root=icassp_eval_dir,
+                        out_csv=mlsp_test_path_0_02,
+                        freqs_mhz=freqs_mhz,
+                        eval_data_name=eval_data_name,
+                        task=task_subfolder,
+                        sparse_dir=sparse_dir_0_02,
+                    )
+                    dt = time.perf_counter() - t0
+                    log.info(
+                        f"[manifest] MLSP test manifest (rate 0.02): {mlsp_test_path_0_02} "
+                        f"(rows={n_mlsp}, took={dt:.2f}s)"
+                    )
+                    result["mlsp_test_manifest_rate_0_02"] = mlsp_test_path_0_02
+                
+                # Rate 0.5% sparse
+                sparse_dir_0_5 = os.path.join(icassp_eval_dir, eval_data_name, "rate0.5", "sampledGT")
+                if os.path.isdir(sparse_dir_0_5):
+                    mlsp_test_path_0_5 = os.path.join(eval_manifest_dir, "mlsp_test_rate0.5.csv")
+                    t0 = time.perf_counter()
+                    n_mlsp = generate_icassp_test_manifest(
+                        root=icassp_eval_dir,
+                        out_csv=mlsp_test_path_0_5,
+                        freqs_mhz=freqs_mhz,
+                        eval_data_name=eval_data_name,
+                        task=task_subfolder,
+                        sparse_dir=sparse_dir_0_5,
+                    )
+                    dt = time.perf_counter() - t0
+                    log.info(
+                        f"[manifest] MLSP test manifest (rate 0.5): {mlsp_test_path_0_5} "
+                        f"(rows={n_mlsp}, took={dt:.2f}s)"
+                    )
+                    result["mlsp_test_manifest_rate_0_5"] = mlsp_test_path_0_5
+        else:
+            log.warning(f"[manifest] Evaluation data dir not found or not specified: {icassp_eval_dir}")
+    else:
+        log.info("[manifest] Test manifest generation disabled")
     
     # Summary
     log.info(f"[manifest] Manifest generation complete. Created manifests: {list(result.keys())}")
