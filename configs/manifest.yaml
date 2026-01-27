@@ -15,6 +15,12 @@ synthetic_val_size: 6240
 # Frequency settings
 freqs_mhz: [868, 1800, 3500]
 
+# Task configuration
+tasks: ["Task_1_ICASSP", "Task_2_ICASSP", "Task_3_ICASSP"]
+
+# Toggle synthetic manifest generation
+generate_synthetic: true
+
 # Output directories (manifests will be written to {dataset_dir}/manifests/)
 icassp_manifest_dir: ${oc.env:ICASSP_ORIG_PATH}/manifests
 synthetic_manifest_dir: ${oc.env:SYNTH_ROOT}/manifests
