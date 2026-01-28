@@ -10,7 +10,6 @@ from omegaconf import DictConfig, OmegaConf
 from torch.optim.lr_scheduler import LRScheduler
 
 from src.algorithms.algorithm_base import AlgorithmBase
-from src.datamodules.datasets.indoor import IMG_TARGET_SIZE
 from src.utils import CompileParams
 from src.utils.indoor.augmentations import resize_bilinear
 from src.utils.indoor.loss import create_sip2net_loss, se
@@ -90,14 +89,9 @@ class Indoor(AlgorithmBase):
     def pred(self, batch):
         inputs, targets, masks, sample = batch
         
-        # Calculate original dimensions from pixel_size
-        original_pixel_size = 0.25
-        current_pixel_size = sample["pixel_size"]
-        reverse_scale_factor = original_pixel_size / current_pixel_size
-        
-        # Network output is 256x256, calculate original dimensions
-        old_h = int(IMG_TARGET_SIZE * reverse_scale_factor)
-        old_w = int(IMG_TARGET_SIZE * reverse_scale_factor)
+        # Use original dimensions from metadata
+        old_h = sample["orig_h"]
+        old_w = sample["orig_w"]
         
         # Forward pass with bfloat16 autocast
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):

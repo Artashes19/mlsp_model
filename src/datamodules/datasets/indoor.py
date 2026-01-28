@@ -238,6 +238,13 @@ class PathlossDataset(Dataset):
         
         orig_h, orig_w = sample.H, sample.W
         
+        # Store original target and mask before resize (for inference mode)
+        original_target = None
+        original_mask = None
+        if sample.output_img is not None and sample.output_img != "":
+            original_target = sample.output_img.clone()
+        original_mask = sample.mask.clone()
+        
         sample = normalize_size(sample=sample, target_size=self.target_size)
         
         if self.training and self.augmentations is not None:
@@ -248,6 +255,10 @@ class PathlossDataset(Dataset):
         # Normalize output AFTER resize (matching korean-model order)
         if output_tensor is not None and output_tensor != "":
             output_tensor = output_tensor / 160.0
+        
+        # For inference mode, use original (non-resized) target
+        if self.inference and original_target is not None:
+            output_tensor = original_target / 160.0
         
         # Load pre-computed sparse measurements if sparse_file is provided
         precomputed_sparse = None
@@ -275,12 +286,17 @@ class PathlossDataset(Dataset):
             precomputed_sparse=precomputed_sparse,
         )
         mask = sample.mask
+        # For inference mode, use original (non-resized) mask
+        if self.inference and original_mask is not None:
+            mask = original_mask
         # Store original dimensions for algorithm to use
         # Return only lightweight metadata to minimize batch transfer overhead
         meta = {
             "file_name": sample.file_name,
             # keep as a plain float; default_collate will tensorize to (B,)
             "pixel_size": float(sample.pixel_size),
+            "orig_h": orig_h,
+            "orig_w": orig_w,
         }
         # Reset dimensions back to original for consistency with inference.py logic
         sample.H = orig_h

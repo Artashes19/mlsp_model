@@ -29,7 +29,7 @@ defaults:
 
 # Override datamodule for inference mode
 datamodule:
-    inference: False  # We'll handle splits manually
+    inference: True  # Enable inference mode for original-size targets
     batch_size: 1  # Process one sample at a time for inference
 
 hydra:

@@ -220,7 +220,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             val_inputs,
             training=False,
             augmentations=None,
-            inference=False,
+            inference=self.inference,
             force_drop_sparse=True,
             force_drop_trans_ref=False,
             **self.dataset_kwargs
@@ -230,7 +230,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             val_inputs,
             training=False,
             augmentations=None,
-            inference=False,
+            inference=self.inference,
             force_drop_sparse=False,
             force_drop_trans_ref=True,
             **self.dataset_kwargs
@@ -240,7 +240,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             val_inputs,
             training=False,
             augmentations=None,
-            inference=False,
+            inference=self.inference,
             force_drop_sparse=False,
             force_drop_trans_ref=False,
             **self.dataset_kwargs
@@ -261,6 +261,20 @@ class IndoorDatamodule(pl.LightningDataModule):
             if ids is None:
                 return (str(getattr(obj, "file_name", "")),)
             return tuple(ids)
+        
+        # Always load ICASSP validation (regardless of inference flag)
+        icassp_val_inputs = self.get_inputs_list(
+            freqs_mhz=self.freqs_mhz,
+            freqs=self.freqs,
+            manifest_path=self.val_manifest_path,
+        )
+        
+        # Create 3 ICASSP validation datasets with different channel configs (always)
+        (
+            self._val_set_no_sparse,
+            self._val_set_no_trans_ref,
+            self._val_set_all_enabled,
+        ) = self._create_validation_sets(val_inputs=icassp_val_inputs)
         
         if self.inference:
             # For inference, load from test_manifest_path list
@@ -283,15 +297,8 @@ class IndoorDatamodule(pl.LightningDataModule):
                         )
                         self._test_sets.append(test_dataset)
                         log.info(f"[datasets] created test set from {test_path}: n={len(test_dataset)}")
-            log.info(f"Prepared inference datasets: test_sets={len(self._test_sets)}")
+            log.info(f"Prepared inference datasets: val_sets={len(icassp_val_inputs)}, test_sets={len(self._test_sets)}")
         else:
-            # Always load ICASSP validation
-            icassp_val_inputs = self.get_inputs_list(
-                freqs_mhz=self.freqs_mhz,
-                freqs=self.freqs,
-                manifest_path=self.val_manifest_path,
-            )
-            
             if self.use_synthetic_train:
                 # Synthetic training: load from synthetic_manifest_path
                 train_inputs = self.get_inputs_list(
@@ -338,13 +345,6 @@ class IndoorDatamodule(pl.LightningDataModule):
                 force_drop_trans_ref=None,
                 **self.dataset_kwargs
             )
-            
-            # Create 3 ICASSP validation datasets with different channel configs
-            (
-                self._val_set_no_sparse,
-                self._val_set_no_trans_ref,
-                self._val_set_all_enabled,
-            ) = self._create_validation_sets(val_inputs=icassp_val_inputs)
             
             # Create 3 synthetic validation datasets (only for synthetic training)
             if synth_val_inputs:

@@ -24,22 +24,26 @@ def _get_dataset_by_split(
     """
     Get dataset by split name. Returns None if split is not available.
     """
-    split_map = {
-        "train": datamodule.train_set,
-        "test": datamodule.test_set,
-        # ICASSP validation sets
-        "val_no_sparse": datamodule.val_set_no_sparse,
-        "val_no_trans_ref": datamodule.val_set_no_trans_ref,
-        "val_all_enabled": datamodule.val_set_all_enabled,
-        # Synthetic validation sets
-        "synth_val_no_sparse": datamodule.synth_val_set_no_sparse,
-        "synth_val_no_trans_ref": datamodule.synth_val_set_no_trans_ref,
-        "synth_val_all_enabled": datamodule.synth_val_set_all_enabled,
-    }
-    if split not in split_map:
+    if split == "train":
+        return datamodule.train_set
+    elif split == "test":
+        # test_sets is a list; return first if available
+        return datamodule.test_sets[0] if datamodule.test_sets else None
+    elif split == "val_no_sparse":
+        return datamodule.val_set_no_sparse
+    elif split == "val_no_trans_ref":
+        return datamodule.val_set_no_trans_ref
+    elif split == "val_all_enabled":
+        return datamodule.val_set_all_enabled
+    elif split == "synth_val_no_sparse":
+        return datamodule.synth_val_set_no_sparse
+    elif split == "synth_val_no_trans_ref":
+        return datamodule.synth_val_set_no_trans_ref
+    elif split == "synth_val_all_enabled":
+        return datamodule.synth_val_set_all_enabled
+    else:
         log.warning(f"[inference] Unknown split name: {split}")
         return None
-    return split_map[split]  # May return None if dataset not initialized
 
 
 def parse_output_dir(
@@ -111,7 +115,11 @@ def inference_prep(
     )
     
     # Compute num_channels from datamodule.channels
-    num_channels = len(config.datamodule.channels)
+    # Note: 'f' channel expands to 4 Fourier frequency channels
+    channel_str = config.datamodule.channels
+    num_channels = len(channel_str)
+    if "f" in channel_str:
+        num_channels += 3  # 'f' expands to 4 channels (3 extra)
     if "in_ch" in config.network:
         config.network.in_ch = num_channels
     if "n_channels" in config.network:
