@@ -1,3 +1,4 @@
+import csv
 import logging
 import os
 import re
@@ -13,6 +14,7 @@ from tqdm import tqdm
 
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.datamodules.indoor import IndoorDatamodule
+from src.utils.indoor.channel_config import NUM_CHANNELS
 
 log = logging.getLogger(__name__)
 
@@ -23,12 +25,21 @@ def _get_dataset_by_split(
 ) -> Optional[Dataset]:
     """
     Get dataset by split name. Returns None if split is not available.
+    
+    Test sets are stored in a dict with descriptive names:
+    - "test" for single test sets (ICASSP tasks)
+    - "test_0.02", "test_0.5" for MLSP sparse rate variants
     """
     if split == "train":
         return datamodule.train_set
     elif split == "test":
-        # test_sets is a list; return first if available
-        return datamodule.test_sets[0] if datamodule.test_sets else None
+        # Legacy: return first test set if only one exists, or look up "test" key
+        if len(datamodule.test_sets) == 1:
+            return list(datamodule.test_sets.values())[0]
+        return datamodule.test_sets.get("test")
+    elif split.startswith("test_"):
+        # Named test sets: test_0.02, test_0.5, etc.
+        return datamodule.test_sets.get(split)
     elif split == "val_no_sparse":
         return datamodule.val_set_no_sparse
     elif split == "val_no_trans_ref":
@@ -80,6 +91,50 @@ def parse_output_dir(
     return output_dir
 
 
+def generate_csv_rows(
+    file_name: str,
+    pred: np.ndarray,
+    mask: np.ndarray,
+    out_norm: float = 160.0,
+) -> list[tuple[str, float]]:
+    """
+    Generate CSV rows for a single prediction (Kaggle submission format).
+    
+    Args:
+        file_name: Sample file name (e.g., "B1_Ant1_f1_S0.png")
+        pred: Prediction array (1, H, W) or (H, W), normalized [0, 1]
+        mask: Mask array (H, W), 0 for sparse measurement pixels to exclude
+        out_norm: Output normalization factor (default 160.0 for dB)
+    
+    Returns:
+        List of (ID, PL) tuples where ID is "{base_name}_{pixel_index}"
+    """
+    # Parse file_name to get base (e.g., "B1_Ant1_f1_S0")
+    base_name = os.path.splitext(file_name)[0]  # Remove .png
+    
+    # Get prediction in dB scale
+    if pred.ndim == 3:
+        pred = pred.squeeze(0)  # (1, H, W) -> (H, W)
+    pred_db = pred * out_norm
+    
+    H, W = pred.shape
+    rows = []
+    
+    for pixel_idx in range(H * W):
+        row = pixel_idx // W
+        col = pixel_idx % W
+        
+        # Skip pixels where mask is 0 (sparse measurement locations for MLSP)
+        if mask[row, col] == 0:
+            continue
+        
+        pl_value = float(pred_db[row, col])
+        id_str = f"{base_name}_{pixel_idx}"
+        rows.append((id_str, pl_value))
+    
+    return rows
+
+
 def inference_prep(
     config: DictConfig,
     project_root: str,
@@ -114,12 +169,8 @@ def inference_prep(
         multi_gpu=False,
     )
     
-    # Compute num_channels from datamodule.channels
-    # Note: 'f' channel expands to 4 Fourier frequency channels
-    channel_str = config.datamodule.channels
-    num_channels = len(channel_str)
-    if "f" in channel_str:
-        num_channels += 3  # 'f' expands to 4 channels (3 extra)
+    # Use NUM_CHANNELS from channel_config (single source of truth)
+    num_channels = NUM_CHANNELS
     if "in_ch" in config.network:
         config.network.in_ch = num_channels
     if "n_channels" in config.network:
@@ -167,6 +218,10 @@ def inference_prep(
         log.info(f"[inference] Processing split: {split} ({len(dataset)} samples)")
         log.info(f"[inference] Output directory: {output_dir}")
         
+        # Collect CSV rows for test splits (Kaggle submission)
+        csv_rows = []
+        is_test_split = split.startswith("test")
+        
         # Run inference for this split
         with torch.no_grad():
             for idx in tqdm(range(len(dataset)), desc=f"Inference ({split})"):
@@ -195,8 +250,27 @@ def inference_prep(
                     file_name=result["sample"]["file_name"],
                     pixel_size=result["sample"]["pixel_size"],
                 )
+                
+                # Generate CSV rows for test splits
+                if is_test_split:
+                    rows = generate_csv_rows(
+                        file_name=file_name,
+                        pred=result["pred"],
+                        mask=result["masks"],
+                    )
+                    csv_rows.extend(rows)
         
         log.info(f"[inference] Saved {len(dataset)} predictions to {output_dir}")
+        
+        # Write CSV for test splits (Kaggle submission format)
+        if csv_rows:
+            csv_path = os.path.join(output_dir, "predictions.csv")
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["ID", "PL"])
+                for id_str, pl_value in csv_rows:
+                    writer.writerow([id_str, round(pl_value, 1)])
+            log.info(f"[inference] Saved CSV with {len(csv_rows)} rows to {csv_path}")
         total_samples += len(dataset)
     
     elapsed = time.perf_counter() - t0

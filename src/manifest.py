@@ -239,10 +239,10 @@ def manifest_prep(
                 )
                 result[f"icassp_test_manifest_{task}"] = test_manifest_path
             
-            # Generate MLSP test manifests with sparse measurements (Task 2 only)
-            if "Task_2_ICASSP" in tasks:
-                eval_data_name = "Evaluation_Data_T2"
-                task_subfolder = "Task_2_ICASSP"
+            # Generate MLSP test manifests with sparse measurements (Task 1 data dir)
+            if "Task_1_ICASSP" in tasks:
+                eval_data_name = "Evaluation_Data_T1"
+                task_subfolder = "Task_1_ICASSP"
                 
                 # Rate 0.02% sparse
                 sparse_dir_0_02 = os.path.join(icassp_eval_dir, eval_data_name, "rate0.02", "sampledGT")

@@ -1,0 +1,28 @@
+# @package _global_
+name: inference
+seed: 42
+print_config: True
+ignore_warnings: True
+
+ckpt_path: null
+gpu: 0
+split:
+  - test
+
+predictions_dir: ${oc.env:PREDICTIONS_DIR}
+
+defaults:
+    - /exps/datamodule@datamodule: icassp_task1
+    - /exps/algorithm@algorithm: indoor
+    - /exps/network@network: txunet
+    - _self_
+
+datamodule:
+    inference: True
+    batch_size: 1
+
+hydra:
+    run:
+        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+    job:
+        chdir: True

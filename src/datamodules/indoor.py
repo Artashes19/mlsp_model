@@ -1,6 +1,7 @@
 import csv
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -86,7 +87,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         self._multi_gpu = multi_gpu
         
         self._train_set = None
-        self._test_sets: list[PathlossDataset] = []
+        self._test_sets: dict[str, PathlossDataset] = {}
         
         # Three ICASSP validation sets with different channel configs
         self._val_set_no_sparse = None       # sparse disabled
@@ -295,8 +296,17 @@ class IndoorDatamodule(pl.LightningDataModule):
                             force_drop_trans_ref=False,
                             **self.dataset_kwargs
                         )
-                        self._test_sets.append(test_dataset)
-                        log.info(f"[datasets] created test set from {test_path}: n={len(test_dataset)}")
+                        # Extract descriptive name from manifest filename
+                        # mlsp_test_rate0.02.csv -> test_0.02
+                        # icassp_test_Task_1.csv -> test
+                        basename = os.path.basename(test_path)
+                        rate_match = re.search(r"rate(\d+\.?\d*)", basename)
+                        if rate_match:
+                            test_name = f"test_{rate_match.group(1)}"
+                        else:
+                            test_name = "test"
+                        self._test_sets[test_name] = test_dataset
+                        log.info(f"[datasets] created test set '{test_name}' from {test_path}: n={len(test_dataset)}")
             log.info(f"Prepared inference datasets: val_sets={len(icassp_val_inputs)}, test_sets={len(self._test_sets)}")
         else:
             if self.use_synthetic_train:
@@ -373,8 +383,17 @@ class IndoorDatamodule(pl.LightningDataModule):
                             force_drop_trans_ref=False,
                             **self.dataset_kwargs
                         )
-                        self._test_sets.append(test_dataset)
-                        log.info(f"[datasets] created test set from {test_path}: n={len(test_dataset)}")
+                        # Extract descriptive name from manifest filename
+                        # mlsp_test_rate0.02.csv -> test_0.02
+                        # icassp_test_Task_1.csv -> test
+                        basename = os.path.basename(test_path)
+                        rate_match = re.search(r"rate(\d+\.?\d*)", basename)
+                        if rate_match:
+                            test_name = f"test_{rate_match.group(1)}"
+                        else:
+                            test_name = "test"
+                        self._test_sets[test_name] = test_dataset
+                        log.info(f"[datasets] created test set '{test_name}' from {test_path}: n={len(test_dataset)}")
         
         log.info(
             f"[prepare_data] done in {(time.perf_counter() - t0_prepare):.2f}s "
@@ -391,7 +410,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         return self._train_set
     
     @property
-    def test_sets(self) -> list[PathlossDataset]:
+    def test_sets(self) -> dict[str, PathlossDataset]:
         return self._test_sets
     
     @property
@@ -466,7 +485,7 @@ class IndoorDatamodule(pl.LightningDataModule):
     def test_dataloader(self) -> list[DataLoader]:
         """Returns test dataloaders, one per test manifest."""
         dataloaders = []
-        for test_set in self._test_sets:
+        for test_set in self._test_sets.values():
             sampler = DistributedSampler(test_set, shuffle=False) if self._multi_gpu else None
             dl_kwargs = dict(
                 batch_size=self._batch_size,

@@ -1,0 +1,30 @@
+# @package _global_
+name: inference
+seed: 42
+print_config: True
+ignore_warnings: True
+
+ckpt_path: null
+gpu: 0
+split:
+  - test_0.02
+  - test_0.5
+
+predictions_dir: ${oc.env:PREDICTIONS_DIR}
+
+defaults:
+    - /exps/datamodule@datamodule: mlsp
+    - /exps/algorithm@algorithm: indoor
+    - /exps/network@network: txunet
+    - _self_
+
+datamodule:
+    inference: True
+    batch_size: 1
+    sparse_range: [0, 0]
+
+hydra:
+    run:
+        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+    job:
+        chdir: True
