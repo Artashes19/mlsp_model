@@ -177,7 +177,6 @@ class PathlossDataset(Dataset):
             mask=torch.from_numpy(mask_np),
             floor_plan=torch.from_numpy(data["mask"]),
         )
-        sample = self.pad_sample(sample)
         return sample
     
     def read_sample_icassp(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
@@ -220,7 +219,6 @@ class PathlossDataset(Dataset):
             pixel_size=INITIAL_PIXEL_SIZE,
             mask=torch.ones_like(input_img[0]),
         )
-        sample = self.pad_sample(sample)
         return sample
     
     def read_sample(self, inputs: Union[RadarSampleInputs, dict]) -> RadarSample:
@@ -236,14 +234,18 @@ class PathlossDataset(Dataset):
         inp = self.inputs_list[idx]
         sample = self.read_sample(inp)
         
+        # Store TRUE original dimensions (before padding)
         orig_h, orig_w = sample.H, sample.W
         
-        # Store original target and mask before resize (for inference mode)
+        # Store original target and mask before padding (for inference mode)
         original_target = None
         original_mask = None
         if sample.output_img is not None and sample.output_img != "":
             original_target = sample.output_img.clone()
         original_mask = sample.mask.clone()
+        
+        # Now apply padding (only affects input processing, not stored originals)
+        sample = self.pad_sample(sample)
         
         sample = normalize_size(sample=sample, target_size=self.target_size)
         
