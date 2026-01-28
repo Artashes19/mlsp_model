@@ -72,10 +72,10 @@ def parse_output_dir(
     
     output_dir = os.path.join(
         predictions_dir,
-        datamodule_name,
-        split_name,
         timestamp,
         ckpt_name,
+        datamodule_name,
+        split_name,
     )
     return output_dir
 
