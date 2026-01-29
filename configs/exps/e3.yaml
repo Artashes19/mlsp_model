@@ -29,7 +29,7 @@ e3:
 
   loggers:
     aim:
-      experiment: v1_e3
+      experiment: v3_e3
 
   algorithm:
     finetune:

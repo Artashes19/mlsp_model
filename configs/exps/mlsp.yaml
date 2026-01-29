@@ -1,0 +1,29 @@
+mlsp:
+  ckpt_path: null
+  load_weights_only: False
+  
+  defaults:
+    - trainer: default
+    - datamodule: mlsp
+    - optimizer: adam
+    - scheduler: null
+    - algorithm: indoor
+    - network: txunet
+    - callbacks: [ tqdm_progress_bar, model_checkpoint_0 ]
+    - loggers: [ aim ]
+    - strategy: null
+    - _self_
+
+  trainer:
+    max_epochs: 100
+
+  datamodule:
+    train_samples_per_epoch: 3000
+
+  callbacks:
+    model_checkpoint_0:
+      dirpath: runs/mlsp/checkpoints/hard
+
+  loggers:
+    aim:
+      experiment: v3_mlsp
