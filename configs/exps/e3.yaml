@@ -35,8 +35,6 @@ e3:
     finetune:
       enable: True
       freeze_encoder_epochs: 0
-      discriminative_lr:
-        enable: True
       bn_recalibration:
         enable: True
       l2sp:

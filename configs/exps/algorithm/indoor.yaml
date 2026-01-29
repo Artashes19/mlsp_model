@@ -26,10 +26,6 @@ finetune:
   ckpt_path: null
   # Encoder freeze schedule (epochs to keep encoder frozen at start)
   freeze_encoder_epochs: 0
-  # Discriminative LRs: scale encoder lr by factor relative to base lr
-  discriminative_lr:
-    enable: False
-    encoder_lr_factor: 0.1
   # BatchNorm recalibration on target data before training
   bn_recalibration:
     enable: False

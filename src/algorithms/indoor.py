@@ -73,7 +73,6 @@ class Indoor(AlgorithmBase):
                 f"[finetune] enable={bool(self._finetune_conf.get('enable', False))}, "
                 f"ckpt_path={self._finetune_conf.get('ckpt_path', None)}, "
                 f"freeze_encoder_epochs={int(self._finetune_conf.get('freeze_encoder_epochs', 0))}, "
-                f"discriminative_lr={self._finetune_conf.get('discriminative_lr', {})}, "
                 f"warmup={self._finetune_conf.get('warmup', {})}, "
                 f"bn_recalibration={self._finetune_conf.get('bn_recalibration', {})}, "
                 f"l2sp={self._finetune_conf.get('l2sp', {})}"
@@ -320,50 +319,23 @@ class Indoor(AlgorithmBase):
         optimizer_conf: DictConfig = OmegaConf.create(self._optimizer_conf)
         base_lr: float = float(optimizer_conf["lr"]) if "lr" in optimizer_conf else 3e-4
         
-        discr_conf: dict = self._finetune_conf.get("discriminative_lr", {})
-        use_discr: bool = bool(discr_conf.get("enable", False))
-        enc_factor: float = float(discr_conf.get("encoder_lr_factor", 0.1))
-        
-        params_encoder: list[nn.Parameter] = []
-        params_other: list[nn.Parameter] = []
-        for name, parameter in self._network.named_parameters():
-            if not parameter.requires_grad:
-                continue
-            if ".encoder." in name or name.startswith("unet.encoder") or name.startswith("encoder."):
-                params_encoder.append(parameter)
-            else:
-                params_other.append(parameter)
-        
-        num_enc: int = sum(parameter.numel() for parameter in params_encoder)
-        num_oth: int = sum(parameter.numel() for parameter in params_other)
+        params_all: list[nn.Parameter] = [
+            parameter
+            for _, parameter in self._network.named_parameters()
+            if parameter.requires_grad
+        ]
+        num_all: int = sum(parameter.numel() for parameter in params_all)
         log.info(
-            f"[finetune] param groups: encoder_params={len(params_encoder)} ({num_enc} weights), "
-            f"other_params={len(params_other)} ({num_oth} weights), "
-            f"discriminative_lr={'on' if use_discr else 'off'} (encoder_lr_factor={enc_factor})"
+            f"[finetune] param groups: trainable_params={len(params_all)} ({num_all} weights)"
         )
         
-        if use_discr:
-            param_groups: list[dict] = [
-                {
-                    "params": params_encoder,
-                    "lr": base_lr,
-                    "lr_scale": enc_factor,
-                },
-                {
-                    "params": params_other,
-                    "lr": base_lr,
-                    "lr_scale": 1.0,
-                },
-            ]
-        else:
-            combined_params: list[nn.Parameter] = params_encoder + params_other
-            param_groups = [
-                {
-                    "params": combined_params,
-                    "lr": base_lr,
-                    "lr_scale": 1.0,
-                }
-            ]
+        param_groups: list[dict] = [
+            {
+                "params": params_all,
+                "lr": base_lr,
+                "lr_scale": 1.0,
+            }
+        ]
         
         optimizer = hydra.utils.instantiate(
             optimizer_conf,
