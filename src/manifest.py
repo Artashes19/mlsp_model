@@ -62,7 +62,7 @@ def manifest_prep(
         os.makedirs(icassp_manifest_dir, exist_ok=True)
         
         # Compute train buildings (all buildings not in validation)
-        all_buildings = list(range(1, 46))
+        all_buildings = list(range(1, 26))
         train_buildings = sorted(set(all_buildings) - set(val_buildings))
         train_small_buildings = train_buildings[:train_small_n]
         
