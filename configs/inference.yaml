@@ -22,18 +22,19 @@ predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 # Defaults for model components
 defaults:
-    - /exps/datamodule@datamodule: indoor
-    - /exps/algorithm@algorithm: indoor
-    - /exps/network@network: txunet
-    - _self_
+  - /exps/datamodule@datamodule: indoor
+  - /exps/algorithm@algorithm: indoor
+  - /exps/network@network: txunet
+  - _self_
 
 # Override datamodule for inference mode
 datamodule:
-    inference: True  # Enable inference mode for original-size targets
-    batch_size: 1  # Process one sample at a time for inference
+  inference: True  # Enable inference mode for original-size targets
+  batch_size: 1  # Process one sample at a time for inference
+  use_synthetic_train: True
 
 hydra:
-    run:
-        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
-    job:
-        chdir: True
+  run:
+    dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+  job:
+    chdir: True
