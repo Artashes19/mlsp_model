@@ -15,10 +15,10 @@ icassp_task3:
     - _self_
 
   trainer:
-    max_epochs: 8
+    max_epochs: 14
 
   datamodule:
-    train_samples_per_epoch: 42000
+    train_samples_per_epoch: 22200
 
   callbacks:
     model_checkpoint_0:

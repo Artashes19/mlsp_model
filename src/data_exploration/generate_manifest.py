@@ -203,7 +203,7 @@ def generate_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float]
             ]
         )
         n = 0
-        for b in range(1, 46):
+        for b in range(1, 26):
             for ant in range(1, 6):
                 for f in range(1, 1 + len(freqs_mhz)):
                     for sp in range(80):
@@ -335,7 +335,7 @@ def generate_icassp_test_manifest(
         writer = csv.writer(fp)
         writer.writerow(fieldnames)
         n = 0
-        for b in range(1, 46):
+        for b in range(1, 26):
             for ant in range(1, 6):
                 for f in range(1, 1 + len(freqs_mhz)):
                     for sp in range(80):
