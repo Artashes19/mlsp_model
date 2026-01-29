@@ -29,15 +29,8 @@ sparse_dropout_given_dropout: 0․0
 train_augmentations:
   _target_: src.utils.indoor.augmentations.AugmentationPipeline
   augmentations:
-    - _target_: src.utils.indoor.augmentations.GeometricAugmentation
-      p: 0.0
-      walls_p: 0.0
-      transmittance_range: [ 2, 18 ]
-      angle_range: [ 0, 0 ]
-      scale_range: [ 1.0, 1.0 ]
-      flip_vertical: True
-      flip_horizontal: True
-      cardinal_rotation: True
+    - _target_: src.utils.indoor.augmentations.CardinalRotationAugmentation
+      p: 1.0
 
 # Experiment controls
 use_synthetic_train: False

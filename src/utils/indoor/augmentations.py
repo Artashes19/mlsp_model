@@ -1,47 +1,15 @@
 import random
-from typing import List, Optional
+from typing import List
 
-import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms.functional import InterpolationMode
 
-from src.utils.indoor.featurizer import calculate_transmittance_loss
 from src.utils.indoor.types import RadarSample
 
 
 def resize_bilinear(img, new_size):
     return TF.resize(img, new_size, interpolation=InterpolationMode.BILINEAR)
-
-
-def resize_db(img, new_size):
-    # Prevent overflow in 10^(x/10) for very large dB values (~>385 dB overflows float32)
-    safe_db_max = float(10.0 * np.log10(np.finfo(np.float32).max)) - 1.0  # small margin
-    img_clamped = torch.clamp(img, max=safe_db_max)
-    lin_energy = 10.0 ** (img_clamped / 10.0)
-    lin_rs = TF.resize(lin_energy, new_size, interpolation=InterpolationMode.BILINEAR)
-    img_rs = torch.zeros_like(lin_rs)
-    valid_mask = lin_rs > 0
-    img_rs[valid_mask] = 10.0 * torch.log10(lin_rs[valid_mask])
-    
-    return img_rs
-
-
-def rotate_bilinear(img, angle):
-    return TF.rotate(img, angle, interpolation=InterpolationMode.BILINEAR, fill=0, expand=True)
-
-
-def rotate_linear(img, angle):
-    return TF.rotate(img, angle, interpolation=InterpolationMode.BILINEAR, fill=0, expand=True)
-
-
-def rotate_db(img, angle):
-    lin_energy = 10.0 ** (img / 10.0)
-    lin_rs = TF.rotate(lin_energy, angle, interpolation=InterpolationMode.BILINEAR, fill=0, expand=True)
-    img_rs = torch.zeros_like(lin_rs)
-    valid_mask = lin_rs > 0
-    img_rs[valid_mask] = 10.0 * torch.log10(lin_rs[valid_mask])
-    return img_rs
 
 
 def normalize_size(sample: RadarSample, target_size) -> RadarSample:
@@ -97,116 +65,21 @@ class BaseAugmentation:
         raise NotImplementedError
 
 
-class GeometricAugmentation(BaseAugmentation):
+class CardinalRotationAugmentation(BaseAugmentation):
+    """Augmentation that applies lossless 90/180/270 degree rotations."""
     
-    def __init__(
-        self,
-        p: float,
-        walls_p: Optional[int],
-        transmittance_range: Optional[tuple[int, int]],
-        flip_vertical: bool,
-        flip_horizontal: bool,
-        angle_range: Optional[tuple[float, float]],
-        cardinal_rotation: bool,
-        scale_range: Optional[tuple[float, float]],
-    ):
+    def __init__(self, p: float = 1.0):
+        """
+        Args:
+            p: Probability of applying cardinal rotation (default 1.0 = always apply)
+        """
         self.p = p
-        self.walls_p = walls_p
-        self.transmittance_range = transmittance_range
-        self.scale_range = scale_range
-        self.angle_range = angle_range
-        self.cardinal_rotation = cardinal_rotation
-        self.flip_horizontal = flip_horizontal
-        self.flip_vertical = flip_vertical
     
-    def _apply_distance_scaling(self, sample: RadarSample, scale_factor: float) -> RadarSample:
-        distances = sample.input_img[2]
-        
-        scaled_distances = distances * scale_factor
-        fspl_adjustment = 20.0 * np.log10(scale_factor)
-        
-        sample.input_img[2] = scaled_distances
-        sample.input_img[-1][sample.input_img[-1] != 0] = fspl_adjustment
-        sample.output_img += fspl_adjustment
-        sample.pixel_size *= scale_factor
-        
-        return sample
-    
-    def _apply_rotation(self, sample: RadarSample, angle: float) -> RadarSample:
-        old_H, old_W = sample.H, sample.W
-        antenna_img = torch.zeros((old_H, old_W), dtype=torch.float32)
-        antenna_img[int(round(sample.y_ant)), int(round(sample.x_ant))] = 100.0
-        antenna_rot = rotate_linear(antenna_img.unsqueeze(0), angle).squeeze(0)
-        coords = (antenna_rot > 0).nonzero(as_tuple=False)
-        
-        new_ay, new_ax = coords[antenna_rot[coords[:, 0], coords[:, 1]] == antenna_rot.max()][0].tolist()
-        
-        sample.x_ant, sample.y_ant = float(new_ax), float(new_ay)
-        sample.azimuth = (sample.azimuth + angle) % 360
-        
-        reflectance = sample.input_img[0:1]  # (1, H, W)
-        transmittance = sample.input_img[1:2]  # (1, H, W)
-        distance = sample.input_img[2:3]  # (1, H, W)
-        
-        rot_reflectance = rotate_bilinear(reflectance, angle)
-        rot_transmittance = rotate_bilinear(transmittance, angle)
-        rot_distance = rotate_bilinear(distance, angle)
-        
-        if sample.output_img is not None:
-            out_expanded = sample.output_img.unsqueeze(0)  # (1,H,W)
-            rot_output = rotate_db(out_expanded, angle).squeeze(0)
-            sample.output_img = rot_output
-        
-        if sample.floor_plan is not None:
-            fp_expanded = sample.floor_plan.unsqueeze(0)
-            rot_fp = rotate_bilinear(fp_expanded, angle).squeeze(0)
-            sample.floor_plan = rot_fp
-        
-        if sample.mask is not None:
-            mask_expanded = sample.mask.unsqueeze(0)
-            rot_mask = rotate_bilinear(mask_expanded, angle).squeeze(0)
-            sample.mask = rot_mask
-        
-        _, new_H, new_W = rot_reflectance.shape
-        sample.H, sample.W = new_H, new_W
-        # Keep exactly the first three physical channels
-        sample.input_img = torch.cat([rot_reflectance, rot_transmittance, rot_distance], dim=0)
-        
-        sample = normalize_size(sample=sample, target_size=old_H)
-        
-        return sample
-    
-    def _apply_flipping(self, sample: RadarSample, flip_h: bool, flip_v: bool) -> RadarSample:
-        if not (flip_h or flip_v):
+    def __call__(self, sample: RadarSample) -> RadarSample:
+        if random.random() > self.p:
             return sample
         
-        if flip_h:
-            sample.input_img = TF.hflip(sample.input_img)
-        if flip_v:
-            sample.input_img = TF.vflip(sample.input_img)
-        
-        if sample.floor_plan is not None:
-            if flip_h:
-                sample.floor_plan = TF.hflip(sample.floor_plan)
-            if flip_v:
-                sample.floor_plan = TF.vflip(sample.floor_plan)
-        
-        if sample.output_img is not None:
-            output_expanded = sample.output_img.unsqueeze(0)
-            if flip_h:
-                output_expanded = TF.hflip(output_expanded)
-            if flip_v:
-                output_expanded = TF.vflip(output_expanded)
-            sample.output_img = output_expanded.squeeze(0)
-        
-        if flip_h:
-            sample.x_ant = sample.W - sample.x_ant
-            sample.azimuth = (180 - sample.azimuth) % 360
-        if flip_v:
-            sample.y_ant = sample.H - sample.y_ant
-            sample.azimuth = (360 - sample.azimuth) % 360
-        
-        return sample
+        return self._apply_cardinal_rotation(sample)
     
     def _apply_cardinal_rotation(self, sample: RadarSample) -> RadarSample:
         """
@@ -242,69 +115,6 @@ class GeometricAugmentation(BaseAugmentation):
             sample.mask = torch.rot90(sample.mask, k, (0, 1))
         
         sample.H, sample.W = new_H, new_W
-        return sample
-    
-    def _apply_walls(self, sample: RadarSample) -> RadarSample:
-        new_walls = torch.zeros((sample.H, sample.W), dtype=torch.float32)
-        transmittance: torch.Tensor = sample.input_img[1][sample.mask == 1]
-        
-        # Randomly choosing the number of vertical and horizontal walls
-        max_wall_count = transmittance.size()[0] / (transmittance != 0).sum().item()
-        num_vertical_walls = np.random.randint(1, max_wall_count / 3)
-        num_horizontal_walls = np.random.randint(1, max_wall_count / 3)
-        
-        # Choosing random positions for the walls
-        vertical_walls = np.random.choice(sample.W, num_vertical_walls, replace=False)
-        horizontal_walls = np.random.choice(sample.H, num_horizontal_walls, replace=False)
-        
-        # Getting random values to the walls
-        max_transmittance = np.random.randint(self.transmittance_range[0], self.transmittance_range[1], )
-        vertical_wall_values = torch.randint(
-            1, max_transmittance,
-            (num_vertical_walls,), dtype=torch.float32
-        )
-        horizontal_wall_values = torch.randint(
-            1, max_transmittance,
-            (num_horizontal_walls,), dtype=torch.float32
-        )
-        
-        # Setting values for new walls
-        new_walls[:, vertical_walls] = vertical_wall_values
-        new_walls[horizontal_walls, :] = horizontal_wall_values.unsqueeze(1)
-        
-        # Adjusting pathloss values accordingly
-        new_walls_transmittance_loss = calculate_transmittance_loss(new_walls, sample.x_ant, sample.y_ant)
-        
-        # Updating the sample
-        sample.input_img[1][sample.mask == 1] += new_walls[sample.mask == 1]
-        sample.output_img[sample.mask == 1] += new_walls_transmittance_loss[sample.mask == 1]
-        sample.input_img[-1][sample.input_img[-1] != 0] += new_walls_transmittance_loss[sample.input_img[-1] != 0]
-        
-        return sample
-    
-    def __call__(self, sample: RadarSample) -> RadarSample:
-        if random.random() < self.walls_p:
-            sample = self._apply_walls(sample)
-        
-        if random.random() > self.p:
-            return sample
-        
-        if self.scale_range is not None:
-            scale_factor = random.uniform(*self.scale_range)
-            sample = self._apply_distance_scaling(sample, scale_factor)
-        
-        if self.cardinal_rotation:
-            sample = self._apply_cardinal_rotation(sample)
-        
-        if self.angle_range is not None:
-            angle = random.uniform(*self.angle_range)
-            sample = self._apply_rotation(sample, angle)
-        
-        flip_h = self.flip_horizontal and (random.random() < 0.5)
-        flip_v = self.flip_vertical and (random.random() < 0.5)
-        if flip_h or flip_v:
-            sample = self._apply_flipping(sample, flip_h, flip_v)
-        
         return sample
 
 
