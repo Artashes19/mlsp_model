@@ -40,6 +40,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         channels: str,
         train_augmentations: Optional[AugmentationPipeline],
         test_manifest_path: Optional[list[str]],
+        val_sparse_ranges: Optional[list[list[float]]] = None,
         **kwargs
     ):
         # Validate and store channels configuration
@@ -74,6 +75,20 @@ class IndoorDatamodule(pl.LightningDataModule):
         self.synthetic_limit = int(synthetic_limit) if synthetic_limit is not None else None
         self.train_samples_per_epoch = int(train_samples_per_epoch) if train_samples_per_epoch is not None else None
         
+        self._val_sparse_ranges = None
+        if val_sparse_ranges:
+            ranges = []
+            for entry in val_sparse_ranges:
+                if entry is None:
+                    continue
+                if len(entry) != 2:
+                    raise ValueError("val_sparse_ranges entries must be length 2")
+                lo = float(entry[0])
+                hi = float(entry[1])
+                ranges.append((lo, hi))
+            if ranges:
+                self._val_sparse_ranges = ranges
+        
         # Store kwargs for dataset
         self.dataset_kwargs = kwargs
         self.dataset_kwargs["channels"] = channels
@@ -93,6 +108,7 @@ class IndoorDatamodule(pl.LightningDataModule):
         self._val_set_no_sparse = None       # sparse disabled
         self._val_set_no_trans_ref = None    # trans+ref disabled
         self._val_set_all_enabled = None     # all channels enabled
+        self._val_sets: list[tuple[PathlossDataset, PathlossDataset, PathlossDataset]] = []
         
         # Three synthetic validation sets (when use_synthetic_train)
         self._synth_val_set_no_sparse = None
@@ -203,6 +219,7 @@ class IndoorDatamodule(pl.LightningDataModule):
     def _create_validation_sets(
         self,
         val_inputs: list,
+        sparse_range: Optional[tuple[float, float]] = None,
     ) -> tuple[PathlossDataset, PathlossDataset, PathlossDataset]:
         """
         Create three validation datasets with different channel configurations.
@@ -216,6 +233,10 @@ class IndoorDatamodule(pl.LightningDataModule):
             - no_trans_ref: transmittance and reflectance disabled
             - all_enabled: all channels enabled
         """
+        dataset_kwargs = dict(self.dataset_kwargs)
+        if sparse_range is not None:
+            dataset_kwargs["sparse_range"] = sparse_range
+        
         # Val set 1: sparse disabled
         no_sparse = PathlossDataset(
             val_inputs,
@@ -224,7 +245,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             inference=self.inference,
             force_drop_sparse=True,
             force_drop_trans_ref=False,
-            **self.dataset_kwargs
+            **dataset_kwargs
         )
         # Val set 2: trans+ref disabled
         no_trans_ref = PathlossDataset(
@@ -234,7 +255,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             inference=self.inference,
             force_drop_sparse=False,
             force_drop_trans_ref=True,
-            **self.dataset_kwargs
+            **dataset_kwargs
         )
         # Val set 3: all enabled
         all_enabled = PathlossDataset(
@@ -244,7 +265,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             inference=self.inference,
             force_drop_sparse=False,
             force_drop_trans_ref=False,
-            **self.dataset_kwargs
+            **dataset_kwargs
         )
         return no_sparse, no_trans_ref, all_enabled
     
@@ -270,12 +291,27 @@ class IndoorDatamodule(pl.LightningDataModule):
             manifest_path=self.val_manifest_path,
         )
         
-        # Create 3 ICASSP validation datasets with different channel configs (always)
-        (
-            self._val_set_no_sparse,
-            self._val_set_no_trans_ref,
-            self._val_set_all_enabled,
-        ) = self._create_validation_sets(val_inputs=icassp_val_inputs)
+        # Create ICASSP validation datasets (always)
+        if self._val_sparse_ranges:
+            self._val_sets = []
+            for sparse_range in self._val_sparse_ranges:
+                self._val_sets.append(
+                    self._create_validation_sets(
+                        val_inputs=icassp_val_inputs,
+                        sparse_range=sparse_range,
+                    )
+                )
+            (
+                self._val_set_no_sparse,
+                self._val_set_no_trans_ref,
+                self._val_set_all_enabled,
+            ) = self._val_sets[0]
+        else:
+            (
+                self._val_set_no_sparse,
+                self._val_set_no_trans_ref,
+                self._val_set_all_enabled,
+            ) = self._create_validation_sets(val_inputs=icassp_val_inputs)
         
         if self.inference:
             # For inference, load from test_manifest_path list
@@ -464,13 +500,19 @@ class IndoorDatamodule(pl.LightningDataModule):
                 dl_kwargs.update(persistent_workers=True, prefetch_factor=2)
             return DataLoader(dataset, **dl_kwargs)
         
-        # ICASSP validation sets (always, 3 dataloaders)
-        if self._val_set_no_sparse:
-            dataloaders.append(_make_dataloader(self._val_set_no_sparse))
-        if self._val_set_no_trans_ref:
-            dataloaders.append(_make_dataloader(self._val_set_no_trans_ref))
-        if self._val_set_all_enabled:
-            dataloaders.append(_make_dataloader(self._val_set_all_enabled))
+        # ICASSP validation sets (always)
+        if self._val_sets:
+            for no_sparse, no_trans_ref, all_enabled in self._val_sets:
+                dataloaders.append(_make_dataloader(no_sparse))
+                dataloaders.append(_make_dataloader(no_trans_ref))
+                dataloaders.append(_make_dataloader(all_enabled))
+        else:
+            if self._val_set_no_sparse:
+                dataloaders.append(_make_dataloader(self._val_set_no_sparse))
+            if self._val_set_no_trans_ref:
+                dataloaders.append(_make_dataloader(self._val_set_no_trans_ref))
+            if self._val_set_all_enabled:
+                dataloaders.append(_make_dataloader(self._val_set_all_enabled))
         
         # Synthetic validation sets (only when use_synthetic_train, 3 dataloaders)
         if self._synth_val_set_no_sparse:

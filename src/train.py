@@ -91,6 +91,8 @@ def train_prep(config: DictConfig, project_root: str):
 def train(config: DictConfig) -> str | None:
     epoch_counter = EpochCounter()
     start_time = time.time()
+    exp_name = config.get("exp_name")
+    finetune_from = config.get("ckpt_path") if exp_name == "e3" else None
     gpus = config.trainer.devices
     multi_gpu = gpus == -1 or (isinstance(gpus, Iterable) and len(gpus) > 1) or (isinstance(gpus, int) and gpus > 1)
     
@@ -256,18 +258,19 @@ def train(config: DictConfig) -> str | None:
                     te_n = len(datamodule.test_set) if datamodule.test_set is not None else 0
                 except Exception:
                     tr_n = va_n = te_n = 0
-                json.dump(
-                    {
-                        'best_checkpoint': best_path,
-                        'duration_sec': duration_sec,
-                        'metrics': metrics,
-                        'dataset': {
-                            'train_size': tr_n,
-                            'val_size': va_n,
-                            'test_size': te_n,
-                        }
-                    }, fp, indent=2
-                )
+                payload = {
+                    'best_checkpoint': best_path,
+                    'duration_sec': duration_sec,
+                    'metrics': metrics,
+                    'dataset': {
+                        'train_size': tr_n,
+                        'val_size': va_n,
+                        'test_size': te_n,
+                    }
+                }
+                if finetune_from is not None:
+                    payload['finetune_from'] = finetune_from
+                json.dump(payload, fp, indent=2)
     except Exception:
         pass
     return best_path
