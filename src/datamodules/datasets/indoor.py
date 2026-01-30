@@ -183,11 +183,10 @@ class PathlossDataset(Dataset):
         if isinstance(inputs, RadarSampleInputs):
             inputs = inputs.asdict()
         file_name = inputs["file_name"]
-        freq_MHz = inputs["freq_MHz"]
+        freq_MHz = inputs["freq_mhz"]
         input_file = inputs["input_file"]
         output_file = inputs["output_file"]
         position_file = inputs["position_file"]
-        sampling_position = inputs["sampling_position"]
         radiation_pattern_file = inputs["radiation_pattern_file"]
         
         input_img = read_image(input_file).float()
@@ -201,7 +200,8 @@ class PathlossDataset(Dataset):
                 output_img = output_img.squeeze(0)
             # NOTE: Do NOT normalize here - normalization happens after resize in __getitem__
         sampling_positions = pd.read_csv(position_file)
-        x_ant, y_ant, azimuth = sampling_positions.loc[int(sampling_position), ["Y", "X", "Azimuth"]]
+        sample_index = inputs["sample_index"]
+        x_ant, y_ant, azimuth = sampling_positions.loc[int(sample_index), ["Y", "X", "Azimuth"]]
         radiation_pattern_np = np.genfromtxt(radiation_pattern_file, delimiter=',')
         radiation_pattern = torch.from_numpy(radiation_pattern_np).float()
         

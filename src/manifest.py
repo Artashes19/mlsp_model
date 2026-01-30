@@ -156,7 +156,6 @@ def manifest_prep(
             ensure_synth_manifest(
                 root=synthetic_dir,
                 out=synth_global_manifest,
-                freqs_mhz=freqs_mhz,
                 limit=0,
             )
             dt = time.perf_counter() - t0

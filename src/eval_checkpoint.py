@@ -28,34 +28,30 @@ log = logging.getLogger(__name__)
 
 TASKS: dict[str, dict[str, object]] = {
     "icassp_task_1": {
-        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_1.csv",
+        "manifest_path": "/nfs/dgx/raid/iot/new_manifests/icassp_test_Task_1.csv",
         "competition_id": "iprm-task-1",
     },
     "icassp_task_2": {
-        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_2.csv",
+        "manifest_path": "/nfs/dgx/raid/iot/new_manifests/icassp_test_Task_2.csv",
         "competition_id": "indoor-pathloss-radio-map-prediction-task-2",
     },
     "icassp_task_3": {
-        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_3.csv",
+        "manifest_path": "/nfs/dgx/raid/iot/new_manifests/icassp_test_Task_3.csv",
         "competition_id": "iprm-challenge",
     },
     "mlsp_rate_0.02": {
-        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.02.csv",
+        "manifest_path": "/nfs/dgx/raid/iot/new_manifests/mlsp_test_rate0.02.csv",
         "competition_id": "the-sampling-assisted-pathloss-rm-prediction",
     },
     "mlsp_rate_0.5": {
-        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.5.csv",
+        "manifest_path": "/nfs/dgx/raid/iot/new_manifests/mlsp_test_rate0.5.csv",
         "competition_id": "sampling-assisted-pathloss-rm-prediction-t-1-ii",
     },
 }
 
 
 def load_manifest(manifest_path: str) -> list[dict]:
-    return IndoorDatamodule.get_inputs_list(
-        freqs_mhz=[],
-        freqs=[],
-        manifest_path=manifest_path,
-    )
+    return IndoorDatamodule.get_inputs_list(manifest_path=manifest_path)
 
 
 def load_model_from_checkpoint(ckpt_path: str, gpu: int) -> Indoor:
@@ -182,3 +178,51 @@ def evaluate_checkpoint(task_name: str, ckpt_path: str) -> float:
     if mse is None:
         raise RuntimeError("Kaggle submission failed or score unavailable")
     return float(np.sqrt(mse))
+
+
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Evaluate checkpoints on MLSP tasks and save RMSE to CSV")
+    parser.add_argument(
+        "checkpoint_dir",
+        type=str,
+        help="Directory containing .ckpt files (e.g. .../checkpoints/every)",
+    )
+    parser.add_argument(
+        "output_csv",
+        type=str,
+        help="Path to write results CSV (columns: checkpoint, task, rmse)",
+    )
+    parser.add_argument(
+        "--tasks",
+        nargs="+",
+        default=["mlsp_rate_0.02", "mlsp_rate_0.5"],
+        help="Task names from TASKS (default: mlsp_rate_0.02 mlsp_rate_0.5)",
+    )
+    args = parser.parse_args()
+    ckpt_dir = args.checkpoint_dir
+    output_path = args.output_csv
+    task_names = args.tasks
+    for name in task_names:
+        if name not in TASKS:
+            raise RuntimeError(f"Unknown task: {name}. Valid: {list(TASKS)}")
+    ckpt_files = sorted(
+        f for f in os.listdir(ckpt_dir)
+        if f.endswith(".ckpt")
+    )
+    if not ckpt_files:
+        raise RuntimeError(f"No .ckpt files in {ckpt_dir}")
+    rows = [["checkpoint", "task", "rmse"]]
+    for ckpt_name in tqdm(ckpt_files, desc="Checkpoints"):
+        ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+        for task_name in task_names:
+            rmse = evaluate_checkpoint(task_name=task_name, ckpt_path=ckpt_path)
+            rows.append([ckpt_name, task_name, f"{rmse:.6f}"])
+    with open(output_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+    log.info(f"Wrote {len(rows) - 1} results to {output_path}")
+
+
+if __name__ == "__main__":
+    main()

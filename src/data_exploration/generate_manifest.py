@@ -13,13 +13,8 @@ def parse_freqs_mhz(freqs_str: str) -> List[float]:
     return [float(p) for p in parts]
 
 
-def nearest_freq_index(freq_mhz: float, freqs_mhz: List[float]) -> int:
-    diffs = [abs(freq_mhz - f) for f in freqs_mhz]
-    nearest = min(range(len(diffs)), key=lambda i: diffs[i])
-    return 1 + nearest  # 1-based
-
-
-def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: int) -> int:
+def generate_manifest(root: str, out: str, limit: int) -> int:
+    """Generate synthetic manifest. Reads freq_mhz from each sample's JSON frequency_MHz field."""
     rows = []
     for dirpath, dirnames, filenames in tqdm(os.walk(root)):
         npz_files = [f for f in filenames if f.endswith('.npz')]
@@ -29,62 +24,29 @@ def generate_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: in
             json_path = os.path.join(dirpath, sample_name + '.json')
             if not os.path.exists(json_path):
                 continue
-            try:
-                with open(json_path, 'r') as fp:
-                    meta = json.load(fp)
-            except Exception:
-                continue
+            with open(json_path, 'r') as fp:
+                meta = json.load(fp)
             ids = meta.get('ids', {}) if isinstance(meta, dict) else {}
-            try:
-                b = int(ids.get('building', 0))
-            except Exception:
-                b = 0
-            try:
-                ant = int(ids.get('antenna', 0))
-            except Exception:
-                ant = 0
-            # frequency index: prefer explicit, else map from frequency_MHz
-            freq_idx = ids.get('frequency_index')
-            if freq_idx is not None:
-                try:
-                    freq_idx = int(freq_idx)
-                    if freq_idx in (0, 1, 2):
-                        freq_idx = freq_idx + 1
-                except Exception:
-                    freq_idx = None
-            if freq_idx is None:
-                try:
-                    fmhz = float(meta.get('frequency_MHz'))
-                    freq_idx = nearest_freq_index(fmhz, list(freqs_mhz))
-                except Exception:
-                    freq_idx = 1
-            try:
-                sp = int(ids.get('sample_index', 0))
-            except Exception:
-                sp = 0
+            b = int(ids.get('building', 0))
+            ant = int(ids.get('antenna', 0))
+            sp = int(ids.get('sample_index', 0))
+            freq_mhz = float(meta['frequency_MHz'])
             row = {
                 'file_name': sample_name,
                 'npz_file': npz_path,
                 'json_file': json_path,
                 'building': b,
                 'antenna': ant,
-                'freq_idx': freq_idx,
                 'sample_index': sp,
+                'freq_mhz': freq_mhz,
             }
-            # optional: store frequency_MHz if present
-            if isinstance(meta, dict) and 'frequency_MHz' in meta:
-                try:
-                    row['frequency_MHz'] = float(meta['frequency_MHz'])
-                except Exception:
-                    pass
             rows.append(row)
         if limit and len(rows) >= limit:
             break
     
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
     with open(out, 'w', newline='') as csvfile:
-        fieldnames = ['file_name', 'npz_file', 'json_file', 'building', 'antenna', 'freq_idx', 'sample_index',
-                      'frequency_MHz']
+        fieldnames = ['file_name', 'npz_file', 'json_file', 'building', 'antenna', 'sample_index', 'freq_mhz']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
@@ -127,8 +89,8 @@ def compute_dataset_signature(root: str) -> dict:
     return {'root': root_abs, 'num_pairs': count, 'sha256': h.hexdigest()}
 
 
-def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: int) -> int:
-    """Ensure a fresh manifest exists for the dataset.
+def ensure_manifest(root: str, out: str, limit: int) -> int:
+    """Ensure a fresh manifest exists for the synthetic dataset.
     - If the manifest or its meta is missing, rebuild it.
     - If the signature differs from the current dataset state, rebuild it.
     - Otherwise, leave it as is.
@@ -136,28 +98,21 @@ def ensure_manifest(root: str, out: str, freqs_mhz: Sequence[float], limit: int)
     """
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
     meta_path = out + '.meta.json'
-    try:
-        current_sig = compute_dataset_signature(root)
-    except Exception:
-        # If signature computation fails, force rebuild
-        return generate_manifest(root, out, freqs_mhz, limit=limit)
+    current_sig = compute_dataset_signature(root)
     
     need_rebuild = not os.path.exists(out) or not os.path.exists(meta_path)
     if not need_rebuild:
-        try:
-            with open(meta_path, 'r') as fp:
-                meta = json.load(fp)
-            if (
-                str(meta.get('root')) != str(current_sig.get('root')) or
-                str(meta.get('sha256')) != str(current_sig.get('sha256')) or
-                int(meta.get('num_pairs', -1)) != int(current_sig.get('num_pairs', -2))
-            ):
-                need_rebuild = True
-        except Exception:
+        with open(meta_path, 'r') as fp:
+            meta = json.load(fp)
+        if (
+            str(meta.get('root')) != str(current_sig.get('root')) or
+            str(meta.get('sha256')) != str(current_sig.get('sha256')) or
+            int(meta.get('num_pairs', -1)) != int(current_sig.get('num_pairs', -2))
+        ):
             need_rebuild = True
     
     if need_rebuild:
-        return generate_manifest(root, out, freqs_mhz, limit=limit)
+        return generate_manifest(root, out, limit=limit)
     return -1
 
 
@@ -183,25 +138,17 @@ def compute_icassp_signature(root: str) -> dict:
 
 
 def generate_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float], task: str = "Task_2_ICASSP") -> int:
-    """Scan ICASSP tree and write a complete manifest CSV. Returns number of rows written."""
+    """Scan ICASSP tree and write a complete manifest CSV. 
+    freqs_mhz maps frequency index (1-based from filename f1/f2/f3) to MHz values.
+    Returns number of rows written.
+    """
     os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     with open(out_csv, "w", newline="") as fp:
         writer = csv.writer(fp)
-        writer.writerow(
-            [
-                "file_name",
-                "building",
-                "antenna",
-                "frequency_index",
-                "sample_index",
-                "freq_MHz",
-                "input_file",
-                "output_file",
-                "position_file",
-                "radiation_pattern_file",
-                "sampling_position",
-            ]
-        )
+        writer.writerow([
+            "file_name", "building", "antenna", "sample_index", "freq_mhz",
+            "input_file", "output_file", "position_file", "radiation_pattern_file",
+        ])
         n = 0
         for b in range(1, 26):
             for ant in range(1, 6):
@@ -212,21 +159,10 @@ def generate_icassp_manifest(root: str, out_csv: str, freqs_mhz: Sequence[float]
                         )
                         if os.path.exists(input_file):
                             file_name = os.path.basename(input_file)
-                            writer.writerow(
-                                [
-                                    file_name,
-                                    b,
-                                    ant,
-                                    f,
-                                    sp,
-                                    float(freqs_mhz[f - 1]),
-                                    input_file,
-                                    output_file,
-                                    position_file,
-                                    radiation,
-                                    sp,
-                                ]
-                            )
+                            writer.writerow([
+                                file_name, b, ant, sp, float(freqs_mhz[f - 1]),
+                                input_file, output_file, position_file, radiation,
+                            ])
                             n += 1
     # meta next to CSV
     meta_path = out_csv + ".meta.json"
@@ -300,33 +236,24 @@ def generate_icassp_test_manifest(
 ) -> int:
     """
     Generate test manifest for evaluation data (no ground truth outputs).
+    freqs_mhz maps frequency index (1-based from filename f1/f2) to MHz values.
     
     Args:
         root: Root directory of evaluation data (e.g., /nfs/dgx/raid/iot/data/icassp2025eval)
         out_csv: Output CSV path
-        freqs_mhz: List of frequencies in MHz
+        freqs_mhz: List of frequencies in MHz (e.g., [868, 2400] for test data)
         eval_data_name: Name of evaluation data folder (e.g., "Evaluation_Data_T2")
         task: Task subfolder name (e.g., "Task_2_ICASSP")
-        sparse_dir: Optional path to sparse measurements directory (e.g., rate0.02/sampledGT)
+        sparse_dir: Optional path to sparse measurements directory
     
     Returns:
         Number of rows written.
     """
     os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     
-    # Determine fieldnames based on whether sparse_file is needed
     fieldnames = [
-        "file_name",
-        "building",
-        "antenna",
-        "frequency_index",
-        "sample_index",
-        "freq_MHz",
-        "input_file",
-        "output_file",
-        "position_file",
-        "radiation_pattern_file",
-        "sampling_position",
+        "file_name", "building", "antenna", "sample_index", "freq_mhz",
+        "input_file", "output_file", "position_file", "radiation_pattern_file",
     ]
     if sparse_dir:
         fieldnames.append("sparse_file")
@@ -352,17 +279,9 @@ def generate_icassp_test_manifest(
                         if os.path.exists(input_file):
                             file_name = os.path.basename(input_file)
                             row = [
-                                file_name,
-                                b,
-                                ant,
-                                f,
-                                sp,
-                                float(freqs_mhz[f - 1]),
-                                input_file,
-                                "",  # output_file is empty for test data
-                                position_file,
-                                radiation_file,
-                                sp,
+                                file_name, b, ant, sp, float(freqs_mhz[f - 1]),
+                                input_file, "",  # output_file empty for test
+                                position_file, radiation_file,
                             ]
                             if sparse_dir:
                                 row.append(sparse_file)
@@ -385,8 +304,8 @@ def filter_icassp_manifest(
     with open(src_csv, "r", newline="") as fin, open(out_csv, "w", newline="") as fout:
         rdr = csv.DictReader(fin)
         fieldnames = rdr.fieldnames or [
-            "file_name", "building", "antenna", "frequency_index", "sample_index", "freq_MHz", "input_file",
-            "output_file", "position_file", "radiation_pattern_file", "sampling_position"
+            "file_name", "building", "antenna", "sample_index", "freq_mhz",
+            "input_file", "output_file", "position_file", "radiation_pattern_file",
         ]
         w = csv.DictWriter(fout, fieldnames=fieldnames)
         w.writeheader()
@@ -493,11 +412,10 @@ def main():
     parser = argparse.ArgumentParser(description="Generate samples.csv manifest for synthetic dataset")
     parser.add_argument('--root', required=True, help='Root directory of the synthetic dataset')
     parser.add_argument('--out', required=True, help='Output CSV path (e.g., /path/to/samples.csv)')
-    parser.add_argument('--freqs-mhz', default='868,1800,3500', help='Comma-separated list of known freqs (MHz)')
+    parser.add_argument('--limit', type=int, default=0, help='Limit number of rows (0 for no limit)')
     args = parser.parse_args()
     
-    freqs_mhz = parse_freqs_mhz(args.freqs_mhz)
-    n = generate_manifest(args.root, args.out, freqs_mhz)
+    n = generate_manifest(args.root, args.out, limit=args.limit)
     print(f"Wrote {n} rows to {args.out}")
 
 

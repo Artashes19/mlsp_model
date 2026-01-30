@@ -120,17 +120,10 @@ class IndoorDatamodule(pl.LightningDataModule):
         self.prepare_data()
     
     @staticmethod
-    def get_inputs_list(
-        freqs_mhz: list[int],
-        freqs: list[int],
-        manifest_path: str,
-    ) -> list:
-        """Load inputs from a manifest file. Manifest path is required."""
+    def get_inputs_list(manifest_path: str) -> list:
+        """Load inputs from a manifest file."""
         t0 = time.perf_counter()
-        log.info(
-            f"[inputs] loading from manifest={manifest_path}, "
-            f"freqs_mhz={list(freqs_mhz) if freqs_mhz else []}, freqs={list(freqs) if freqs else []}"
-        )
+        log.info(f"[inputs] loading from manifest={manifest_path}")
         
         if not manifest_path:
             raise RuntimeError("manifest_path is required but was empty or None.")
@@ -138,82 +131,48 @@ class IndoorDatamodule(pl.LightningDataModule):
             raise RuntimeError(f"manifest_path does not exist: {manifest_path}")
         
         inputs_list = []
-        n_rows = 0
         n_synth = 0
         n_real = 0
         
         with open(manifest_path, "r", newline="") as fp:
             reader = csv.DictReader(fp)
             for row in reader:
-                n_rows += 1
-                # Common fields
-                b = int(row.get("building", "0") or 0)
-                ant = int(row.get("antenna", "0") or 0)
-                # Resolve frequency index (1-based)
-                f_idx_internal = None
-                for key in ("freq_idx", "frequency_index"):
-                    if row.get(key) not in (None, ""):
-                        f_idx_internal = int(row.get(key))
-                        break
-                if f_idx_internal is None:
-                    freq_mhz_val = float(row.get("freq_MHz", row.get("frequency_MHz")))
-                    if freqs_mhz and len(freqs_mhz) > 0:
-                        diffs = [abs(freq_mhz_val - float(m)) for m in freqs_mhz]
-                        nearest = int(min(range(len(diffs)), key=lambda i: diffs[i]))
-                        f_idx_internal = 1 + nearest
-                    else:
-                        f_idx_internal = 1
-                sp = int(row.get("sample_index", row.get("sampling_position", 0)))
-                # Filter by requested frequencies if provided
-                if freqs and f_idx_internal not in freqs:
-                    continue
-                # Synthetic row
+                freq_mhz = float(row["freq_mhz"])
+                
+                # Synthetic row (has npz_file and json_file)
                 npz_path = row.get("npz_file")
                 json_path = row.get("json_file")
                 if npz_path and json_path:
-                    sample_name = row.get("file_name") or (
-                        os.path.splitext(os.path.basename(npz_path))[0] if npz_path else None)
-                    inputs_list.append(
-                        {
-                            "file_name": sample_name,
-                            "npz_file": npz_path,
-                            "json_file": json_path,
-                            "ids": (b, ant, f_idx_internal, sp),
-                        }
-                    )
+                    inputs_list.append({
+                        "file_name": row.get("file_name") or os.path.splitext(os.path.basename(npz_path))[0],
+                        "freq_mhz": freq_mhz,
+                        "npz_file": npz_path,
+                        "json_file": json_path,
+                    })
                     n_synth += 1
                     continue
-                # ICASSP row
+                # ICASSP row (has input_file, position_file, radiation_pattern_file)
                 input_file = row.get("input_file")
-                output_file = row.get("output_file")
                 position_file = row.get("position_file")
                 radiation_pattern_file = row.get("radiation_pattern_file")
-                sparse_file = row.get("sparse_file", "")
                 if input_file and position_file and radiation_pattern_file:
-                    sample_name = row.get("file_name") or os.path.basename(input_file)
-                    freq_mhz = float(
-                        row.get("freq_MHz", freqs_mhz[f_idx_internal - 1] if f_idx_internal else freqs_mhz[0])
-                    )
                     entry = {
-                        "file_name": sample_name,
-                        "freq_MHz": freq_mhz,
+                        "file_name": row.get("file_name") or os.path.basename(input_file),
+                        "freq_mhz": freq_mhz,
                         "input_file": input_file,
-                        "output_file": output_file or "",
+                        "output_file": row.get("output_file") or "",
                         "position_file": position_file,
                         "radiation_pattern_file": radiation_pattern_file,
-                        "sampling_position": sp,
-                        "ids": (b, ant, f_idx_internal, sp),
+                        "sample_index": int(row["sample_index"]),
                     }
+                    sparse_file = row.get("sparse_file", "")
                     if sparse_file:
                         entry["sparse_file"] = sparse_file
                     inputs_list.append(entry)
                     n_real += 1
         
         dt = time.perf_counter() - t0
-        log.info(
-            f"[inputs] loaded from manifest={manifest_path} rows={n_rows}; "
-            f"parsed: synthetic={n_synth}, real={n_real} (elapsed={dt:.2f}s)"
-        )
+        log.info(f"[inputs] loaded {len(inputs_list)} entries (synthetic={n_synth}, real={n_real}) in {dt:.2f}s")
         return inputs_list
     
     def _create_validation_sets(
@@ -285,11 +244,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             return tuple(ids)
         
         # Always load ICASSP validation (regardless of inference flag)
-        icassp_val_inputs = self.get_inputs_list(
-            freqs_mhz=self.freqs_mhz,
-            freqs=self.freqs,
-            manifest_path=self.val_manifest_path,
-        )
+        icassp_val_inputs = self.get_inputs_list(manifest_path=self.val_manifest_path)
         
         # Create ICASSP validation datasets (always)
         if self._val_sparse_ranges:
@@ -318,11 +273,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             if self.test_manifest_path:
                 for test_path in self.test_manifest_path:
                     if test_path and os.path.isfile(test_path):
-                        test_inputs = self.get_inputs_list(
-                            freqs_mhz=self.freqs_mhz,
-                            freqs=self.freqs,
-                            manifest_path=test_path,
-                        )
+                        test_inputs = self.get_inputs_list(manifest_path=test_path)
                         test_dataset = PathlossDataset(
                             test_inputs,
                             training=False,
@@ -347,32 +298,20 @@ class IndoorDatamodule(pl.LightningDataModule):
         else:
             if self.use_synthetic_train:
                 # Synthetic training: load from synthetic_manifest_path
-                train_inputs = self.get_inputs_list(
-                    freqs_mhz=self.freqs_mhz,
-                    freqs=self.freqs,
-                    manifest_path=self.synthetic_manifest_path,
-                )
+                train_inputs = self.get_inputs_list(manifest_path=self.synthetic_manifest_path)
                 # Apply synthetic_limit if set
                 if self.synthetic_limit is not None and self.synthetic_limit > 0:
                     train_inputs = sorted(train_inputs, key=_sort_key)[:self.synthetic_limit]
                 
                 # Also load synthetic validation
-                synth_val_inputs = self.get_inputs_list(
-                    freqs_mhz=self.freqs_mhz,
-                    freqs=self.freqs,
-                    manifest_path=self.synthetic_val_manifest_path,
-                )
+                synth_val_inputs = self.get_inputs_list(manifest_path=self.synthetic_val_manifest_path)
             else:
                 # Real training: select manifest based on use_small_train flag
                 if self.use_small_train:
                     real_train_manifest = self.train_small_manifest_path
                 else:
                     real_train_manifest = self.train_manifest_path
-                train_inputs = self.get_inputs_list(
-                    freqs_mhz=self.freqs_mhz,
-                    freqs=self.freqs,
-                    manifest_path=real_train_manifest,
-                )
+                train_inputs = self.get_inputs_list(manifest_path=real_train_manifest)
                 synth_val_inputs = None
             
             log.info(
@@ -405,11 +344,7 @@ class IndoorDatamodule(pl.LightningDataModule):
             if self.test_manifest_path:
                 for test_path in self.test_manifest_path:
                     if test_path and os.path.isfile(test_path):
-                        test_inputs = self.get_inputs_list(
-                            freqs_mhz=self.freqs_mhz,
-                            freqs=self.freqs,
-                            manifest_path=test_path,
-                        )
+                        test_inputs = self.get_inputs_list(manifest_path=test_path)
                         test_dataset = PathlossDataset(
                             test_inputs,
                             training=False,
