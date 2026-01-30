@@ -98,7 +98,7 @@ def normalize_input(input_tensor: torch.Tensor) -> torch.Tensor:
     - distance: log(d + eps) then z-score
     - freq_*: unchanged (Fourier encoding already in [-1, 1])
     - mask/floor_plan: unchanged (binary)
-    - antenna_gain: unchanged
+    - antenna_gain: z-score on non-zero values (non-isotrope samples), zeros remain 0 (isotrope samples)
     """
     config = get_config()
     normalized = input_tensor.clone()
@@ -118,8 +118,10 @@ def normalize_input(input_tensor: torch.Tensor) -> torch.Tensor:
     d_log_std = _get_stat("d", "log_std")
     s_mean = _get_stat("s", "mean_nz")
     s_std = _get_stat("s", "std_nz")
+    g_mean = _get_stat("g", "mean_nz")
+    g_std = _get_stat("g", "std_nz")
     
-    if r_std == 0 or t_std == 0 or d_log_std == 0 or s_std == 0:
+    if r_std == 0 or t_std == 0 or d_log_std == 0 or s_std == 0 or g_std == 0:
         raise ValueError("Normalization std must be non-zero.")
     
     for idx, ch_name in enumerate(CHANNEL_ORDER):
@@ -147,7 +149,16 @@ def normalize_input(input_tensor: torch.Tensor) -> torch.Tensor:
                 channel = channel.clone()
                 channel[mask] = (channel[mask] - s_mean) / s_std
             normalized[idx] = channel
-        # antenna_gain, freq_*, mask, floor_plan: no normalization needed
+        elif ch_name == "antenna_gain":
+            # Normalize only for non-isotrope samples (where antenna gain is non-zero)
+            # For isotrope samples (radiation pattern all zeros), antenna gain is 0 and stays 0
+            channel = normalized[idx]
+            mask = channel != 0
+            if mask.any():
+                channel = channel.clone()
+                channel[mask] = (channel[mask] - g_mean) / g_std
+            normalized[idx] = channel
+        # freq_*, mask, floor_plan: no normalization needed
     
     return normalized
 
