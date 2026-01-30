@@ -26,34 +26,34 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-TASKS: dict[str, tuple[str, str]] = {
-    "icassp_task_1": (
-        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_1.csv",
-        "iprm-task-1",
-    ),
-    "icassp_task_2": (
-        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_2.csv",
-        "indoor-pathloss-radio-map-prediction-task-2",
-    ),
-    "icassp_task_3": (
-        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_3.csv",
-        "iprm-challenge",
-    ),
-    "mlsp_rate_0.02": (
-        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.02.csv",
-        "the-sampling-assisted-pathloss-rm-prediction",
-    ),
-    "mlsp_rate_0.5": (
-        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.5.csv",
-        "sampling-assisted-pathloss-rm-prediction-t-1-ii",
-    ),
+TASKS: dict[str, dict[str, object]] = {
+    "icassp_task_1": {
+        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_1.csv",
+        "competition_id": "iprm-task-1",
+    },
+    "icassp_task_2": {
+        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_2.csv",
+        "competition_id": "indoor-pathloss-radio-map-prediction-task-2",
+    },
+    "icassp_task_3": {
+        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_3.csv",
+        "competition_id": "iprm-challenge",
+    },
+    "mlsp_rate_0.02": {
+        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.02.csv",
+        "competition_id": "the-sampling-assisted-pathloss-rm-prediction",
+    },
+    "mlsp_rate_0.5": {
+        "manifest_path": "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.5.csv",
+        "competition_id": "sampling-assisted-pathloss-rm-prediction-t-1-ii",
+    },
 }
 
 
 def load_manifest(manifest_path: str) -> list[dict]:
     return IndoorDatamodule.get_inputs_list(
-        freqs_mhz=[868, 1800, 3500],
-        freqs=[1, 2, 3],
+        freqs_mhz=[],
+        freqs=[],
         manifest_path=manifest_path,
     )
 
@@ -144,7 +144,9 @@ def write_csv(csv_rows: list[tuple[str, float]], output_path: str) -> None:
 
 
 def evaluate_checkpoint(task_name: str, ckpt_path: str) -> float:
-    manifest_path, competition_id = TASKS[task_name]
+    task = TASKS[task_name]
+    manifest_path = task["manifest_path"]
+    competition_id = task["competition_id"]
     if not os.path.isfile(ckpt_path):
         raise RuntimeError(f"Checkpoint not found: {ckpt_path}")
     if not os.path.isfile(manifest_path):
