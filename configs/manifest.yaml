@@ -14,6 +14,7 @@ synthetic_val_size: 6240
 
 # Frequency settings
 freqs_mhz: [868, 1800, 3500]
+eval_freqs_mhz: [868, 2400]
 
 # Task configuration
 tasks: ["Task_1_ICASSP", "Task_2_ICASSP", "Task_3_ICASSP"]

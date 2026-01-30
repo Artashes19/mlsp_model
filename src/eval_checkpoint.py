@@ -28,23 +28,23 @@ log = logging.getLogger(__name__)
 
 TASKS: dict[str, tuple[str, str]] = {
     "icassp_task_1": (
-        "/nfs/dgx/raid/iot/data/icassp2025eval/manifests/icassp_test_Task_1.csv",
+        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_1.csv",
         "iprm-task-1",
     ),
     "icassp_task_2": (
-        "/nfs/dgx/raid/iot/data/icassp2025eval/manifests/icassp_test_Task_2.csv",
+        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_2.csv",
         "indoor-pathloss-radio-map-prediction-task-2",
     ),
     "icassp_task_3": (
-        "/nfs/dgx/raid/iot/data/icassp2025eval/manifests/icassp_test_Task_3.csv",
+        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/icassp_test_Task_3.csv",
         "iprm-challenge",
     ),
     "mlsp_rate_0.02": (
-        "/nfs/dgx/raid/iot/data/icassp2025eval/manifests/mlsp_test_rate0.02.csv",
+        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.02.csv",
         "the-sampling-assisted-pathloss-rm-prediction",
     ),
     "mlsp_rate_0.5": (
-        "/nfs/dgx/raid/iot/data/icassp2025eval/manifests/mlsp_test_rate0.5.csv",
+        "/nfs/dgx/raid/iot/data/icassp2025evals/manifests/mlsp_test_rate0.5.csv",
         "sampling-assisted-pathloss-rm-prediction-t-1-ii",
     ),
 }
