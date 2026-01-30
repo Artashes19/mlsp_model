@@ -44,6 +44,7 @@ def manifest_prep(
     train_small_n = int(config["train_small_n"])
     synthetic_val_size = int(config["synthetic_val_size"])
     freqs_mhz = list(config["freqs_mhz"])
+    eval_freqs_mhz = list(config.get("eval_freqs_mhz", freqs_mhz))
     tasks = list(config["tasks"])
     generate_synthetic = bool(config["generate_synthetic"])
     generate_test = bool(config.get("generate_test", False))
@@ -227,7 +228,7 @@ def manifest_prep(
                 n_test = generate_icassp_test_manifest(
                     root=icassp_eval_dir,
                     out_csv=test_manifest_path,
-                    freqs_mhz=freqs_mhz,
+                    freqs_mhz=eval_freqs_mhz,
                     eval_data_name=eval_data_name,
                     task=task_subfolder,
                     sparse_dir="",
@@ -252,7 +253,7 @@ def manifest_prep(
                     n_mlsp = generate_icassp_test_manifest(
                         root=icassp_eval_dir,
                         out_csv=mlsp_test_path_0_02,
-                        freqs_mhz=freqs_mhz,
+                        freqs_mhz=eval_freqs_mhz,
                         eval_data_name=eval_data_name,
                         task=task_subfolder,
                         sparse_dir=sparse_dir_0_02,
@@ -272,7 +273,7 @@ def manifest_prep(
                     n_mlsp = generate_icassp_test_manifest(
                         root=icassp_eval_dir,
                         out_csv=mlsp_test_path_0_5,
-                        freqs_mhz=freqs_mhz,
+                        freqs_mhz=eval_freqs_mhz,
                         eval_data_name=eval_data_name,
                         task=task_subfolder,
                         sparse_dir=sparse_dir_0_5,

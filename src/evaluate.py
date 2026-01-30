@@ -53,6 +53,8 @@ def submit_to_kaggle(
     competition_id: str,
     max_retries: int = 10,
     retry_delay: float = 30.0,
+    submit_retries: int = 5,
+    submit_retry_delay: float = 60.0,
 ) -> Optional[float]:
     """
     Submit CSV to Kaggle competition and return the MSE score.
@@ -64,10 +66,13 @@ def submit_to_kaggle(
         competition_id: Kaggle competition ID
         max_retries: Maximum number of retries to check submission status
         retry_delay: Delay in seconds between retries
+        submit_retries: Maximum number of retries for submission (rate limiting)
+        submit_retry_delay: Delay in seconds between submission retries
         
     Returns:
         MSE score from Kaggle or None if submission failed
     """
+    import requests
     from kaggle.api.kaggle_api_extended import KaggleApi
     
     log.info(f"[evaluate] Submitting to Kaggle competition: {competition_id}")
@@ -77,12 +82,29 @@ def submit_to_kaggle(
     api = KaggleApi()
     api.authenticate()
     
-    # Submit the CSV
-    api.competition_submit(
-        file_name=csv_path,
-        message="auto submission",
-        competition=competition_id,
-    )
+    # Submit the CSV with retry logic for rate limiting
+    for submit_attempt in range(submit_retries):
+        try:
+            api.competition_submit(
+                file_name=csv_path,
+                message="auto submission",
+                competition=competition_id,
+            )
+            break  # Success, exit retry loop
+        except requests.exceptions.HTTPError as e:
+            log.error(f"[evaluate] Kaggle submission HTTPError: {e}")
+            if e.response is not None and e.response.status_code in (403, 429):
+                if submit_attempt < submit_retries - 1:
+                    log.warning(
+                        f"[evaluate] Rate limited (HTTP {e.response.status_code}), "
+                        f"retrying in {submit_retry_delay}s (attempt {submit_attempt + 1}/{submit_retries})"
+                    )
+                    time.sleep(submit_retry_delay)
+                else:
+                    log.error(f"[evaluate] Failed to submit after {submit_retries} attempts: {e}")
+                    raise
+            else:
+                raise
     
     log.info(f"[evaluate] Submission successful, waiting for scoring...")
     
