@@ -10,7 +10,7 @@ e3:
     - scheduler: null
     - algorithm: indoor
     - network: txunet
-    - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every_10, early_stopping, val_alias_e3 ]
+    - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every_10, val_alias_e3 ]
     - loggers: [ aim ]
     - strategy: null
     - _self_
