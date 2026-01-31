@@ -30,7 +30,7 @@ e3:
     synthetic_manifest_path: ""
     synthetic_val_manifest_path: ""
     val_sparse_ranges:
-      - [0.002, 0.002]
+      - [0.0002, 0.0002]
       - [0.005, 0.005]
 
   callbacks:
