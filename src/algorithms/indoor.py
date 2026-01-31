@@ -126,6 +126,9 @@ class Indoor(AlgorithmBase):
         Override to handle foreign (colleague's) checkpoint format.
         Remaps keys by adding _network. prefix if needed.
         """
+        # Drop any teacher anchoring weights if present in checkpoint
+        if state_dict:
+            state_dict = {k: v for k, v in state_dict.items() if not k.startswith("_teacher.")}
         # Check if this is a foreign checkpoint (no _network. prefix in keys)
         has_network_prefix = any(k.startswith("_network.") for k in state_dict.keys())
         
@@ -149,10 +152,12 @@ class Indoor(AlgorithmBase):
         }
 
     def _init_teacher(self) -> None:
-        self._teacher = copy.deepcopy(self._network)
-        self._teacher.eval()
-        for p in self._teacher.parameters():
+        teacher = copy.deepcopy(self._network)
+        teacher.eval()
+        for p in teacher.parameters():
             p.requires_grad = False
+        # Avoid registering teacher as a submodule (keeps it out of state_dict)
+        object.__setattr__(self, "_teacher", teacher)
 
     def _ensure_teacher_on_device(self) -> None:
         if self._teacher is None:
