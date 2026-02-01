@@ -84,11 +84,11 @@ def _resolve_config_tree_path(ckpt_path: str, config_tree_path: str | None) -> s
     )
 
 
-def _load_network_conf(
+def _load_exp_conf(
     config_tree_path: str,
     exp_name: str | None,
     ckpt_path: str,
-) -> tuple[DictConfig, str]:
+) -> tuple[DictConfig, DictConfig, DictConfig, str]:
     config = OmegaConf.load(config_tree_path)
     exps = config.get("exps")
     if not exps:
@@ -104,13 +104,22 @@ def _load_network_conf(
         exp_name = next(iter(exps.keys()))
     if exp_name not in exps:
         raise RuntimeError(f"exp '{exp_name}' not found in config_tree.yaml: {config_tree_path}")
-    network_conf = exps[exp_name].get("network")
+    exp = exps[exp_name]
+    network_conf = exp.get("network")
     if not network_conf:
         raise RuntimeError(f"No network section found for exp '{exp_name}' in {config_tree_path}")
     network_conf = OmegaConf.create(network_conf)
     if "in_ch" not in network_conf:
         network_conf["in_ch"] = NUM_CHANNELS
-    return network_conf, exp_name
+    algorithm_conf = exp.get("algorithm")
+    if not algorithm_conf:
+        raise RuntimeError(f"No algorithm section found for exp '{exp_name}' in {config_tree_path}")
+    algorithm_conf = OmegaConf.create(algorithm_conf)
+    datamodule_conf = exp.get("datamodule")
+    if not datamodule_conf:
+        raise RuntimeError(f"No datamodule section found for exp '{exp_name}' in {config_tree_path}")
+    datamodule_conf = OmegaConf.create(datamodule_conf)
+    return network_conf, algorithm_conf, datamodule_conf, exp_name
 
 
 def load_model_from_checkpoint(
@@ -121,12 +130,12 @@ def load_model_from_checkpoint(
 ) -> Indoor:
     log.info(f"[model] Loading checkpoint: {ckpt_path}")
     resolved_config = _resolve_config_tree_path(ckpt_path=ckpt_path, config_tree_path=config_tree_path)
-    network_conf, resolved_exp = _load_network_conf(
+    network_conf, algorithm_conf, _datamodule_conf, resolved_exp = _load_exp_conf(
         config_tree_path=resolved_config,
         exp_name=exp_name,
         ckpt_path=ckpt_path,
     )
-    log.info(f"[model] Using network config from {resolved_config} (exp={resolved_exp})")
+    log.info(f"[model] Using config from {resolved_config} (exp={resolved_exp})")
     compiled_conf = DictConfig({
         "_target_": "src.utils.CompileParams",
         "fullgraph": True,
@@ -137,9 +146,9 @@ def load_model_from_checkpoint(
         "disable": True,
     })
     algorithm = Indoor(
-        out_norm=160.0,
-        use_sip2net=False,
-        sip2net_params={},
+        out_norm=float(algorithm_conf.out_norm),
+        use_sip2net=bool(algorithm_conf.use_sip2net),
+        sip2net_params=OmegaConf.to_container(algorithm_conf.sip2net_params, resolve=True),
         compiled=compiled_conf,
         optimizer_conf=None,
         scheduler_conf=None,
@@ -208,11 +217,18 @@ def evaluate_checkpoint(
         raise RuntimeError(f"Checkpoint not found: {ckpt_path}")
     if not os.path.isfile(manifest_path):
         raise RuntimeError(f"Manifest not found: {manifest_path}")
+    resolved_config = _resolve_config_tree_path(ckpt_path=ckpt_path, config_tree_path=config_tree_path)
+    _net_conf, _alg_conf, datamodule_conf, resolved_exp = _load_exp_conf(
+        config_tree_path=resolved_config,
+        exp_name=exp_name,
+        ckpt_path=ckpt_path,
+    )
+    channels = str(datamodule_conf.channels)
     log.info(f"[{task_name}] Loading manifest: {manifest_path}")
     inputs_list = load_manifest(manifest_path=manifest_path)
     if len(inputs_list) == 0:
         raise RuntimeError(f"No valid inputs found in manifest: {manifest_path}")
-    log.info(f"[{task_name}] Building dataset: {len(inputs_list)} samples")
+    log.info(f"[{task_name}] Building dataset: {len(inputs_list)} samples (channels={channels})")
     dataset = PathlossDataset(
         inputs_list=inputs_list,
         training=False,
@@ -221,15 +237,15 @@ def evaluate_checkpoint(
         sparse_range=[0, 0],
         modality_dropout_prob=0,
         sparse_dropout_given_dropout=1.0,
-        channels="rtdgps",
+        channels=channels,
         force_drop_sparse=False,
         force_drop_trans_ref=False,
     )
     algorithm = load_model_from_checkpoint(
         ckpt_path=ckpt_path,
         gpu=0,
-        config_tree_path=config_tree_path,
-        exp_name=exp_name,
+        config_tree_path=resolved_config,
+        exp_name=resolved_exp,
     )
     log.info(f"[{task_name}] Running inference over {len(dataset)} samples")
     with tempfile.TemporaryDirectory() as tmpdir:
