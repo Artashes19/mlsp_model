@@ -5,6 +5,7 @@ import csv
 import logging
 import os
 import re
+import sys
 import tempfile
 
 import numpy as np
@@ -19,9 +20,18 @@ from src.evaluate import submit_to_kaggle
 from src.inference import generate_csv_rows
 from src.utils.indoor.channel_config import NUM_CHANNELS
 
+
+class FlushingStreamHandler(logging.StreamHandler):
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
+
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[FlushingStreamHandler(sys.stderr)],
+    force=True,
 )
 log = logging.getLogger(__name__)
 
@@ -54,23 +64,69 @@ def load_manifest(manifest_path: str) -> list[dict]:
     return IndoorDatamodule.get_inputs_list(manifest_path=manifest_path)
 
 
-def load_model_from_checkpoint(ckpt_path: str, gpu: int) -> Indoor:
+def _resolve_config_tree_path(ckpt_path: str, config_tree_path: str | None) -> str:
+    if config_tree_path:
+        if not os.path.isfile(config_tree_path):
+            raise RuntimeError(f"Config tree not found: {config_tree_path}")
+        return config_tree_path
+    search_dir = os.path.abspath(os.path.dirname(ckpt_path))
+    for _ in range(8):
+        candidate = os.path.join(search_dir, "config_tree.yaml")
+        if os.path.isfile(candidate):
+            log.info(f"[model] Derived config_tree.yaml from checkpoint path: {candidate}")
+            return candidate
+        parent = os.path.dirname(search_dir)
+        if parent == search_dir:
+            break
+        search_dir = parent
+    raise RuntimeError(
+        "Unable to locate config_tree.yaml. Provide --config-tree or place it in a parent directory."
+    )
+
+
+def _load_network_conf(
+    config_tree_path: str,
+    exp_name: str | None,
+    ckpt_path: str,
+) -> tuple[DictConfig, str]:
+    config = OmegaConf.load(config_tree_path)
+    exps = config.get("exps")
+    if not exps:
+        raise RuntimeError(f"No exps found in config_tree.yaml: {config_tree_path}")
+    if exp_name is None:
+        path_parts = set(os.path.normpath(ckpt_path).split(os.sep))
+        for candidate in exps.keys():
+            if candidate in path_parts:
+                exp_name = candidate
+                log.info(f"[model] Derived exp name from checkpoint path: {exp_name}")
+                break
+    if exp_name is None:
+        exp_name = next(iter(exps.keys()))
+    if exp_name not in exps:
+        raise RuntimeError(f"exp '{exp_name}' not found in config_tree.yaml: {config_tree_path}")
+    network_conf = exps[exp_name].get("network")
+    if not network_conf:
+        raise RuntimeError(f"No network section found for exp '{exp_name}' in {config_tree_path}")
+    network_conf = OmegaConf.create(network_conf)
+    if "in_ch" not in network_conf:
+        network_conf["in_ch"] = NUM_CHANNELS
+    return network_conf, exp_name
+
+
+def load_model_from_checkpoint(
+    ckpt_path: str,
+    gpu: int,
+    config_tree_path: str | None = None,
+    exp_name: str | None = None,
+) -> Indoor:
     log.info(f"[model] Loading checkpoint: {ckpt_path}")
-    network_conf = OmegaConf.create({
-        "_target_": "src.networks.TxUNetModel",
-        "in_ch": NUM_CHANNELS,
-        "out_ch": 1,
-        "base_ch": 48,
-        "depths": [4, 6, 6, 8],
-        "heads": [4, 4, 8, 8],
-        "expand": 2.66,
-        "use_checkpoint": False,
-        "ln_eps": 1e-5,
-        "window0": None,
-        "window0_stride": None,
-        "sra0_enabled": True,
-        "sra0_stride": 4,
-    })
+    resolved_config = _resolve_config_tree_path(ckpt_path=ckpt_path, config_tree_path=config_tree_path)
+    network_conf, resolved_exp = _load_network_conf(
+        config_tree_path=resolved_config,
+        exp_name=exp_name,
+        ckpt_path=ckpt_path,
+    )
+    log.info(f"[model] Using network config from {resolved_config} (exp={resolved_exp})")
     compiled_conf = DictConfig({
         "_target_": "src.utils.CompileParams",
         "fullgraph": True,
@@ -139,7 +195,12 @@ def write_csv(csv_rows: list[tuple[str, float]], output_path: str) -> None:
             writer.writerow([id_str, round(pl_value, 1)])
 
 
-def evaluate_checkpoint(task_name: str, ckpt_path: str) -> float:
+def evaluate_checkpoint(
+    task_name: str,
+    ckpt_path: str,
+    config_tree_path: str | None = None,
+    exp_name: str | None = None,
+) -> float:
     task = TASKS[task_name]
     manifest_path = task["manifest_path"]
     competition_id = task["competition_id"]
@@ -147,9 +208,11 @@ def evaluate_checkpoint(task_name: str, ckpt_path: str) -> float:
         raise RuntimeError(f"Checkpoint not found: {ckpt_path}")
     if not os.path.isfile(manifest_path):
         raise RuntimeError(f"Manifest not found: {manifest_path}")
+    log.info(f"[{task_name}] Loading manifest: {manifest_path}")
     inputs_list = load_manifest(manifest_path=manifest_path)
     if len(inputs_list) == 0:
         raise RuntimeError(f"No valid inputs found in manifest: {manifest_path}")
+    log.info(f"[{task_name}] Building dataset: {len(inputs_list)} samples")
     dataset = PathlossDataset(
         inputs_list=inputs_list,
         training=False,
@@ -162,7 +225,13 @@ def evaluate_checkpoint(task_name: str, ckpt_path: str) -> float:
         force_drop_sparse=False,
         force_drop_trans_ref=False,
     )
-    algorithm = load_model_from_checkpoint(ckpt_path=ckpt_path, gpu=0)
+    algorithm = load_model_from_checkpoint(
+        ckpt_path=ckpt_path,
+        gpu=0,
+        config_tree_path=config_tree_path,
+        exp_name=exp_name,
+    )
+    log.info(f"[{task_name}] Running inference over {len(dataset)} samples")
     with tempfile.TemporaryDirectory() as tmpdir:
         csv_rows = run_inference(
             algorithm=algorithm,
@@ -171,13 +240,16 @@ def evaluate_checkpoint(task_name: str, ckpt_path: str) -> float:
         )
         csv_path = os.path.join(tmpdir, "predictions.csv")
         write_csv(csv_rows=csv_rows, output_path=csv_path)
+        log.info(f"[{task_name}] Submitting to Kaggle (competition_id={competition_id})")
         mse = submit_to_kaggle(
             csv_path=csv_path,
             competition_id=competition_id,
         )
     if mse is None:
         raise RuntimeError("Kaggle submission failed or score unavailable")
-    return float(np.sqrt(mse))
+    rmse = float(np.sqrt(mse))
+    log.info(f"[{task_name}] Done -> RMSE={rmse:.6f}")
+    return rmse
 
 
 def main() -> None:
@@ -199,10 +271,24 @@ def main() -> None:
         default=["mlsp_rate_0.02", "mlsp_rate_0.5"],
         help="Task names from TASKS (default: mlsp_rate_0.02 mlsp_rate_0.5)",
     )
+    parser.add_argument(
+        "--config-tree",
+        type=str,
+        default=None,
+        help="Path to config_tree.yaml (defaults to searching parent directories of the checkpoint)",
+    )
+    parser.add_argument(
+        "--exp-name",
+        type=str,
+        default=None,
+        help="Experiment key under config_tree.yaml exps (defaults to the first entry)",
+    )
     args = parser.parse_args()
     ckpt_dir = args.checkpoint_dir
     output_path = args.output_csv
     task_names = args.tasks
+    config_tree_path = args.config_tree
+    exp_name = args.exp_name
     for name in task_names:
         if name not in TASKS:
             raise RuntimeError(f"Unknown task: {name}. Valid: {list(TASKS)}")
@@ -212,16 +298,31 @@ def main() -> None:
     )
     if not ckpt_files:
         raise RuntimeError(f"No .ckpt files in {ckpt_dir}")
-    rows = [["checkpoint", "task", "rmse"]]
-    for ckpt_name in tqdm(ckpt_files, desc="Checkpoints"):
-        ckpt_path = os.path.join(ckpt_dir, ckpt_name)
-        for task_name in task_names:
-            rmse = evaluate_checkpoint(task_name=task_name, ckpt_path=ckpt_path)
-            rows.append([ckpt_name, task_name, f"{rmse:.6f}"])
+    n_ckpts = len(ckpt_files)
+    n_tasks = len(task_names)
+    log.info(
+        f"Starting batch: {n_ckpts} checkpoints x {n_tasks} tasks = {n_ckpts * n_tasks} evaluations. "
+        f"Tasks: {task_names}"
+    )
     with open(output_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerows(rows)
-    log.info(f"Wrote {len(rows) - 1} results to {output_path}")
+        writer.writerow(["checkpoint", "task", "rmse"])
+        f.flush()
+        for ckpt_idx, ckpt_name in enumerate(ckpt_files, start=1):
+            ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+            log.info(f"--- Checkpoint {ckpt_idx}/{n_ckpts}: {ckpt_name} ---")
+            for task_name in task_names:
+                log.info(f"  Task: {task_name}")
+                rmse = evaluate_checkpoint(
+                    task_name=task_name,
+                    ckpt_path=ckpt_path,
+                    config_tree_path=config_tree_path,
+                    exp_name=exp_name,
+                )
+                writer.writerow([ckpt_name, task_name, f"{rmse:.6f}"])
+                f.flush()
+                log.info(f"  -> rmse={rmse:.6f} (saved)")
+    log.info(f"Finished. Results in {output_path}")
 
 
 if __name__ == "__main__":
