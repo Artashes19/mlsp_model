@@ -1,3 +1,4 @@
+import copy
 import logging
 import re
 from collections import defaultdict
@@ -75,13 +76,15 @@ class Indoor(AlgorithmBase):
                 f"freeze_encoder_epochs={int(self._finetune_conf.get('freeze_encoder_epochs', 0))}, "
                 f"warmup={self._finetune_conf.get('warmup', {})}, "
                 f"bn_recalibration={self._finetune_conf.get('bn_recalibration', {})}, "
-                f"l2sp={self._finetune_conf.get('l2sp', {})}"
+                f"l2sp={self._finetune_conf.get('l2sp', {})}, "
+                f"teacher_anchoring={self._finetune_conf.get('teacher_anchoring', {})}"
             )
         except Exception:
             pass
         
         # Placeholders for finetune utilities
         self._pretrained_weights: dict[str, torch.Tensor] | None = None
+        self._teacher: nn.Module | None = None
         self._freeze_encoder_epochs: int = int(self._finetune_conf.get("freeze_encoder_epochs", 0))
         self._encoder_frozen: bool = False
     
@@ -123,6 +126,9 @@ class Indoor(AlgorithmBase):
         Override to handle foreign (colleague's) checkpoint format.
         Remaps keys by adding _network. prefix if needed.
         """
+        # Drop any teacher anchoring weights if present in checkpoint
+        if state_dict:
+            state_dict = {k: v for k, v in state_dict.items() if not k.startswith("_teacher.")}
         # Check if this is a foreign checkpoint (no _network. prefix in keys)
         has_network_prefix = any(k.startswith("_network.") for k in state_dict.keys())
         
@@ -144,6 +150,21 @@ class Indoor(AlgorithmBase):
             name: p.detach().clone().cpu()
             for name, p in self._network.named_parameters()
         }
+
+    def _init_teacher(self) -> None:
+        teacher = copy.deepcopy(self._network)
+        teacher.eval()
+        for p in teacher.parameters():
+            p.requires_grad = False
+        # Avoid registering teacher as a submodule (keeps it out of state_dict)
+        object.__setattr__(self, "_teacher", teacher)
+
+    def _ensure_teacher_on_device(self) -> None:
+        if self._teacher is None:
+            raise RuntimeError("Teacher anchoring enabled but teacher was not initialized.")
+        device = next(self._network.parameters()).device
+        self._teacher.to(device)
+        self._teacher.eval()
     
     @staticmethod
     def _name_matches(name: str, include_patterns: list[str] | None, exclude_patterns: list[str] | None) -> bool:
@@ -203,6 +224,12 @@ class Indoor(AlgorithmBase):
         log.info(f"Encoder trainable={requires_grad}")
     
     def on_fit_start(self) -> None:
+        # Ensure teacher is ready on the active device
+        if bool(self._finetune_conf.get("enable", False)) and bool(
+            self._finetune_conf.get("teacher_anchoring", {}).get("enable", False)
+        ):
+            self._ensure_teacher_on_device()
+
         # Optional BN recalibration
         bn_conf = self._finetune_conf.get("bn_recalibration", {}) if self._finetune_conf else {}
         if bool(self._finetune_conf.get("enable", False)) and bool(bn_conf.get("enable", False)):
@@ -242,19 +269,37 @@ class Indoor(AlgorithmBase):
         # Lightning's bf16-mixed precision handles autocast for both forward AND loss
         # (matches korean-model's AMP setup where autocast wraps forward + loss)
         preds = self._network(inputs)
-        
+
         # Squeeze channel dim: [B, 1, H, W] -> [B, H, W] to match targets shape
         if preds.dim() == 4:
             preds = preds.squeeze(1)
+
+        teacher_preds = None
+        if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
+            self._finetune_conf.get("teacher_anchoring", {}).get("enable", False)
+        ):
+            if self._teacher is None:
+                raise RuntimeError("Teacher anchoring enabled but teacher is not initialized.")
+            with torch.no_grad():
+                teacher_preds = self._teacher(inputs)
+            if teacher_preds.dim() == 4:
+                teacher_preds = teacher_preds.squeeze(1)
         
         # Clamp predictions to [0, 1] only during validation (matches colleague's approach)
         # if split_name in ("val", "valid", "validation", "test"):
         #     preds = torch.clamp(preds, 0.0, 1.0)
         
         weights = torch.ones_like(inputs[:, -1])
-        return self.get_metrics(preds, targets, masks, weights)
+        return self.get_metrics(
+            preds,
+            targets,
+            masks,
+            weights,
+            split_name=split_name,
+            teacher_preds=teacher_preds,
+        )
     
-    def get_metrics(self, preds, targets, masks, weights):
+    def get_metrics(self, preds, targets, masks, weights, split_name="train", teacher_preds=None):
         # DEBUG: Check actual value ranges
         if not hasattr(self, '_debug_logged') or not self._debug_logged:
             log.info(
@@ -287,27 +332,60 @@ class Indoor(AlgorithmBase):
         # Use SIP2Net loss if requested
         if self.use_sip2net:
             loss, _ = self.sip2net_criterion(preds, targets, masks, weights)
+            loss_task = loss
         else:
             # Switch primary objective to L1 (MAE)
+            loss_task = batch_mae
             loss = batch_mae
-        
-        # L2-SP regularization (optional)
-        if bool(self._finetune_conf.get("enable", False)) and bool(
+
+        loss_anchor = None
+
+        l2sp_value = None
+        # L2-SP regularization (optional, train-only)
+        if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
             self._finetune_conf.get("l2sp", {}).get("enable", False)
         ):
             alpha = float(self._finetune_conf.get("l2sp", {}).get("alpha", 1e-4))
-            l2sp = self._l2sp_penalty()
-            loss = loss + alpha * l2sp
+            l2sp_value = self._l2sp_penalty()
+            loss = loss + alpha * l2sp_value
+
+        # Teacher anchoring (optional, train-only)
+        if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
+            self._finetune_conf.get("teacher_anchoring", {}).get("enable", False)
+        ):
+            if teacher_preds is None:
+                raise RuntimeError("Teacher anchoring enabled but teacher_preds is None.")
+            alpha = float(self._finetune_conf.get("teacher_anchoring", {}).get("alpha", 0.1))
+            anchor_se = se(preds, teacher_preds, masks, weights)
+            loss_anchor = anchor_se / (masks.sum() + 1e-8)
+            loss = loss + alpha * loss_anchor
         
         # Scale RMSE by out_norm to report in dB units
         rmse_normalized = torch.sqrt(batch_mse)
         rmse_db = rmse_normalized * self.out_norm
         
-        return {
+        metrics = {
             "loss": loss,
             "rmse": rmse_db,
             "mae": batch_mae,
         }
+        if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
+            self._finetune_conf.get("teacher_anchoring", {}).get("enable", False)
+        ):
+            alpha = float(self._finetune_conf.get("teacher_anchoring", {}).get("alpha", 0.1))
+            metrics["loss_task"] = loss_task
+            metrics["loss_anchor"] = loss_anchor if loss_anchor is not None else torch.tensor(0.0)
+            metrics["loss_anchor_scaled"] = alpha * (loss_anchor if loss_anchor is not None else torch.tensor(0.0))
+        if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
+            self._finetune_conf.get("l2sp", {}).get("enable", False)
+        ):
+            alpha = float(self._finetune_conf.get("l2sp", {}).get("alpha", 1e-4))
+            if l2sp_value is None:
+                l2sp_value = self._l2sp_penalty()
+            metrics["loss_l2sp"] = l2sp_value
+            metrics["loss_l2sp_scaled"] = alpha * l2sp_value
+
+        return metrics
     
     # Override to support discriminative LR and warmup
     def configure_optimizers(

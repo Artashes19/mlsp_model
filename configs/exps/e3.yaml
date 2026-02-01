@@ -18,19 +18,19 @@ e3:
   datamodule:
     name: finetune_train_full_task2
     use_small_train: False
-    train_samples_per_epoch: 960
+    train_samples_per_epoch: 7040
     # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
     modality_dropout_prob: 0.0
-    train_manifest_path: ${oc.env:ICASSP_TRAIN_MANIFEST_TASK_2}
-    train_small_manifest_path: ${oc.env:ICASSP_TRAIN_SMALL_MANIFEST_TASK_2}
-    val_manifest_path: ${oc.env:ICASSP_VAL_MANIFEST_TASK_2}
+    train_manifest_path: ${oc.env:ICASSP_TRAIN_MANIFEST_TASK_3}
+    train_small_manifest_path: ${oc.env:ICASSP_TRAIN_SMALL_MANIFEST_TASK_3}
+    val_manifest_path: ${oc.env:ICASSP_VAL_MANIFEST_TASK_3}
     # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
     sparse_dropout_given_dropout: 0.5
     synthetic_dir: ""
     synthetic_manifest_path: ""
     synthetic_val_manifest_path: ""
     val_sparse_ranges:
-      - [0.002, 0.002]
+      - [0.0002, 0.0002]
       - [0.005, 0.005]
 
   callbacks:

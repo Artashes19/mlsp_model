@@ -156,6 +156,9 @@ def train(config: DictConfig) -> str | None:
         # Optional: capture reference weights for L2-SP
         if bool(ft_conf["l2sp"]["enable"]):
             algorithm._capture_pretrained_reference()
+        # Optional: init teacher for output anchoring
+        if bool(ft_conf.get("teacher_anchoring", {}).get("enable", False)):
+            algorithm._init_teacher()
         log.info(f"[algorithm] loaded from checkpoint (finetune): {ckpt_ft}")
     else:
         algorithm: AlgorithmBase = hydra.utils.instantiate(
