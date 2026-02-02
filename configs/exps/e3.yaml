@@ -32,6 +32,16 @@ e3:
     val_sparse_ranges:
       - [0.0002, 0.0002]
       - [0.005, 0.005]
+    # Finetuning augmentations: cardinal rotation + synthetic wall insertion
+    train_augmentations:
+      _target_: src.utils.indoor.augmentations.AugmentationPipeline
+      augmentations:
+        - _target_: src.utils.indoor.augmentations.CardinalRotationAugmentation
+          p: 1.0
+        - _target_: src.utils.indoor.augmentations.WallInsertionAugmentation
+          p: 0.5
+          transmittance_range: [1, 20]
+          max_wall_density: 0.3
 
   callbacks:
     model_checkpoint_0:
