@@ -22,4 +22,4 @@ dependencies:
   - pandas=2.3.3
   - scikit-learn=1.8.0
   - pip:
-      - aim==3.18.1
+      - aim==3.29.1
