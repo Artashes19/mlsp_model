@@ -11,6 +11,8 @@
 set -euo pipefail
 
 export HYDRA_FULL_ERROR=1
+export TORCHINDUCTOR_CACHE_DIR="/tmp/torchinductor/"
+mkdir -p ""
 
 mkdir -p /home/indoor/mlsp_wair_d/logs
 
