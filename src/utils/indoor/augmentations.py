@@ -8,6 +8,7 @@ from torchvision.transforms.functional import InterpolationMode
 from numba import njit
 
 from src.utils.indoor.types import RadarSample
+from src.utils.indoor.channel_config import SPARSE_CHANNEL
 
 
 def resize_bilinear(img, new_size):
@@ -257,7 +258,7 @@ class WallInsertionAugmentation(BaseAugmentation):
     def __init__(
         self,
         p: float = 0.5,
-        transmittance_range: tuple = (1, 20),
+        transmittance_range: tuple = (2, 18),
         max_wall_density: float = 0.3,
         n_angles: int = 360 * 128,
         radial_step: float = 1.0,
@@ -328,6 +329,15 @@ class WallInsertionAugmentation(BaseAugmentation):
         # Choose random positions for walls
         if num_vertical_walls > 0:
             vertical_walls = np.random.choice(W, num_vertical_walls, replace=False)
+        else:
+            vertical_walls = np.array([], dtype=np.int64)
+
+        if num_horizontal_walls > 0:
+            horizontal_walls = np.random.choice(H, num_horizontal_walls, replace=False)
+        else:
+            horizontal_walls = np.array([], dtype=np.int64)
+
+        if num_vertical_walls > 0:
             vertical_wall_values = torch.randint(
                 self.transmittance_range[0],
                 self.transmittance_range[1],
@@ -337,7 +347,6 @@ class WallInsertionAugmentation(BaseAugmentation):
             new_walls[:, vertical_walls] = vertical_wall_values
 
         if num_horizontal_walls > 0:
-            horizontal_walls = np.random.choice(H, num_horizontal_walls, replace=False)
             horizontal_wall_values = torch.randint(
                 self.transmittance_range[0],
                 self.transmittance_range[1],
@@ -345,6 +354,9 @@ class WallInsertionAugmentation(BaseAugmentation):
                 dtype=torch.float32,
             )
             new_walls[horizontal_walls, :] = horizontal_wall_values.unsqueeze(1)
+
+        # Apply mask to walls before loss calculation to keep outputs consistent
+        new_walls = new_walls * valid_mask
 
         # Calculate the pathloss contribution from the new walls
         new_walls_transmittance_loss = calculate_transmittance_loss(
@@ -356,12 +368,19 @@ class WallInsertionAugmentation(BaseAugmentation):
             max_walls=self.max_walls,
         )
 
-        # Update the sample: add walls to transmittance channel and update pathloss
-        sample.input_img[1] = sample.input_img[1] + new_walls
+        # Update the sample: add walls to transmittance channel only where mask is valid
+        sample.input_img[1][valid_mask] += new_walls[valid_mask]
 
         # Update output pathloss only where mask is valid
         if sample.output_img is not None and not isinstance(sample.output_img, str):
-            sample.output_img = sample.output_img + new_walls_transmittance_loss
+            sample.output_img[valid_mask] += new_walls_transmittance_loss[valid_mask]
+
+        # Update sparse measurements to maintain consistency with new walls
+        if SPARSE_CHANNEL is not None and SPARSE_CHANNEL < sample.input_img.shape[0]:
+            sparse_channel = sample.input_img[SPARSE_CHANNEL]
+            sparse_exists = sparse_channel != 0
+            if sparse_exists.any():
+                sample.input_img[SPARSE_CHANNEL][sparse_exists] += new_walls_transmittance_loss[sparse_exists]
 
         return sample
 

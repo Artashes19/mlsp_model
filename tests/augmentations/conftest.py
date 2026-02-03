@@ -20,6 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from src.utils.indoor.types import RadarSample
+from src.utils.indoor.channel_config import SPARSE_CHANNEL
 
 # ---------------------------------------------------------------------------
 # Visual output directory
@@ -40,6 +41,7 @@ def make_sample(
     azimuth: float = 45.0,
     with_output: bool = True,
     with_floor_plan: bool = True,
+    with_sparse: bool = False,
 ) -> RadarSample:
     """
     Build a RadarSample with deterministic, asymmetric content so that
@@ -49,6 +51,7 @@ def make_sample(
       - input_img channel 0: value = row index  (increases downward)
       - input_img channel 1: value = col index  (increases rightward)
       - input_img channel 2: value = row + col
+      - input_img sparse channel (if with_sparse): sparse measurements at a few points
       - output_img: value = row * 100 + col  (unique per pixel)
       - mask: 1 everywhere except a single zero at (0, 0)
       - floor_plan: 1 in the top-left quadrant, 0 elsewhere
@@ -56,7 +59,22 @@ def make_sample(
     rows = torch.arange(H, dtype=torch.float32).unsqueeze(1).expand(H, W)
     cols = torch.arange(W, dtype=torch.float32).unsqueeze(0).expand(H, W)
 
-    input_img = torch.stack([rows, cols, rows + cols], dim=0)  # (3, H, W)
+    if with_sparse:
+        if SPARSE_CHANNEL is None:
+            raise AssertionError("SPARSE_CHANNEL is not configured but with_sparse=True was requested.")
+        num_channels = max(3, SPARSE_CHANNEL + 1)
+        input_img = torch.zeros((num_channels, H, W), dtype=torch.float32)
+        input_img[0] = rows
+        input_img[1] = cols
+        input_img[2] = rows + cols
+        # Place sparse measurements at a few deterministic locations
+        sparse_channel = torch.zeros(H, W, dtype=torch.float32)
+        sparse_channel[H // 4, W // 4] = 10.0
+        sparse_channel[H // 2, W // 2] = 15.0
+        sparse_channel[3 * H // 4, 3 * W // 4] = 20.0
+        input_img[SPARSE_CHANNEL] = sparse_channel
+    else:
+        input_img = torch.stack([rows, cols, rows + cols], dim=0)  # (3, H, W)
 
     output_img = None
     if with_output:

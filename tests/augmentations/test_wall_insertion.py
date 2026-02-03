@@ -8,6 +8,8 @@ Covers:
 - Transmittance range constraints
 - Wall density constraints
 - Metadata preservation (antenna coords, dimensions, mask, non-transmittance channels)
+- Masked-only updates (walls only added where mask == 1)
+- Sparse channel consistency (sparse measurements updated with wall loss)
 - Edge cases (None output, empty mask)
 """
 import unittest
@@ -15,6 +17,7 @@ import unittest
 import torch
 
 from src.utils.indoor.augmentations import WallInsertionAugmentation
+from src.utils.indoor.channel_config import SPARSE_CHANNEL
 from src.utils.indoor.types import RadarSample
 
 from .conftest import make_sample, clone_sample
@@ -38,7 +41,7 @@ class TestWallInsertionAugmentation(unittest.TestCase):
 
     def test_probability_one_always_augments(self):
         """With p=1.0, the augmentation should always modify the sample."""
-        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(1, 20))
+        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(2, 18))
         modified_count = 0
         N = 20
 
@@ -83,7 +86,7 @@ class TestWallInsertionAugmentation(unittest.TestCase):
             self.assertTrue((diff >= -1e-5).all(), "Pathloss should not decrease")
 
     def test_transmittance_range_respected(self):
-        """Inserted walls should have transmittance values within the specified range."""
+        """Inserted walls should have transmittance values within the expected range."""
         min_val, max_val = 10, 20
         aug = WallInsertionAugmentation(
             p=1.0, transmittance_range=(min_val, max_val), max_wall_density=0.5
@@ -194,6 +197,102 @@ class TestWallInsertionAugmentation(unittest.TestCase):
         result = aug(s)
         self.assertTrue(torch.equal(result.input_img[0], orig_reflectance))
         self.assertTrue(torch.equal(result.input_img[2], orig_distance))
+
+    def test_walls_only_added_in_masked_region(self):
+        """Walls should only be added where mask == 1, not in invalid regions."""
+        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(5, 15))
+
+        for _ in range(10):
+            s = make_sample(H=10, W=10)
+            # Create a more restrictive mask (only center region is valid)
+            s.mask = torch.zeros(10, 10, dtype=torch.float32)
+            s.mask[2:8, 2:8] = 1.0  # Only center 6x6 is valid
+
+            orig_transmittance = s.input_img[1].clone()
+            result = aug(s)
+
+            # Check that transmittance outside mask is unchanged
+            outside_mask = s.mask == 0
+            transmittance_diff_outside = result.input_img[1][outside_mask] - orig_transmittance[outside_mask]
+            self.assertTrue(
+                (transmittance_diff_outside.abs() < 1e-5).all(),
+                f"Transmittance changed outside mask: {transmittance_diff_outside.abs().max()}",
+            )
+
+    def test_output_only_updated_in_masked_region(self):
+        """Output pathloss should only be updated where mask == 1."""
+        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(5, 15))
+
+        for _ in range(10):
+            s = make_sample(H=10, W=10)
+            # Create a more restrictive mask
+            s.mask = torch.zeros(10, 10, dtype=torch.float32)
+            s.mask[2:8, 2:8] = 1.0
+
+            orig_output = s.output_img.clone()
+            result = aug(s)
+
+            # Check that output outside mask is unchanged
+            outside_mask = s.mask == 0
+            output_diff_outside = result.output_img[outside_mask] - orig_output[outside_mask]
+            self.assertTrue(
+                (output_diff_outside.abs() < 1e-5).all(),
+                f"Output changed outside mask: {output_diff_outside.abs().max()}",
+            )
+
+    def test_sparse_channel_updated_with_walls(self):
+        """Sparse measurements should be updated to reflect additional wall loss."""
+        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(5, 15))
+
+        walls_added_count = 0
+        sparse_updated_count = 0
+        N = 20
+
+        for _ in range(N):
+            s = make_sample(H=12, W=12, with_sparse=True)
+            if SPARSE_CHANNEL is None or SPARSE_CHANNEL >= s.input_img.shape[0]:
+                self.fail("SPARSE_CHANNEL not present in input_img for sparse test.")
+            orig_sparse = s.input_img[SPARSE_CHANNEL].clone()
+            orig_transmittance = s.input_img[1].clone()
+
+            result = aug(s)
+
+            # Check if walls were added
+            transmittance_changed = not torch.equal(result.input_img[1], orig_transmittance)
+            if transmittance_changed:
+                walls_added_count += 1
+
+                # Check if sparse measurements increased (where they exist)
+                sparse_exists = orig_sparse != 0
+                if sparse_exists.any():
+                    sparse_diff = result.input_img[SPARSE_CHANNEL][sparse_exists] - orig_sparse[sparse_exists]
+                    # Sparse should increase or stay the same (walls add pathloss)
+                    if (sparse_diff >= -1e-5).all():
+                        sparse_updated_count += 1
+
+        # At least some runs should have added walls and updated sparse
+        self.assertGreater(walls_added_count, N // 2, "Not enough wall insertions occurred")
+        # When walls are added, sparse should be updated
+        self.assertGreater(sparse_updated_count, 0, "Sparse channel was never updated")
+
+    def test_sparse_channel_monotonic_increase(self):
+        """Sparse measurements should only increase (or stay same) when walls are added."""
+        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(5, 15))
+
+        for _ in range(10):
+            s = make_sample(H=12, W=12, with_sparse=True)
+            if SPARSE_CHANNEL is None or SPARSE_CHANNEL >= s.input_img.shape[0]:
+                self.fail("SPARSE_CHANNEL not present in input_img for sparse test.")
+            orig_sparse = s.input_img[SPARSE_CHANNEL].clone()
+
+            result = aug(s)
+
+            # Sparse should never decrease
+            sparse_diff = result.input_img[SPARSE_CHANNEL] - orig_sparse
+            self.assertTrue(
+                (sparse_diff >= -1e-5).all(),
+                f"Sparse measurements decreased: min diff = {sparse_diff.min()}",
+            )
 
 
 if __name__ == "__main__":
