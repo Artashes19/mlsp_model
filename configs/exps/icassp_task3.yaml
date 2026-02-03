@@ -6,7 +6,7 @@ icassp_task3:
     - trainer: default
     - datamodule: icassp_task3
     - optimizer: adam
-    - scheduler: null
+    - scheduler: icassp3_sd_finetune_32
     - algorithm: indoor
     - network: txunet
     - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every_4, val_alias_e3 ]
