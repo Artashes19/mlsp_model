@@ -218,6 +218,7 @@ class PathlossDataset(Dataset):
             radiation_pattern=radiation_pattern,
             pixel_size=INITIAL_PIXEL_SIZE,
             mask=torch.ones_like(input_img[0]),
+            floor_plan=((input_img[0] > 0) | (input_img[1] > 0)).to(input_img.dtype),
         )
         return sample
     

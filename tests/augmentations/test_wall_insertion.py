@@ -196,6 +196,26 @@ class TestWallInsertionAugmentation(unittest.TestCase):
         self.assertTrue(torch.equal(result.input_img[0], orig_reflectance))
         self.assertTrue(torch.equal(result.input_img[2], orig_distance))
 
+    def test_floor_plan_updates_from_trans_ref(self):
+        """Floor plan should match elementwise OR of reflectance/transmittance (in valid mask)."""
+        aug = WallInsertionAugmentation(p=1.0)
+        s = make_sample(H=8, W=8, with_floor_plan=True)
+        orig_dtype = s.floor_plan.dtype
+
+        result = aug(s)
+        expected = ((result.input_img[0] > 0) | (result.input_img[1] > 0)).to(orig_dtype)
+        valid_mask = result.mask == 1
+        self.assertTrue(torch.equal(result.floor_plan[valid_mask], expected[valid_mask]))
+        self.assertEqual(result.floor_plan.dtype, orig_dtype)
+
+    def test_floor_plan_none_unchanged(self):
+        """Augmentation should not create a floor plan if none exists."""
+        aug = WallInsertionAugmentation(p=1.0)
+        s = make_sample(H=8, W=8, with_floor_plan=False)
+
+        result = aug(s)
+        self.assertIsNone(result.floor_plan)
+
     def test_walls_only_added_in_masked_region(self):
         """Walls should only be added where mask == 1, not in invalid regions."""
         aug = WallInsertionAugmentation(p=1.0, transmittance_range=(5, 15))
