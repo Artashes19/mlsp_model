@@ -6,4 +6,4 @@ verbose: false
 dirpath: checkpoints/every
 filename: epoch_{epoch:04d}_every
 auto_insert_metric_name: false
-every_n_epochs: 10
+every_n_epochs: 4

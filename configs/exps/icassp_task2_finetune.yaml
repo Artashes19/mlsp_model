@@ -1,21 +1,21 @@
 icassp_task2_finetune:
   ckpt_path: null
-  load_weights_only: False
+  load_weights_only: True
   
   defaults:
     - trainer: default
     - datamodule: icassp_task2
     - optimizer: adam
-    - scheduler: null
+    - scheduler: icassp2_sd_finetune_32
     - algorithm: indoor
     - network: txunet
-    - callbacks: [ tqdm_progress_bar, model_checkpoint_0 ]
+    - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every_4, val_alias_e3 ]
     - loggers: [ aim ]
     - strategy: null
     - _self_
 
   trainer:
-    max_epochs: 100
+    max_epochs: 32
 
   datamodule:
     train_samples_per_epoch: 3000
@@ -26,13 +26,9 @@ icassp_task2_finetune:
 
   loggers:
     aim:
-      experiment: v3_icassp_task2_finetune
+      experiment: v4_icassp_task2_finetune
 
   algorithm:
     finetune:
       enable: True
-      freeze_encoder_epochs: 0
-      bn_recalibration:
-        enable: True
-      l2sp:
-        enable: True
+
