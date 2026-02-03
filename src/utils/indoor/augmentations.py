@@ -370,6 +370,13 @@ class WallInsertionAugmentation(BaseAugmentation):
         # Update the sample: add walls to transmittance channel only where mask is valid
         sample.input_img[1][valid_mask] += new_walls[valid_mask]
 
+        # update the floor plan as the logical OR of transmittance and reflectance
+        if sample.floor_plan is not None:
+            floor_plan_update = (sample.input_img[1][valid_mask] > 0) | (
+                sample.input_img[0][valid_mask] > 0
+            )
+            sample.floor_plan[valid_mask] = floor_plan_update.to(sample.floor_plan.dtype)
+
         # Update output pathloss only where mask is valid
         if sample.output_img is not None and not isinstance(sample.output_img, str):
             sample.output_img[valid_mask] += new_walls_transmittance_loss[valid_mask]
