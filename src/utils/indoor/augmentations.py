@@ -8,7 +8,6 @@ from torchvision.transforms.functional import InterpolationMode
 from numba import njit
 
 from src.utils.indoor.types import RadarSample
-from src.utils.indoor.channel_config import SPARSE_CHANNEL
 
 
 def resize_bilinear(img, new_size):
@@ -374,13 +373,6 @@ class WallInsertionAugmentation(BaseAugmentation):
         # Update output pathloss only where mask is valid
         if sample.output_img is not None and not isinstance(sample.output_img, str):
             sample.output_img[valid_mask] += new_walls_transmittance_loss[valid_mask]
-
-        # Update sparse measurements to maintain consistency with new walls
-        if SPARSE_CHANNEL is not None and SPARSE_CHANNEL < sample.input_img.shape[0]:
-            sparse_channel = sample.input_img[SPARSE_CHANNEL]
-            sparse_exists = sparse_channel != 0
-            if sparse_exists.any():
-                sample.input_img[SPARSE_CHANNEL][sparse_exists] += new_walls_transmittance_loss[sparse_exists]
 
         return sample
 

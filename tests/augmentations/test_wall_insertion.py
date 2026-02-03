@@ -9,7 +9,6 @@ Covers:
 - Wall density constraints
 - Metadata preservation (antenna coords, dimensions, mask, non-transmittance channels)
 - Masked-only updates (walls only added where mask == 1)
-- Sparse channel consistency (sparse measurements updated with wall loss)
 - Edge cases (None output, empty mask)
 """
 import unittest
@@ -17,7 +16,6 @@ import unittest
 import torch
 
 from src.utils.indoor.augmentations import WallInsertionAugmentation
-from src.utils.indoor.channel_config import SPARSE_CHANNEL
 from src.utils.indoor.types import RadarSample
 
 from .conftest import make_sample, clone_sample
@@ -238,60 +236,6 @@ class TestWallInsertionAugmentation(unittest.TestCase):
             self.assertTrue(
                 (output_diff_outside.abs() < 1e-5).all(),
                 f"Output changed outside mask: {output_diff_outside.abs().max()}",
-            )
-
-    def test_sparse_channel_updated_with_walls(self):
-        """Sparse measurements should be updated to reflect additional wall loss."""
-        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(5, 15))
-
-        walls_added_count = 0
-        sparse_updated_count = 0
-        N = 20
-
-        for _ in range(N):
-            s = make_sample(H=12, W=12, with_sparse=True)
-            if SPARSE_CHANNEL is None or SPARSE_CHANNEL >= s.input_img.shape[0]:
-                self.fail("SPARSE_CHANNEL not present in input_img for sparse test.")
-            orig_sparse = s.input_img[SPARSE_CHANNEL].clone()
-            orig_transmittance = s.input_img[1].clone()
-
-            result = aug(s)
-
-            # Check if walls were added
-            transmittance_changed = not torch.equal(result.input_img[1], orig_transmittance)
-            if transmittance_changed:
-                walls_added_count += 1
-
-                # Check if sparse measurements increased (where they exist)
-                sparse_exists = orig_sparse != 0
-                if sparse_exists.any():
-                    sparse_diff = result.input_img[SPARSE_CHANNEL][sparse_exists] - orig_sparse[sparse_exists]
-                    # Sparse should increase or stay the same (walls add pathloss)
-                    if (sparse_diff >= -1e-5).all():
-                        sparse_updated_count += 1
-
-        # At least some runs should have added walls and updated sparse
-        self.assertGreater(walls_added_count, N // 2, "Not enough wall insertions occurred")
-        # When walls are added, sparse should be updated
-        self.assertGreater(sparse_updated_count, 0, "Sparse channel was never updated")
-
-    def test_sparse_channel_monotonic_increase(self):
-        """Sparse measurements should only increase (or stay same) when walls are added."""
-        aug = WallInsertionAugmentation(p=1.0, transmittance_range=(5, 15))
-
-        for _ in range(10):
-            s = make_sample(H=12, W=12, with_sparse=True)
-            if SPARSE_CHANNEL is None or SPARSE_CHANNEL >= s.input_img.shape[0]:
-                self.fail("SPARSE_CHANNEL not present in input_img for sparse test.")
-            orig_sparse = s.input_img[SPARSE_CHANNEL].clone()
-
-            result = aug(s)
-
-            # Sparse should never decrease
-            sparse_diff = result.input_img[SPARSE_CHANNEL] - orig_sparse
-            self.assertTrue(
-                (sparse_diff >= -1e-5).all(),
-                f"Sparse measurements decreased: min diff = {sparse_diff.min()}",
             )
 
 
