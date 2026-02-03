@@ -10,6 +10,8 @@
 
 set -euo pipefail
 
+export HYDRA_FULL_ERROR=1
+
 mkdir -p /home/indoor/mlsp_wair_d/logs
 
 # --- activate env ---
