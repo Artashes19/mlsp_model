@@ -61,3 +61,5 @@ e3:
         enable: True
       l2sp:
         enable: True
+        include_patterns: []
+        exclude_patterns: []
