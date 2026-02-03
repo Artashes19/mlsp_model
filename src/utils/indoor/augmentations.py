@@ -8,6 +8,10 @@ from torchvision.transforms.functional import InterpolationMode
 from numba import njit
 
 from src.utils.indoor.types import RadarSample
+from src.utils.indoor.channel_config import (
+    INPUT_REFLECTANCE_CHANNEL,
+    INPUT_TRANSMITTANCE_CHANNEL,
+)
 
 
 def resize_bilinear(img, new_size):
@@ -372,8 +376,10 @@ class WallInsertionAugmentation(BaseAugmentation):
 
         # update the floor plan as the logical OR of transmittance and reflectance
         if sample.floor_plan is not None:
-            floor_plan_update = (sample.input_img[1][valid_mask] > 0) | (
-                sample.input_img[0][valid_mask] > 0
+            floor_plan_update = (
+                sample.input_img[INPUT_TRANSMITTANCE_CHANNEL][valid_mask] > 0
+            ) | (
+                sample.input_img[INPUT_REFLECTANCE_CHANNEL][valid_mask] > 0
             )
             sample.floor_plan[valid_mask] = floor_plan_update.to(sample.floor_plan.dtype)
 

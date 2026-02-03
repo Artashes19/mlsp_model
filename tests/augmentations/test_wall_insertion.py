@@ -16,6 +16,11 @@ import unittest
 import torch
 
 from src.utils.indoor.augmentations import WallInsertionAugmentation
+from src.utils.indoor.channel_config import (
+    INPUT_DISTANCE_CHANNEL,
+    INPUT_REFLECTANCE_CHANNEL,
+    INPUT_TRANSMITTANCE_CHANNEL,
+)
 from src.utils.indoor.types import RadarSample
 
 from .conftest import make_sample, clone_sample
@@ -189,12 +194,12 @@ class TestWallInsertionAugmentation(unittest.TestCase):
         """Wall insertion should only modify transmittance and output, not reflectance or distance."""
         aug = WallInsertionAugmentation(p=1.0)
         s = make_sample(H=8, W=8)
-        orig_reflectance = s.input_img[0].clone()
-        orig_distance = s.input_img[2].clone()
+        orig_reflectance = s.input_img[INPUT_REFLECTANCE_CHANNEL].clone()
+        orig_distance = s.input_img[INPUT_DISTANCE_CHANNEL].clone()
 
         result = aug(s)
-        self.assertTrue(torch.equal(result.input_img[0], orig_reflectance))
-        self.assertTrue(torch.equal(result.input_img[2], orig_distance))
+        self.assertTrue(torch.equal(result.input_img[INPUT_REFLECTANCE_CHANNEL], orig_reflectance))
+        self.assertTrue(torch.equal(result.input_img[INPUT_DISTANCE_CHANNEL], orig_distance))
 
     def test_floor_plan_updates_from_trans_ref(self):
         """Floor plan should match elementwise OR of reflectance/transmittance (in valid mask)."""
@@ -203,7 +208,10 @@ class TestWallInsertionAugmentation(unittest.TestCase):
         orig_dtype = s.floor_plan.dtype
 
         result = aug(s)
-        expected = ((result.input_img[0] > 0) | (result.input_img[1] > 0)).to(orig_dtype)
+        expected = (
+            (result.input_img[INPUT_REFLECTANCE_CHANNEL] > 0)
+            | (result.input_img[INPUT_TRANSMITTANCE_CHANNEL] > 0)
+        ).to(orig_dtype)
         valid_mask = result.mask == 1
         self.assertTrue(torch.equal(result.floor_plan[valid_mask], expected[valid_mask]))
         self.assertEqual(result.floor_plan.dtype, orig_dtype)

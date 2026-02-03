@@ -12,6 +12,10 @@ from torchvision.io import read_image
 
 from src.utils import normalize_size, RadarSample
 from src.utils.indoor.augmentations import AugmentationPipeline
+from src.utils.indoor.channel_config import (
+    INPUT_REFLECTANCE_CHANNEL,
+    INPUT_TRANSMITTANCE_CHANNEL,
+)
 from src.utils.indoor.featurizer import featurizer
 from src.utils.indoor.types import RadarSampleInputs
 from src.utils.indoor.config_overrides import get_config
@@ -218,7 +222,10 @@ class PathlossDataset(Dataset):
             radiation_pattern=radiation_pattern,
             pixel_size=INITIAL_PIXEL_SIZE,
             mask=torch.ones_like(input_img[0]),
-            floor_plan=((input_img[0] > 0) | (input_img[1] > 0)).to(input_img.dtype),
+            floor_plan=(
+                (input_img[INPUT_REFLECTANCE_CHANNEL] > 0)
+                | (input_img[INPUT_TRANSMITTANCE_CHANNEL] > 0)
+            ).to(input_img.dtype),
         )
         return sample
     
