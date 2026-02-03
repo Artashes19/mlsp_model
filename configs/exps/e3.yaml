@@ -41,7 +41,7 @@ e3:
         - _target_: src.utils.indoor.augmentations.WallInsertionAugmentation
           p: 0.5
           transmittance_range: [2, 18]
-          max_wall_density: 0.3
+          max_wall_density: 0.05
 
   callbacks:
     model_checkpoint_0:
