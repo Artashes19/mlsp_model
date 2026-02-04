@@ -1,4 +1,5 @@
 import csv
+import glob
 import logging
 import os
 import re
@@ -17,6 +18,43 @@ from src.datamodules.indoor import IndoorDatamodule
 from src.utils.indoor.channel_config import NUM_CHANNELS
 
 log = logging.getLogger(__name__)
+
+
+def resolve_ckpt_paths(
+    paths: list[str],
+) -> list[str]:
+    """
+    Resolve checkpoint paths from a list of files and/or directories.
+    
+    For each path:
+    - If it's a file: validate it exists and add to results
+    - If it's a directory: recursively scan for all .ckpt files
+    
+    Args:
+        paths: List of checkpoint file paths or directories to scan
+    
+    Returns:
+        Deduplicated, sorted list of absolute checkpoint paths
+    """
+    resolved = []
+    
+    for path in paths:
+        abs_path = os.path.abspath(str(path))
+        
+        if os.path.isfile(abs_path):
+            resolved.append(abs_path)
+        elif os.path.isdir(abs_path):
+            # Recursively scan for .ckpt files
+            pattern = os.path.join(abs_path, "**", "*.ckpt")
+            ckpt_files = glob.glob(pattern, recursive=True)
+            resolved.extend(ckpt_files)
+        else:
+            log.warning(f"[inference] Path does not exist: {abs_path}")
+    
+    # Deduplicate and sort
+    resolved = sorted(set(resolved))
+    
+    return resolved
 
 
 def _get_dataset_by_split(
@@ -140,26 +178,29 @@ def inference_prep(
     project_root: str,
 ) -> None:
     """
-    Run inference on multiple dataset splits using a trained checkpoint.
+    Run inference on multiple dataset splits using trained checkpoints.
     
     Steps:
-    1. Parse checkpoint path and splits from config
-    2. Instantiate datamodule and algorithm (once)
-    3. Load checkpoint weights
-    4. For each split: loop through dataset samples and save predictions as .npz files
+    1. Parse checkpoint paths and splits from config
+    2. Resolve checkpoint paths (expand directories to .ckpt files)
+    3. Instantiate datamodule and algorithm (once)
+    4. For each checkpoint: load weights and run inference on all splits
     """
     t0 = time.perf_counter()
     
     # Get inference parameters
-    ckpt_path = os.path.abspath(str(config["ckpt_path"]))
+    raw_ckpt_paths = list(config["ckpt_paths"])
     gpu = int(config.get("gpu", 0))
     splits = list(config["split"])  # Must be a list
     predictions_dir = os.path.expanduser(str(config["predictions_dir"]))
     
-    # Validate checkpoint exists
-    if not os.path.isfile(ckpt_path):
-        raise RuntimeError(f"Checkpoint not found: {ckpt_path}")
+    # Resolve checkpoint paths (expand directories to .ckpt files)
+    ckpt_paths = resolve_ckpt_paths(paths=raw_ckpt_paths)
     
+    if not ckpt_paths:
+        raise RuntimeError(f"No checkpoint files found in: {raw_ckpt_paths}")
+    
+    log.info(f"[inference] Resolved {len(ckpt_paths)} checkpoint(s): {ckpt_paths}")
     log.info(f"[inference] Splits to process: {splits}")
     
     # Instantiate datamodule via hydra
@@ -190,88 +231,91 @@ def inference_prep(
         gpu=gpu,
     )
     
-    # Load checkpoint weights
-    log.info(f"[inference] Loading checkpoint: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, weights_only=False)
-    algorithm.load_state_dict(ckpt["state_dict"])
-    
-    algorithm.eval()
     algorithm.cuda(gpu)
     log.info(f"[inference] Using GPU: {gpu}")
     
-    # Process each split
+    # Process each checkpoint
     total_samples = 0
-    for split in splits:
-        dataset = _get_dataset_by_split(datamodule=datamodule, split=split)
-        if dataset is None:
-            log.warning(f"[inference] Skipping split {split}: dataset not available")
-            continue
+    for ckpt_idx, ckpt_path in enumerate(ckpt_paths):
+        log.info(f"[inference] Processing checkpoint {ckpt_idx + 1}/{len(ckpt_paths)}: {ckpt_path}")
         
-        # Derive output directory for this split
-        output_dir = parse_output_dir(
-            ckpt_path=ckpt_path,
-            predictions_dir=predictions_dir,
-            datamodule_name=str(config.datamodule.name),
-            split_name=split,
-        )
-        os.makedirs(output_dir, exist_ok=True)
-        log.info(f"[inference] Processing split: {split} ({len(dataset)} samples)")
-        log.info(f"[inference] Output directory: {output_dir}")
+        # Load checkpoint weights
+        ckpt = torch.load(ckpt_path, weights_only=False)
+        algorithm.load_state_dict(ckpt["state_dict"])
+        algorithm.eval()
         
-        # Collect CSV rows for test splits (Kaggle submission)
-        csv_rows = []
-        is_test_split = split.startswith("test")
-        
-        # Run inference for this split
-        with torch.no_grad():
-            for idx in tqdm(range(len(dataset)), desc=f"Inference ({split})"):
-                # Get sample from dataset
-                batch = dataset[idx]
-                
-                # Run prediction
-                result = algorithm.pred(batch=batch)
-                
-                # Extract file name for output
-                sample_meta = batch[3]  # (inputs, targets, masks, sample_meta)
-                file_name = sample_meta["file_name"]
-                
-                # Clean file name for use as filename (remove path separators, etc.)
-                safe_file_name = re.sub(r"[^\w\-_.]", "_", str(file_name))
-                
-                # Save to .npz file
-                output_path = os.path.join(output_dir, f"{safe_file_name}.npz")
-                
-                np.savez(
-                    output_path,
-                    pred=result["pred"],
-                    inputs=result["inputs"],
-                    targets=result["targets"],
-                    masks=result["masks"],
-                    file_name=result["sample"]["file_name"],
-                    pixel_size=result["sample"]["pixel_size"],
-                )
-                
-                # Generate CSV rows for test splits
-                if is_test_split:
-                    rows = generate_csv_rows(
-                        file_name=file_name,
+        # Process each split for this checkpoint
+        for split in splits:
+            dataset = _get_dataset_by_split(datamodule=datamodule, split=split)
+            if dataset is None:
+                log.warning(f"[inference] Skipping split {split}: dataset not available")
+                continue
+            
+            # Derive output directory for this split
+            output_dir = parse_output_dir(
+                ckpt_path=ckpt_path,
+                predictions_dir=predictions_dir,
+                datamodule_name=str(config.datamodule.name),
+                split_name=split,
+            )
+            os.makedirs(output_dir, exist_ok=True)
+            log.info(f"[inference] Processing split: {split} ({len(dataset)} samples)")
+            log.info(f"[inference] Output directory: {output_dir}")
+            
+            # Collect CSV rows for test splits (Kaggle submission)
+            csv_rows = []
+            is_test_split = split.startswith("test")
+            
+            # Run inference for this split
+            with torch.no_grad():
+                for idx in tqdm(range(len(dataset)), desc=f"Inference ({split})"):
+                    # Get sample from dataset
+                    batch = dataset[idx]
+                    
+                    # Run prediction
+                    result = algorithm.pred(batch=batch)
+                    
+                    # Extract file name for output
+                    sample_meta = batch[3]  # (inputs, targets, masks, sample_meta)
+                    file_name = sample_meta["file_name"]
+                    
+                    # Clean file name for use as filename (remove path separators, etc.)
+                    safe_file_name = re.sub(r"[^\w\-_.]", "_", str(file_name))
+                    
+                    # Save to .npz file
+                    output_path = os.path.join(output_dir, f"{safe_file_name}.npz")
+                    
+                    np.savez(
+                        output_path,
                         pred=result["pred"],
-                        mask=result["masks"],
+                        inputs=result["inputs"],
+                        targets=result["targets"],
+                        masks=result["masks"],
+                        file_name=result["sample"]["file_name"],
+                        pixel_size=result["sample"]["pixel_size"],
                     )
-                    csv_rows.extend(rows)
-        
-        log.info(f"[inference] Saved {len(dataset)} predictions to {output_dir}")
-        
-        # Write CSV for test splits (Kaggle submission format)
-        if csv_rows:
-            csv_path = os.path.join(output_dir, "predictions.csv")
-            with open(csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["ID", "PL"])
-                for id_str, pl_value in csv_rows:
-                    writer.writerow([id_str, round(pl_value, 1)])
-            log.info(f"[inference] Saved CSV with {len(csv_rows)} rows to {csv_path}")
-        total_samples += len(dataset)
+                    
+                    # Generate CSV rows for test splits
+                    if is_test_split:
+                        rows = generate_csv_rows(
+                            file_name=file_name,
+                            pred=result["pred"],
+                            mask=result["masks"],
+                        )
+                        csv_rows.extend(rows)
+            
+            log.info(f"[inference] Saved {len(dataset)} predictions to {output_dir}")
+            
+            # Write CSV for test splits (Kaggle submission format)
+            if csv_rows:
+                csv_path = os.path.join(output_dir, "predictions.csv")
+                with open(csv_path, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["ID", "PL"])
+                    for id_str, pl_value in csv_rows:
+                        writer.writerow([id_str, round(pl_value, 1)])
+                log.info(f"[inference] Saved CSV with {len(csv_rows)} rows to {csv_path}")
+            total_samples += len(dataset)
     
     elapsed = time.perf_counter() - t0
-    log.info(f"[inference] Completed in {elapsed:.2f}s ({total_samples} total samples across {len(splits)} splits)")
+    log.info(f"[inference] Completed in {elapsed:.2f}s ({total_samples} total samples across {len(ckpt_paths)} checkpoints, {len(splits)} splits)")

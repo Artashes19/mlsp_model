@@ -4,7 +4,7 @@ seed: 42
 print_config: True
 ignore_warnings: True
 
-ckpt_path: null
+ckpt_paths: []  # List of checkpoint paths or directories to scan
 gpu: 0
 split:
   - test_0.02

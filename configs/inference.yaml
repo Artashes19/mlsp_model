@@ -5,7 +5,7 @@ print_config: True
 ignore_warnings: True
 
 # Inference parameters
-ckpt_path: null  # Required: path to checkpoint file
+ckpt_paths: []  # List of checkpoint paths or directories to scan recursively for .ckpt files
 gpu: 0  # GPU device index
 
 # Dataset splits to run inference on (must be a list)
