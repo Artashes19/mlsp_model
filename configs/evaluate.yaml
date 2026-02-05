@@ -4,7 +4,8 @@ seed: 42
 print_config: True
 
 # Evaluation parameters
-inference_dir: null  # Required: path to inference output directory
+inference_dirs: []  # Required: list of inference output directories to scan
+predictions_dir: ${oc.env:PREDICTIONS_DIR}  # Base directory for saving CSV results
 
 # Output normalization (to convert from [0,1] to dB)
 out_norm: 160.0
