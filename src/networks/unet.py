@@ -76,5 +76,4 @@ class UNetModel(nn.Module):
         decoder_output = self.unet.decoder(features)
         logits = self.unet.segmentation_head(decoder_output)
         
-        output = logits.squeeze(1)
-        return output
+        return logits
