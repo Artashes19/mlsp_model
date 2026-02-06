@@ -67,3 +67,7 @@ cache/
 test_outputs/
 # ignore all png files
 *.png
+.claude/
+temp_data/
+temp_overrides.sh
+test_runs/
