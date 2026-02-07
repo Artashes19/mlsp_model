@@ -338,7 +338,7 @@ def featurizer(
             # Update mask: set mask to 0 where sparse measurements exist
             sparse_mask = sparse_data != 0
             sample.mask[sparse_mask] = 0
-        elif sample.output_img is not None:
+        elif sample.output_img is not None and sample.output_img != "":
             # Generate random sparse samples from ground truth
             sparsity = random.uniform(sparse_range[0], sparse_range[1])
             # Only sample from valid mask region

@@ -9,6 +9,7 @@ from src.data_exploration.generate_manifest import (
     ensure_icassp_manifest,
     ensure_manifest as ensure_synth_manifest,
     filter_icassp_manifest,
+    generate_fulleval_test_manifest,
     generate_icassp_test_manifest,
     split_synthetic_manifest,
 )
@@ -287,6 +288,93 @@ def manifest_prep(
             log.warning(f"[manifest] Evaluation data dir not found or not specified: {icassp_eval_dir}")
     else:
         log.info("[manifest] Test manifest generation disabled")
+    
+    # === Full Eval Manifests (different directory structure) ===
+    fulleval_dir = os.path.expanduser(str(config.get("fulleval_dir", "")))
+    generate_fulleval = bool(config.get("generate_fulleval", False))
+    
+    if generate_fulleval:
+        if fulleval_dir and os.path.isdir(fulleval_dir):
+            fulleval_manifest_dir = os.path.join(fulleval_dir, "manifests")
+            os.makedirs(fulleval_manifest_dir, exist_ok=True)
+            
+            # Mapping of task number to task subfolder name
+            fulleval_task_mapping = {
+                "Task_1_ICASSP": "Task_1",
+                "Task_2_ICASSP": "Task_2",
+                "Task_3_ICASSP": "Task_3",
+            }
+            
+            for task in tasks:
+                if task not in fulleval_task_mapping:
+                    log.warning(f"[manifest] Unknown task for full eval manifest: {task}")
+                    continue
+                
+                task_subfolder = fulleval_task_mapping[task]
+                task_short = task.replace("_ICASSP", "")
+                
+                # Generate full eval test manifest (no sparse)
+                fulleval_test_path = os.path.join(
+                    fulleval_manifest_dir,
+                    f"fulleval_test_{task_short}.csv",
+                )
+                t0 = time.perf_counter()
+                n_fulleval = generate_fulleval_test_manifest(
+                    root=fulleval_dir,
+                    out_csv=fulleval_test_path,
+                    freqs_mhz=eval_freqs_mhz,
+                    task=task_subfolder,
+                    sparse_dir="",
+                )
+                dt = time.perf_counter() - t0
+                log.info(
+                    f"[manifest] Full eval test manifest: {fulleval_test_path} "
+                    f"(rows={n_fulleval}, took={dt:.2f}s)"
+                )
+                result[f"fulleval_test_manifest_{task}"] = fulleval_test_path
+            
+            # Generate MLSP full eval manifests with sparse measurements
+            # Rate 0.02% sparse
+            sparse_dir_0_02 = os.path.join(fulleval_dir, "rate0.02", "sampledGT")
+            if os.path.isdir(sparse_dir_0_02):
+                fulleval_mlsp_path_0_02 = os.path.join(fulleval_manifest_dir, "fulleval_mlsp_test_rate0.02.csv")
+                t0 = time.perf_counter()
+                n_mlsp = generate_fulleval_test_manifest(
+                    root=fulleval_dir,
+                    out_csv=fulleval_mlsp_path_0_02,
+                    freqs_mhz=eval_freqs_mhz,
+                    task="Task_1",
+                    sparse_dir=sparse_dir_0_02,
+                )
+                dt = time.perf_counter() - t0
+                log.info(
+                    f"[manifest] Full eval MLSP test manifest (rate 0.02): {fulleval_mlsp_path_0_02} "
+                    f"(rows={n_mlsp}, took={dt:.2f}s)"
+                )
+                result["fulleval_mlsp_test_manifest_rate_0_02"] = fulleval_mlsp_path_0_02
+            
+            # Rate 0.5% sparse
+            sparse_dir_0_5 = os.path.join(fulleval_dir, "rate0.5", "sampledGT")
+            if os.path.isdir(sparse_dir_0_5):
+                fulleval_mlsp_path_0_5 = os.path.join(fulleval_manifest_dir, "fulleval_mlsp_test_rate0.5.csv")
+                t0 = time.perf_counter()
+                n_mlsp = generate_fulleval_test_manifest(
+                    root=fulleval_dir,
+                    out_csv=fulleval_mlsp_path_0_5,
+                    freqs_mhz=eval_freqs_mhz,
+                    task="Task_1",
+                    sparse_dir=sparse_dir_0_5,
+                )
+                dt = time.perf_counter() - t0
+                log.info(
+                    f"[manifest] Full eval MLSP test manifest (rate 0.5): {fulleval_mlsp_path_0_5} "
+                    f"(rows={n_mlsp}, took={dt:.2f}s)"
+                )
+                result["fulleval_mlsp_test_manifest_rate_0_5"] = fulleval_mlsp_path_0_5
+        else:
+            log.warning(f"[manifest] Full eval data dir not found or not specified: {fulleval_dir}")
+    else:
+        log.info("[manifest] Full eval manifest generation disabled")
     
     # Summary
     log.info(f"[manifest] Manifest generation complete. Created manifests: {list(result.keys())}")

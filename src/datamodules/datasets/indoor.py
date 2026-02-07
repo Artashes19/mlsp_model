@@ -79,7 +79,7 @@ class PathlossDataset(Dataset):
             value=0
         ).squeeze(0)  # -> (C, new_H, new_W)
         
-        if sample.output_img is not None:
+        if sample.output_img is not None and sample.output_img != "":
             sample.output_img = F.pad(
                 sample.output_img.unsqueeze(0),  # (H, W) or (C, H, W)
                 (pad_left, pad_right, pad_top, pad_bottom),

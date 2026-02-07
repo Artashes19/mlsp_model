@@ -10,6 +10,7 @@ import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+from PIL import Image
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -173,6 +174,33 @@ def generate_csv_rows(
     return rows
 
 
+def save_prediction_png(
+    pred: np.ndarray,
+    output_path: str,
+    out_norm: float,
+) -> None:
+    """
+    Save prediction as 16-bit grayscale PNG.
+    
+    Stores raw dB values scaled to uint16 range for lossless recovery.
+    To recover: dB = (uint16_value / 65535) * out_norm
+    
+    Args:
+        pred: Prediction array (1, H, W) or (H, W), normalized [0, 1]
+        output_path: Output PNG file path
+        out_norm: Maximum expected path loss value in dB (e.g., 160.0)
+    """
+    if pred.ndim == 3:
+        pred = pred.squeeze(0)
+    
+    # Convert normalized [0,1] to dB scale, then scale to uint16 range
+    pred_db = pred * out_norm
+    pred_uint16 = (pred_db / out_norm * 65535).astype(np.uint16)
+    
+    img = Image.fromarray(pred_uint16, mode="I;16")
+    img.save(output_path)
+
+
 def inference_prep(
     config: DictConfig,
     project_root: str,
@@ -265,6 +293,7 @@ def inference_prep(
             # Collect CSV rows for test splits (Kaggle submission)
             csv_rows = []
             is_test_split = split.startswith("test")
+            is_full_eval = "full_" in str(config.datamodule.name)
             
             # Run inference for this split
             with torch.no_grad():
@@ -282,32 +311,42 @@ def inference_prep(
                     # Clean file name for use as filename (remove path separators, etc.)
                     safe_file_name = re.sub(r"[^\w\-_.]", "_", str(file_name))
                     
-                    # Save to .npz file
-                    output_path = os.path.join(output_dir, f"{safe_file_name}.npz")
-                    
-                    np.savez(
-                        output_path,
-                        pred=result["pred"],
-                        inputs=result["inputs"],
-                        targets=result["targets"],
-                        masks=result["masks"],
-                        file_name=result["sample"]["file_name"],
-                        pixel_size=result["sample"]["pixel_size"],
-                    )
-                    
-                    # Generate CSV rows for test splits
-                    if is_test_split:
-                        rows = generate_csv_rows(
-                            file_name=file_name,
+                    if is_full_eval and is_test_split:
+                        # Save PNG only for full eval test sets
+                        # Remove existing extension if present to avoid double extension
+                        base_name = os.path.splitext(safe_file_name)[0]
+                        png_path = os.path.join(output_dir, f"{base_name}.png")
+                        save_prediction_png(
                             pred=result["pred"],
-                            mask=result["masks"],
+                            output_path=png_path,
+                            out_norm=config.algorithm.out_norm,
                         )
-                        csv_rows.extend(rows)
+                    else:
+                        # Original behavior: save .npz file
+                        output_path = os.path.join(output_dir, f"{safe_file_name}.npz")
+                        np.savez(
+                            output_path,
+                            pred=result["pred"],
+                            inputs=result["inputs"],
+                            targets=result["targets"],
+                            masks=result["masks"],
+                            file_name=result["sample"]["file_name"],
+                            pixel_size=result["sample"]["pixel_size"],
+                        )
+                        
+                        # Generate CSV rows for test splits (not full eval)
+                        if is_test_split:
+                            rows = generate_csv_rows(
+                                file_name=file_name,
+                                pred=result["pred"],
+                                mask=result["masks"],
+                            )
+                            csv_rows.extend(rows)
             
             log.info(f"[inference] Saved {len(dataset)} predictions to {output_dir}")
             
-            # Write CSV for test splits (Kaggle submission format)
-            if csv_rows:
+            # Write CSV for test splits (Kaggle submission format) - skip for full eval
+            if csv_rows and not is_full_eval:
                 csv_path = os.path.join(output_dir, "predictions.csv")
                 with open(csv_path, "w", newline="") as f:
                     writer = csv.writer(f)
