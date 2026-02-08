@@ -19,18 +19,12 @@ warnings.filterwarnings("ignore")
 OUT = Path(__file__).parent
 
 # Load only task CSVs (not pretrain_loss or other result files)
-TASK_NAMES = ["icassp1", "icassp2", "icassp3", "icass3", "mlsp002", "mlsp05"]
+TASK_NAMES = ["icassp1", "icassp2", "icassp3", "mlsp002", "mlsp05"]
 TASKS = {}
 for name in TASK_NAMES:
     csv_path = OUT / f"{name}.csv"
     if csv_path.exists():
         TASKS[name] = pd.read_csv(csv_path)
-
-# Rename icass3 -> icassp3 if present
-if "icass3" in TASKS and "icassp3" not in TASKS:
-    TASKS["icassp3"] = TASKS.pop("icass3")
-elif "icass3" in TASKS:
-    TASKS.pop("icass3")
 
 COLORS = {"icassp1": "#e63946", "icassp2": "#457b9d", "icassp3": "#6a4c93",
           "mlsp002": "#2a9d8f", "mlsp05": "#e9c46a"}
