@@ -86,10 +86,10 @@ def parse_inference_path(
         Tuple of (timestamp, ckpt, datamodule, dataset)
     """
     parts = os.path.normpath(npz_dir).split(os.sep)
-    dataset = parts[-1]      # split_name
-    datamodule = parts[-2]   # datamodule_name
-    ckpt = parts[-3]         # checkpoint name
-    timestamp = parts[-4]    # inference timestamp
+    dataset = parts[-1]  # split_name
+    datamodule = parts[-2]  # datamodule_name
+    ckpt = parts[-3]  # checkpoint name
+    timestamp = parts[-4]  # inference timestamp
     return timestamp, ckpt, datamodule, dataset
 
 
@@ -98,8 +98,8 @@ def submit_to_kaggle(
     competition_id: str,
     max_retries: int = 10,
     retry_delay: float = 30.0,
-    submit_retries: int = 2,
-    submit_retry_delay: float = 60.0,
+    submit_retries: int = 7,
+    submit_retry_delay: float = 0.0,
 ) -> Optional[float]:
     """
     Submit CSV to Kaggle competition and return the MSE score.
@@ -178,7 +178,8 @@ def submit_to_kaggle(
         
         # Debug: log all attributes to identify the correct score field
         if attempt == 0:
-            attrs = vars(latest) if hasattr(latest, "__dict__") else {a: getattr(latest, a, None) for a in dir(latest) if not a.startswith("_")}
+            attrs = vars(latest) if hasattr(latest, "__dict__") else {a: getattr(latest, a, None) for a in dir(latest)
+                                                                      if not a.startswith("_")}
             log.info(f"[evaluate] Submission attributes: {attrs}")
         
         # Check multiple possible score attributes
@@ -492,14 +493,16 @@ def evaluate_prep(
                 total_samples += num_samples
                 log.info(f"[evaluate] Using cached RMSE: {display_path} -> {rmse:.6f} ({num_samples} samples)")
             
-            csv_records.append({
-                "timestamp": timestamp,
-                "ckpt": ckpt,
-                "datamodule": datamodule,
-                "dataset": dataset,
-                "RMSE": f"{rmse:.6f}",
-                "MSE": f"{mse:.6f}",
-            })
+            csv_records.append(
+                {
+                    "timestamp": timestamp,
+                    "ckpt": ckpt,
+                    "datamodule": datamodule,
+                    "dataset": dataset,
+                    "RMSE": f"{rmse:.6f}",
+                    "MSE": f"{mse:.6f}",
+                }
+            )
             continue
         
         # Check if this is a test directory (no ground truth)
@@ -518,14 +521,16 @@ def evaluate_prep(
                 log.info(f"[evaluate]   MSE: {mse:.6f} ({num_samples} samples)")
                 
                 # Add record with MSE from Kaggle and computed RMSE
-                csv_records.append({
-                    "timestamp": timestamp,
-                    "ckpt": ckpt,
-                    "datamodule": datamodule,
-                    "dataset": dataset,
-                    "RMSE": f"{rmse:.6f}",
-                    "MSE": f"{mse:.6f}",
-                })
+                csv_records.append(
+                    {
+                        "timestamp": timestamp,
+                        "ckpt": ckpt,
+                        "datamodule": datamodule,
+                        "dataset": dataset,
+                        "RMSE": f"{rmse:.6f}",
+                        "MSE": f"{mse:.6f}",
+                    }
+                )
         else:
             log.info(f"[evaluate] Evaluating: {display_path}")
             avg_rmse, num_samples = evaluate_directory(
@@ -543,14 +548,16 @@ def evaluate_prep(
                 
                 # Add record with RMSE and computed MSE (RMSE^2)
                 mse_val = avg_rmse ** 2
-                csv_records.append({
-                    "timestamp": timestamp,
-                    "ckpt": ckpt,
-                    "datamodule": datamodule,
-                    "dataset": dataset,
-                    "RMSE": f"{avg_rmse:.6f}",
-                    "MSE": f"{mse_val:.6f}",
-                })
+                csv_records.append(
+                    {
+                        "timestamp": timestamp,
+                        "ckpt": ckpt,
+                        "datamodule": datamodule,
+                        "dataset": dataset,
+                        "RMSE": f"{avg_rmse:.6f}",
+                        "MSE": f"{mse_val:.6f}",
+                    }
+                )
     
     # Summary for regular evaluation
     if all_results:

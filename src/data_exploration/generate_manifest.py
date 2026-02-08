@@ -290,6 +290,111 @@ def generate_icassp_test_manifest(
     return n
 
 
+# ===== FULL EVAL MANIFEST (different directory structure) =====
+
+def _fulleval_expected_paths(
+    root: str,
+    task: str,
+    b: int,
+    ant: int,
+    f: int,
+    sp: int,
+    sparse_dir: str,
+):
+    """Generate expected paths for full eval data (different directory structure).
+    
+    Full eval structure:
+    - Inputs: root/Inputs/Task_X/
+    - Positions: root/Test_Data_Positions/
+    - Radiation: root/Test_Radiation_Patterns/
+    - Sparse: root/rate0.XX/sampledGT/
+    """
+    input_file = os.path.join(root, "Inputs", task, f"B{b}_Ant{ant}_f{f}_S{sp}.png")
+    position_file = os.path.join(root, "Test_Data_Positions", f"Positions_B{b}_Ant{ant}_f{f}.csv")
+    radiation_pattern_file = os.path.join(root, "Test_Radiation_Patterns", f"Ant{ant}_Pattern.csv")
+    
+    sparse_file = ""
+    if sparse_dir:
+        sparse_file = os.path.join(sparse_dir, f"B{b}_Ant{ant}_f{f}_S{sp}.png")
+    
+    return input_file, position_file, radiation_pattern_file, sparse_file
+
+
+def generate_fulleval_test_manifest(
+    root: str,
+    out_csv: str,
+    freqs_mhz: Sequence[float],
+    task: str,
+    sparse_dir: str,
+) -> int:
+    """
+    Generate test manifest for full evaluation data (different directory structure).
+    
+    Args:
+        root: Root directory of full eval data (e.g., /nfs/dgx/raid/iot/data/icassp2025fulleval)
+        out_csv: Output CSV path
+        freqs_mhz: List of frequencies in MHz (e.g., [868, 2400])
+        task: Task subfolder name (e.g., "Task_1", "Task_2", "Task_3")
+        sparse_dir: Optional path to sparse measurements directory
+    
+    Returns:
+        Number of rows written.
+    """
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+    
+    fieldnames = [
+        "file_name",
+        "building",
+        "antenna",
+        "sample_index",
+        "freq_mhz",
+        "input_file",
+        "output_file",
+        "position_file",
+        "radiation_pattern_file",
+    ]
+    if sparse_dir:
+        fieldnames.append("sparse_file")
+    
+    with open(out_csv, "w", newline="") as fp:
+        writer = csv.writer(fp)
+        writer.writerow(fieldnames)
+        n = 0
+        # Full eval has fewer buildings (6), antennas (up to 3), samples (up to 80)
+        # We iterate over reasonable ranges and check existence
+        for b in range(1, 26):
+            for ant in range(1, 6):
+                for f in range(1, 1 + len(freqs_mhz)):
+                    for sp in range(80):
+                        input_file, position_file, radiation_file, sparse_file = _fulleval_expected_paths(
+                            root=root,
+                            task=task,
+                            b=b,
+                            ant=ant,
+                            f=f,
+                            sp=sp,
+                            sparse_dir=sparse_dir,
+                        )
+                        if os.path.exists(input_file):
+                            file_name = os.path.basename(input_file)
+                            row = [
+                                file_name,
+                                b,
+                                ant,
+                                sp,
+                                float(freqs_mhz[f - 1]),
+                                input_file,
+                                "",  # output_file empty for test
+                                position_file,
+                                radiation_file,
+                            ]
+                            if sparse_dir:
+                                row.append(sparse_file)
+                            writer.writerow(row)
+                            n += 1
+    return n
+
+
 # ===== FILTER HELPERS (for per-run manifests) =====
 
 def filter_icassp_manifest(
