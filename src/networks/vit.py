@@ -52,6 +52,7 @@ class ViTModel(nn.Module):
         patch_size: int,
         embed_dim: int,
         decoder_channels: List[int],
+        **kwargs,
     ) -> None:
         super().__init__()
         

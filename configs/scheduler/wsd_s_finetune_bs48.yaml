@@ -1,0 +1,25 @@
+_target_: src.schedulers.wsd_s.WSDScheduler
+
+name: wsd_s_finetune_bs48
+warmup_steps: 20
+stable_steps:
+  - 60
+  - 80
+  - 160
+  - 320
+  - 640
+  - 1280
+  - 2560
+decay_steps:
+  - 20
+  - 20
+  - 40
+  - 80
+  - 160
+  - 320
+  - 640
+peak_lr: 0.0003
+min_lr_factor: 0.0
+last_epoch: -1
+interval: step
+frequency: 1

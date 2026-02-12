@@ -1,0 +1,41 @@
+# @package _global_
+defaults:
+  - trainer: default
+  - datamodule: icassp_task1
+  - optimizer: adam
+  - scheduler: icassp1_sd_finetune_32
+  - algorithm: indoor
+  - network: txunet
+  - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every_4, val_alias_e3 ]
+  - loggers: [ aim ]
+  - strategy: null
+  - _self_
+
+name: train
+seed: 42
+print_config: True
+ignore_warnings: True
+fast_dev: false
+
+ckpt_path: null
+load_weights_only: False
+
+trainer:
+  max_epochs: 32
+
+datamodule:
+  train_samples_per_epoch: 1000
+
+callbacks:
+  model_checkpoint_0:
+    dirpath: runs/icassp_task1/checkpoints/hard
+
+loggers:
+  aim:
+    experiment: v4_icassp_task1
+
+hydra:
+  run:
+    dir: ${oc.env:OUTPUT_DIR}/train/${now:%Y-%m-%d_%H-%M-%S.%f}
+  job:
+    chdir: True

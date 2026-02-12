@@ -13,9 +13,9 @@ split:
 predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 defaults:
-    - /exps/datamodule@datamodule: mlsp
-    - /exps/algorithm@algorithm: indoor
-    - /exps/network@network: txunet
+    - /datamodule@datamodule: mlsp
+    - /algorithm@algorithm: indoor
+    - /network@network: txunet
     - _self_
 
 datamodule:
@@ -25,6 +25,6 @@ datamodule:
 
 hydra:
     run:
-        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+        dir: ${oc.env:OUTPUT_DIR}/inference/${now:%Y-%m-%d_%H-%M-%S.%f}
     job:
         chdir: True

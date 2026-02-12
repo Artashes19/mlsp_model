@@ -12,9 +12,9 @@ split:
 predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 defaults:
-    - /exps/datamodule@datamodule: full_icassp_task2
-    - /exps/algorithm@algorithm: indoor
-    - /exps/network@network: txunet
+    - /datamodule@datamodule: full_icassp_task2
+    - /algorithm@algorithm: indoor
+    - /network@network: txunet
     - _self_
 
 datamodule:
@@ -23,6 +23,6 @@ datamodule:
 
 hydra:
     run:
-        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+        dir: ${oc.env:OUTPUT_DIR}/inference/${now:%Y-%m-%d_%H-%M-%S.%f}
     job:
         chdir: True

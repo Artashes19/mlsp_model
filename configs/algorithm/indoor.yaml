@@ -1,0 +1,42 @@
+_target_: src.algorithms.Indoor
+
+name: indoor
+
+out_norm: 160
+fixed_scale: False
+use_sip2net: False
+sip2net_params:
+  mse_weight: 0.02
+  alpha1: 500.0
+  alpha2: 1.0
+  alpha3: 0.0
+
+compiled:
+  _target_: src.utils.CompileParams
+  fullgraph: True
+  dynamic: False
+  backend: inductor
+  mode: max-autotune
+  options: null
+  disable: False
+
+finetune:
+  enable: False
+  # Path to pretrained checkpoint for weights-only loading (no optimizer state)
+  ckpt_path: null
+  # Encoder freeze schedule (epochs to keep encoder frozen at start)
+  freeze_encoder_epochs: 0
+  # BatchNorm recalibration on target data before training
+  bn_recalibration:
+    enable: False
+    num_batches: 200
+  # L2-SP regularization to pretrained weights
+  l2sp:
+    enable: False
+    alpha: 1e-4
+    include_patterns: [ "encoder" ]  # regex or substrings; empty means all
+    exclude_patterns: [ "bias", "bn", "running" ]
+  # Teacher output anchoring (distillation)
+  teacher_anchoring:
+    enable: False
+    alpha: 0.1

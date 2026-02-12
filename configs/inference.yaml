@@ -22,9 +22,9 @@ predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 # Defaults for model components
 defaults:
-  - /exps/datamodule@datamodule: indoor
-  - /exps/algorithm@algorithm: indoor
-  - /exps/network@network: txunet
+  - /datamodule@datamodule: indoor
+  - /algorithm@algorithm: indoor
+  - /network@network: txunet
   - _self_
 
 # Override datamodule for inference mode
@@ -35,6 +35,6 @@ datamodule:
 
 hydra:
   run:
-    dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+    dir: ${oc.env:OUTPUT_DIR}/inference/${now:%Y-%m-%d_%H-%M-%S.%f}
   job:
     chdir: True

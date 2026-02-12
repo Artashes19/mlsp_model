@@ -236,8 +236,8 @@ def evaluate(
 
 
 @hydra.main(
-    config_path="../configs/exps",
-    config_name="eval",
+    config_path="../configs",
+    config_name="train_eval",
     version_base="1.2"
 )
 def main(cfg: DictConfig) -> None:

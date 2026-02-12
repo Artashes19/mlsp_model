@@ -1,15 +1,14 @@
 import os
 import struct
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Sequence, Union
+from typing import Any, Sequence
 
 import fcntl
 import pytorch_lightning as pl
 import rich.syntax
 import rich.tree
 import termios
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.utilities import rank_zero_only
 
@@ -136,76 +135,3 @@ class CompileParams:
     disable: bool
 
 
-def load_experiment_config(
-    exp_cfg: DictConfig,
-    config_root: Union[str, Path] = "configs",
-) -> DictConfig:
-    """
-    Given a DictConfig for a single experiment (e.g. cfg.exps.e2),
-    read its `defaults` list, load the referenced YAML files from
-    `config_root`, and return a new DictConfig where those defaults
-    are merged and `exp_cfg` overrides them.
-
-    Notes:
-    - Handles simple dict entries like {'datamodule': 'indoor'}
-    - Handles list entries like {'callbacks': ['model_checkpoint_0', 'model_checkpoint_every']}
-    - Ignores `_self_` (we merge `exp_cfg` itself at the end)
-    """
-    
-    config_root = Path(config_root)
-    merged = OmegaConf.create()
-    
-    defaults = exp_cfg.get("defaults", [])
-    
-    # Override main entries in defaults with those from exp_cfg
-    for item in defaults:
-        if item == "_self_":
-            continue
-        for group, value in item.items():
-            if group in exp_cfg and isinstance(exp_cfg[group], str):
-                item[group] = exp_cfg[group]
-                exp_cfg.pop(group)
-    
-    for item in defaults:
-        if item == "_self_":
-            # We'll merge the experiment itself after defaults
-            continue
-        
-        if not isinstance(item, (dict, DictConfig)):
-            raise ValueError(f"Unsupported defaults entry: {item!r}")
-        
-        for group, value in item.items():
-            # Disabled entry: e.g. {'scheduler': null}
-            if value is None:
-                continue
-            
-            # List-style group: e.g. {'callbacks': ['model_checkpoint_0', 'every']}
-            if isinstance(value, (list, ListConfig)):
-                for v in value:
-                    cfg_path = config_root / group / f"{v}.yaml"
-                    if not cfg_path.is_file():
-                        raise FileNotFoundError(f"Config file not found: {cfg_path}")
-                    piece = OmegaConf.load(cfg_path)
-                    
-                    # We assume callbacks end up like callbacks.<name> = piece
-                    merged = OmegaConf.merge(merged, OmegaConf.create({group: {v: piece}}))
-            
-            else:
-                # Simple group: e.g. {'datamodule': 'indoor'}
-                cfg_path = config_root / group / f"{value}.yaml"
-                if not cfg_path.is_file():
-                    raise FileNotFoundError(f"Config file not found: {cfg_path}")
-                piece = OmegaConf.load(cfg_path)
-                
-                # Typical Hydra behavior without explicit @package:
-                # group name becomes the key: datamodule: <contents of indoor.yaml>
-                merged = OmegaConf.merge(merged, OmegaConf.create({group: piece}))
-    
-    # Now merge the experiment itself on top of all defaults
-    result = OmegaConf.merge(merged, exp_cfg)
-    
-    # Optionally drop the defaults key from the result
-    if "defaults" in result:
-        result.pop("defaults")
-    
-    return result

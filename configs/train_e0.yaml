@@ -1,0 +1,44 @@
+# @package _global_
+defaults:
+  - trainer: default
+  - datamodule: indoor
+  - optimizer: adam
+  - scheduler: null
+  - algorithm: indoor
+  - network: txunet
+  - callbacks: [ tqdm_progress_bar, model_checkpoint_0, early_stopping ]
+  - loggers: [ aim ]
+  - strategy: null
+  - _self_
+
+name: train
+seed: 42
+print_config: True
+ignore_warnings: True
+fast_dev: false
+
+ckpt_path: null
+load_weights_only: False
+
+datamodule:
+  name: icassp_train_small
+  use_small_train: True
+  train_samples_per_epoch: 960
+  # Modality dropout: prob of turning off one modality (trans+ref OR sparse)
+  modality_dropout_prob: 0.0
+  # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
+  sparse_dropout_given_dropout: 0.5
+
+callbacks:
+  model_checkpoint_0:
+    dirpath: runs/e0/checkpoints/hard
+
+loggers:
+  aim:
+    experiment: v4_e0
+
+hydra:
+  run:
+    dir: ${oc.env:OUTPUT_DIR}/train/${now:%Y-%m-%d_%H-%M-%S.%f}
+  job:
+    chdir: True

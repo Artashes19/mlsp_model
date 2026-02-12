@@ -32,6 +32,6 @@ synthetic_manifest_dir: ${oc.env:SYNTH_ROOT}/manifests
 
 hydra:
   run:
-    dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_manifest
+    dir: ${oc.env:OUTPUT_DIR}/manifest/${now:%Y-%m-%d_%H-%M-%S.%f}
   job:
     chdir: True

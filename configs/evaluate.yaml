@@ -12,6 +12,6 @@ out_norm: 160.0
 
 hydra:
     run:
-        dir: ${oc.env:OUTPUT_DIR}/${now:%Y-%m-%d_%H-%M-%S.%f}_inference
+        dir: ${oc.env:OUTPUT_DIR}/evaluate/${now:%Y-%m-%d_%H-%M-%S.%f}
     job:
         chdir: True

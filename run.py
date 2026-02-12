@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from omegaconf import DictConfig
 from pytorch_lightning import seed_everything
 
-from src.train import train_prep
+from src.train import train
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,9 @@ def main(config: DictConfig) -> None:
         warnings.filterwarnings("ignore")
     
     if config["name"] == "train":
-        return train_prep(config, project_root)
+        if config.get("print_config"):
+            utils.print_config(config, fields=tuple(config.keys()), resolve=True)
+        return train(config)
     elif config["name"] == "manifest":
         from src.manifest import manifest_prep
         

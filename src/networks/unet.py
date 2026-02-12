@@ -55,7 +55,13 @@ class ASPPModule(nn.Module):
 
 class UNetModel(nn.Module):
     
-    def __init__(self, n_channels, use_aspp: bool, resnet_size: int):
+    def __init__(
+        self,
+        n_channels: int,
+        use_aspp: bool,
+        resnet_size: int,
+        **kwargs,
+    ):
         super(UNetModel, self).__init__()
         
         self.unet = smp.Unet(
