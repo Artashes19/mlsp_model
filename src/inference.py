@@ -180,24 +180,18 @@ def save_prediction_png(
     out_norm: float,
 ) -> None:
     """
-    Save prediction as 16-bit grayscale PNG.
+    Save prediction as 8-bit grayscale PNG with raw dB values.
     
-    Stores raw dB values scaled to uint16 range for lossless recovery.
-    To recover: dB = (uint16_value / 65535) * out_norm
-    
-    Args:
-        pred: Prediction array (1, H, W) or (H, W), normalized [0, 1]
-        output_path: Output PNG file path
-        out_norm: Maximum expected path loss value in dB (e.g., 160.0)
+    Pixel value = dB value directly (no scaling).
     """
     if pred.ndim == 3:
         pred = pred.squeeze(0)
     
-    # Convert normalized [0,1] to dB scale, then scale to uint16 range
+    # Convert normalized [0,1] to dB and cast directly to uint8
     pred_db = pred * out_norm
-    pred_uint16 = (pred_db / out_norm * 65535).astype(np.uint16)
+    pred_uint8 = pred_db.astype(np.uint8)
     
-    img = Image.fromarray(pred_uint16, mode="I;16")
+    img = Image.fromarray(pred_uint8, mode="L")
     img.save(output_path)
 
 
