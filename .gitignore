@@ -72,3 +72,4 @@ test_outputs/
 temp_data/
 temp_overrides.sh
 test_runs/
+paper.tex
