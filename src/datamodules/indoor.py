@@ -37,23 +37,11 @@ class IndoorDatamodule(pl.LightningDataModule):
         synthetic_limit: Optional[int],
         train_samples_per_epoch: int,
         multi_gpu: bool,
-        channels: str,
         train_augmentations: Optional[AugmentationPipeline],
         test_manifest_path: Optional[list[str]],
         val_sparse_ranges: Optional[list[list[float]]] = None,
         **kwargs
     ):
-        # Validate and store channels configuration
-        valid_channels = "rtdgfmps"
-        if not channels:
-            raise ValueError("channels cannot be empty")
-        if len(channels) != len(set(channels)):
-            raise ValueError(f"channels cannot contain duplicates: {channels}")
-        invalid = set(channels) - set(valid_channels)
-        if invalid:
-            raise ValueError(f"Invalid channel letters: {invalid}. Valid letters: {valid_channels}")
-        self.channels = channels
-        
         self.freqs_mhz = freqs_mhz
         self.freqs = freqs
         self.data_dir = data_dir
@@ -91,7 +79,6 @@ class IndoorDatamodule(pl.LightningDataModule):
         
         # Store kwargs for dataset
         self.dataset_kwargs = kwargs
-        self.dataset_kwargs["channels"] = channels
         
         # Initialize base LightningDataModule
         super().__init__()
@@ -104,10 +91,10 @@ class IndoorDatamodule(pl.LightningDataModule):
         self._train_set = None
         self._test_sets: dict[str, PathlossDataset] = {}
         
-        # Three ICASSP validation sets with different channel configs
+        # Three ICASSP validation sets with different modality configs
         self._val_set_no_sparse = None       # sparse disabled
         self._val_set_no_trans_ref = None    # trans+ref disabled
-        self._val_set_all_enabled = None     # all channels enabled
+        self._val_set_all_enabled = None     # all modalities enabled
         self._val_sets: list[tuple[PathlossDataset, PathlossDataset, PathlossDataset]] = []
         
         # Three synthetic validation sets (when use_synthetic_train)
@@ -181,16 +168,16 @@ class IndoorDatamodule(pl.LightningDataModule):
         sparse_range: Optional[tuple[float, float]] = None,
     ) -> tuple[PathlossDataset, PathlossDataset, PathlossDataset]:
         """
-        Create three validation datasets with different channel configurations.
+        Create three validation datasets with different modality configurations.
         
         Args:
             val_inputs: List of input samples for validation.
         
         Returns:
             Tuple of (no_sparse, no_trans_ref, all_enabled) datasets:
-            - no_sparse: sparse channel disabled
+            - no_sparse: sparse disabled
             - no_trans_ref: transmittance and reflectance disabled
-            - all_enabled: all channels enabled
+            - all_enabled: all modalities enabled
         """
         dataset_kwargs = dict(self.dataset_kwargs)
         if sparse_range is not None:
@@ -410,7 +397,7 @@ class IndoorDatamodule(pl.LightningDataModule):
     
     def val_dataloader(self) -> list[DataLoader]:
         """
-        Returns validation dataloaders with different channel configurations.
+        Returns validation dataloaders with different modality configurations.
         
         Order:
         - Index 0: ICASSP, sparse disabled

@@ -18,7 +18,6 @@ from src.utils.indoor.channel_config import (
 )
 from src.utils.indoor.featurizer import featurizer
 from src.utils.indoor.types import RadarSampleInputs
-from src.utils.indoor.config_overrides import get_config
 
 INITIAL_PIXEL_SIZE = 0.25
 IMG_TARGET_SIZE = 256
@@ -35,7 +34,6 @@ class PathlossDataset(Dataset):
         sparse_range: list[float],
         modality_dropout_prob: float,
         sparse_dropout_given_dropout: float,
-        channels: str,
         force_drop_sparse: Optional[bool],
         force_drop_trans_ref: Optional[bool],
         **kwargs
@@ -47,9 +45,6 @@ class PathlossDataset(Dataset):
         self.sparse_range = sparse_range
         self.modality_dropout_prob = modality_dropout_prob
         self.sparse_dropout_given_dropout = sparse_dropout_given_dropout
-        
-        # Channel configuration (e.g., "rtdgfmps" for 10 channels with one-hot frequency)
-        self.channels = channels
         
         # Force dropout flags for validation sets
         self.force_drop_sparse = force_drop_sparse

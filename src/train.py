@@ -15,7 +15,7 @@ from src.algorithms.algorithm_base import AlgorithmBase
 from src.algorithms.indoor import Indoor
 from src.datamodules.indoor import IndoorDatamodule
 from src.utils import EpochCounter, log_hyperparameters
-from src.utils.indoor.featurizer import get_num_channels
+from src.utils.indoor.channel_config import NUM_CHANNELS
 
 log = logging.getLogger(__name__)
 
@@ -89,17 +89,15 @@ def train(config: DictConfig) -> str | None:
     
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
     
-    # Compute num_channels from datamodule.channels and inject into network config
-    if "network" in config and "datamodule" in config:
-        num_channels = get_num_channels(config.datamodule.channels)
-        # Update the appropriate parameter based on network type
+    # Inject num_channels into network config from channel_config
+    if "network" in config:
         if "in_ch" in config.network:
-            config.network.in_ch = num_channels
+            config.network.in_ch = NUM_CHANNELS
         if "n_channels" in config.network:
-            config.network.n_channels = num_channels
+            config.network.n_channels = NUM_CHANNELS
         if "in_chans" in config.network:
-            config.network.in_chans = num_channels
-        log.info(f"[network] input channels set to {num_channels} from datamodule.channels='{config.datamodule.channels}'")
+            config.network.in_chans = NUM_CHANNELS
+        log.info(f"[network] input channels set to {NUM_CHANNELS}")
     
     ft_conf = config.algorithm.get("finetune")
     if ft_conf and bool(ft_conf["enable"]):

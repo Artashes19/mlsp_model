@@ -23,7 +23,7 @@ hydra.core.global_hydra.GlobalHydra.instance().clear()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-@hydra.main(config_path="configs", config_name="train", version_base="1.2")
+@hydra.main(config_path="configs", version_base="1.2")
 def main(config: DictConfig) -> None:
     from src import utils
     

@@ -223,12 +223,11 @@ def evaluate_checkpoint(
         exp_name=exp_name,
         ckpt_path=ckpt_path,
     )
-    channels = str(datamodule_conf.channels)
     log.info(f"[{task_name}] Loading manifest: {manifest_path}")
     inputs_list = load_manifest(manifest_path=manifest_path)
     if len(inputs_list) == 0:
         raise RuntimeError(f"No valid inputs found in manifest: {manifest_path}")
-    log.info(f"[{task_name}] Building dataset: {len(inputs_list)} samples (channels={channels})")
+    log.info(f"[{task_name}] Building dataset: {len(inputs_list)} samples")
     dataset = PathlossDataset(
         inputs_list=inputs_list,
         training=False,
@@ -237,7 +236,6 @@ def evaluate_checkpoint(
         sparse_range=[0, 0],
         modality_dropout_prob=0,
         sparse_dropout_given_dropout=1.0,
-        channels=channels,
         force_drop_sparse=False,
         force_drop_trans_ref=False,
     )

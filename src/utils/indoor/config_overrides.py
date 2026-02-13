@@ -1,25 +1,20 @@
 """
-Centralized configuration overrides for korean-model equivalence testing.
+Centralized normalization configuration.
 
 Usage:
     Set env var INDOOR_OVERRIDES_CONFIG to path of a YAML file, e.g.:
-        export INDOOR_OVERRIDES_CONFIG=/path/to/korean_mode.yaml
+        export INDOOR_OVERRIDES_CONFIG=/path/to/normalization.yaml
     
-    If not set, defaults are used (torchvision resize, all 8 channels).
-
-Example YAML config (korean_mode.yaml):
-    channels: "rtd"
+    If not set, defaults are loaded from configs/indoor_normalization_unified.yaml.
 """
 import os
 from typing import Optional
 from dataclasses import dataclass, field
+
 import yaml
 
 # Environment variable name
 OVERRIDES_ENV_VAR = "INDOOR_OVERRIDES_CONFIG"
-
-# Default channels string (10 channels with one-hot frequency)
-DEFAULT_CHANNELS = "rtdgfmps"
 
 # Default normalization config path (unified)
 DEFAULT_NORMALIZATION_PATH = os.path.join(
@@ -31,26 +26,10 @@ DEFAULT_NORMALIZATION_PATH = os.path.join(
 
 @dataclass
 class OverridesConfig:
-    """All configurable overrides for korean-model equivalence."""
-    # Channels to use (default "rtdgfmps" = 10 channels)
-    # r=reflectance (1ch), t=transmittance (1ch), d=distance (1ch), g=antenna gain (1ch),
-    # f=frequency one-hot (3ch), m=mask (1ch), p=floor plan (1ch), s=sparse (1ch)
-    channels: str = DEFAULT_CHANNELS
-    
+    """Normalization configuration."""
     # Stats for standardize mode
     # Expected keys: r/t/s -> mean_nz,std_nz ; d -> log_mean,log_std
     normalization_stats: dict = field(default_factory=dict)
-    
-    @property
-    def num_channels(self) -> int:
-        """Number of channels (computed from channels string, 'f' counts as 3 for one-hot)."""
-        count = 0
-        for ch in self.channels:
-            if ch == "f":
-                count += 3  # one-hot frequency encoding
-            else:
-                count += 1
-        return count
 
 
 # Global singleton instance
@@ -65,20 +44,8 @@ def _load_config() -> OverridesConfig:
     with open(config_path, "r") as f:
         overrides = yaml.safe_load(f) or {}
     
-    # Support both old num_channels and new channels format
-    channels = overrides.get("channels", DEFAULT_CHANNELS)
-    if "num_channels" in overrides and "channels" not in overrides:
-        num_ch = int(overrides["num_channels"])
-        if num_ch == 3:
-            channels = "rtd"
-        elif num_ch == 9:
-            channels = DEFAULT_CHANNELS
-        else:
-            channels = DEFAULT_CHANNELS[:num_ch]
-    
     normalization_stats = overrides.get("normalization_stats", {}) or {}
     config = OverridesConfig(
-        channels=channels,
         normalization_stats=normalization_stats,
     )
     print(f"[config_overrides] Loaded from {config_path}: {config}")

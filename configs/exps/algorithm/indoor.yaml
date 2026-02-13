@@ -34,8 +34,8 @@ finetune:
   l2sp:
     enable: False
     alpha: 1e-4
-    include_patterns: [ "encoder" ]  # regex or substrings; empty means all
-    exclude_patterns: [ "bias", "bn", "running" ]
+    include_patterns: []
+    exclude_patterns: []
   # Teacher output anchoring (distillation)
   teacher_anchoring:
     enable: False

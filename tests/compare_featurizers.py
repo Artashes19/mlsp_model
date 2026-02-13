@@ -55,11 +55,11 @@ def _ensure_korean_worktree(repo_root: Path, worktree_path: Path, branch: str = 
     _run_cmd(["git", "worktree", "add", str(worktree_path), branch], cwd=repo_root)
 
 
-def run_devbugfix(channels: str):
+def run_devbugfix():
     """Run devbugfix_khoren's REAL PathlossDataset pipeline."""
     sys.path.insert(0, str(REPO_ROOT))
     
-    print(f"Running devbugfix_khoren PathlossDataset (channels={channels})...")
+    print("Running devbugfix_khoren PathlossDataset...")
     
     from src.datamodules.indoor import IndoorDatamodule
     from src.datamodules.datasets.indoor import PathlossDataset
@@ -87,7 +87,6 @@ def run_devbugfix(channels: str):
         sparse_range=[0.0, 0.0],
         modality_dropout_prob=0.0,  # No dropout
         sparse_dropout_given_dropout=0.0,
-        channels=channels,
     )
     
     results = {}
@@ -296,7 +295,6 @@ def main():
     parser.add_argument("--run-korean", action="store_true", help="Run korean-model data loader")
     parser.add_argument("--run-korean-local", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--compare", action="store_true", help="Compare saved outputs")
-    parser.add_argument("--channels", type=str, default="rtd", help="Channels for devbugfix run")
     args = parser.parse_args()
     
     if args.run_korean_local:
@@ -308,7 +306,7 @@ def main():
         return 1
     
     if args.run_devbugfix:
-        run_devbugfix(args.channels)
+        run_devbugfix()
     if args.run_korean:
         if _has_korean_module(REPO_ROOT):
             run_korean()

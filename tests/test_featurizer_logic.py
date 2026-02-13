@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
 from src.utils.indoor.types import RadarSample
-from src.utils.indoor.featurizer import featurizer, normalize_input, get_num_channels
+from src.utils.indoor.featurizer import featurizer, normalize_input
 from src.utils.indoor.channel_config import (
     # Input channel indices
     INPUT_REFLECTANCE_CHANNEL,

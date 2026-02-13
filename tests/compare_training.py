@@ -41,11 +41,6 @@ SEED = 42
 NUM_TRAIN_SAMPLES = 8
 NUM_VAL_SAMPLES = 2
 
-# Korean-model uses RGB inputs only: R, T, D (see korean-model:data/dataset.py)
-KOREAN_CHANNELS = "rtd"
-# Constrain dev channels to be a subset of korean-model channels
-DEV_CHANNELS = "rtd"
-
 # Precision setting (can be overridden via --precision flag or COMPARE_TRAINING_PRECISION env var)
 # Valid values: "32", "16", "bf16-mixed"
 PRECISION = os.environ.get("COMPARE_TRAINING_PRECISION", "bf16-mixed")
@@ -105,7 +100,6 @@ def verify_samples_have_full_mask(icassp_root: Path, sample_names: list[str]) ->
         sparse_range=[0.0, 0.0],
         modality_dropout_prob=0.0,
         sparse_dropout_given_dropout=0.0,
-        channels=DEV_CHANNELS,
     )
     
     verified = []
@@ -138,13 +132,6 @@ def run_devbugfix():
     DEVBUGFIX_DIR.mkdir(parents=True, exist_ok=True)
     KOREAN_DIR.mkdir(parents=True, exist_ok=True)
     
-    if not set(DEV_CHANNELS).issubset(set(KOREAN_CHANNELS)):
-        raise ValueError(
-            f"DEV_CHANNELS must be a subset of KOREAN_CHANNELS. "
-            f"DEV_CHANNELS={DEV_CHANNELS}, KOREAN_CHANNELS={KOREAN_CHANNELS}"
-        )
-    print(f"Using dev channels: {DEV_CHANNELS} (subset of korean: {KOREAN_CHANNELS})")
-
     icassp_root = Path(os.environ.get("ICASSP_ORIG_PATH", ""))
     
     # Create verified data subset (same samples will be used by both branches)
@@ -201,8 +188,6 @@ def run_devbugfix():
         f"++exps.e0.datamodule.synthetic_val_manifest_path={manifest_path}",
         # Force use_small_train=false so it uses our train_manifest_path
         "++exps.e0.datamodule.use_small_train=false",
-        # Force dev channels to match korean-model subset
-        f"++exps.e0.datamodule.channels={DEV_CHANNELS}",
         # Training settings
         f"++exps.e0.trainer.max_epochs={NUM_EPOCHS}",
         f"++exps.e0.trainer.precision={PRECISION}",  # Precision: 32, 16, or bf16-mixed

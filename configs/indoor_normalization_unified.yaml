@@ -1,4 +1,3 @@
-channels: "rtdgfmps"
 normalization_stats:
   r:
     mean_nz: 3.236292362213135
