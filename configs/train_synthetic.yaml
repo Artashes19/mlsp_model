@@ -1,4 +1,14 @@
 # @package _global_
+name: train
+seed: 42
+print_config: True
+ignore_warnings: True
+fast_dev: false
+
+# training uses synthetic only; validation uses ICASSP via data_dir
+ckpt_path: null
+load_weights_only: False
+
 defaults:
   - trainer: default
   - datamodule: synthetic
@@ -10,16 +20,6 @@ defaults:
   - loggers: [ aim ]
   - strategy: null
   - _self_
-
-name: train
-seed: 42
-print_config: True
-ignore_warnings: True
-fast_dev: false
-
-# training uses synthetic only; validation uses ICASSP via data_dir
-ckpt_path: null
-load_weights_only: False
 
 trainer:
   _target_: pytorch_lightning.Trainer

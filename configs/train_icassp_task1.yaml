@@ -1,4 +1,13 @@
 # @package _global_
+name: train
+seed: 42
+print_config: True
+ignore_warnings: True
+fast_dev: false
+
+ckpt_path: null
+load_weights_only: False
+
 defaults:
   - trainer: default
   - datamodule: icassp_task1
@@ -10,15 +19,6 @@ defaults:
   - loggers: [ aim ]
   - strategy: null
   - _self_
-
-name: train
-seed: 42
-print_config: True
-ignore_warnings: True
-fast_dev: false
-
-ckpt_path: null
-load_weights_only: False
 
 trainer:
   _target_: pytorch_lightning.Trainer
