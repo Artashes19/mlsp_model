@@ -491,6 +491,7 @@ class TxUNetModel(nn.Module):
         window0_stride: int | None = None,
         sra0_enabled: bool = False,
         sra0_stride: int = 2,
+        **kwargs,
     ) -> None:
         super().__init__()
         c = base_ch

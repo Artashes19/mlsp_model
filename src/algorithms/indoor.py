@@ -395,6 +395,7 @@ class Indoor(AlgorithmBase):
             return super().configure_optimizers()
         
         optimizer_conf: DictConfig = OmegaConf.create(self._optimizer_conf)
+        optimizer_conf.pop("name", None)
         base_lr: float = float(optimizer_conf["lr"]) if "lr" in optimizer_conf else 3e-4
         
         params_all: list[nn.Parameter] = [
@@ -427,6 +428,7 @@ class Indoor(AlgorithmBase):
         
         if self._scheduler_conf is not None:
             scheduler_conf: DictConfig = OmegaConf.create(self._scheduler_conf)
+            scheduler_conf.pop("name", None)
             monitor = scheduler_conf.get("monitor", None)
             if "monitor" in scheduler_conf:
                 del scheduler_conf["monitor"]

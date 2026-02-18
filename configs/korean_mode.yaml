@@ -1,9 +1,0 @@
-# Korean-model equivalence overrides
-# Use with: export INDOOR_OVERRIDES_CONFIG=configs/korean_mode.yaml
-
-# Use PIL resize (matches korean-model exactly)
-resize_backend: pil
-
-# Use 3 channels only: R, T, D (no antenna gain, FSPL, sparse, etc.)
-# r=reflectance, t=transmittance, d=distance
-channels: "rtd"

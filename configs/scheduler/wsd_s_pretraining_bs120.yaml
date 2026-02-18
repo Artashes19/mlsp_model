@@ -1,0 +1,25 @@
+_target_: src.schedulers.wsd_s.WSDScheduler
+
+name: wsd_s_pretraining_bs120
+warmup_steps: 52
+stable_steps:
+  - 416
+  - 416
+  - 832
+  - 1664
+  - 3328
+  - 6656
+  - 13312
+decay_steps:
+  - 52
+  - 104
+  - 208
+  - 416
+  - 832
+  - 1664
+  - 3328
+peak_lr: 0.0015
+min_lr_factor: 0.0
+last_epoch: -1
+interval: step
+frequency: 1

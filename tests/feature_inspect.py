@@ -145,9 +145,6 @@ def main() -> None:
         )
         inputs_list = sorted(inputs_list, key=lambda x: x["file_name"])[: args.num_samples]
 
-    # Default channels string for featurizer (all channels enabled)
-    channels = "rtdgfmps"
-    
     dataset = PathlossDataset(
         inputs_list=inputs_list,
         training=False,
@@ -156,7 +153,6 @@ def main() -> None:
         sparse_range=list(args.sparse_range),
         modality_dropout_prob=args.modality_dropout_prob,
         sparse_dropout_given_dropout=args.sparse_dropout_given_dropout,
-        channels=channels,
         force_drop_sparse=False,
         force_drop_trans_ref=False,
     )

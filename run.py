@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from omegaconf import DictConfig
 from pytorch_lightning import seed_everything
 
-from src.train import train_prep
+from src.train import train
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ hydra.core.global_hydra.GlobalHydra.instance().clear()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-@hydra.main(config_path="configs", config_name="train", version_base="1.2")
+@hydra.main(config_path="configs", version_base="1.2")
 def main(config: DictConfig) -> None:
     from src import utils
     
@@ -55,7 +55,9 @@ def main(config: DictConfig) -> None:
         warnings.filterwarnings("ignore")
     
     if config["name"] == "train":
-        return train_prep(config, project_root)
+        if config.get("print_config"):
+            utils.print_config(config, fields=tuple(config.keys()), resolve=True)
+        return train(config)
     elif config["name"] == "manifest":
         from src.manifest import manifest_prep
         

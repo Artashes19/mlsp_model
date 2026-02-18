@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
 from src.utils.indoor.types import RadarSample
-from src.utils.indoor.featurizer import featurizer, normalize_input, get_num_channels
+from src.utils.indoor.featurizer import featurizer, normalize_input
 from src.utils.indoor.channel_config import (
     # Input channel indices
     INPUT_REFLECTANCE_CHANNEL,
@@ -742,33 +742,23 @@ class TestFeaturizerWithRealData(unittest.TestCase):
     
     def _get_config(self, experiment_name: str):
         """
-        Load experiment config the same way run.py does:
-        1. Load base train.yaml config via Hydra (which includes all experiments via defaults)
-        2. Convert to container to remove struct mode (like run.py clone_cfg)
-        3. Extract the specific experiment config (cfg.exps.e0, cfg.exps.e1, etc.)
-        4. Use load_experiment_config to resolve defaults (datamodule, trainer, etc.)
-        5. Wire up manifest paths from CLI args
+        Load experiment config via Hydra compose using the standalone train_* configs.
+        Wire up manifest paths from CLI args.
         """
         from omegaconf import OmegaConf
         from hydra import compose
         from hydra.core.global_hydra import GlobalHydra
-        from src.utils import load_experiment_config
         
         GlobalHydra.instance().clear()
         config_dir = str(PROJECT_ROOT / "configs")
         self.initialize_config_dir(config_dir=config_dir, version_base=None)
         
-        # Load base config (train.yaml) - this includes all experiments via defaults
-        cfg = compose(config_name="train")
+        # Load the standalone training config directly (e.g. train_e0, train_e1, etc.)
+        config_name = f"train_{experiment_name}"
+        cfg = compose(config_name=config_name)
         
-        # Convert to container and recreate to remove struct mode (same as run.py clone_cfg)
-        cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
-        
-        # Extract experiment-specific config from cfg.exps
-        exp_cfg_raw = OmegaConf.create(OmegaConf.to_container(cfg.exps[experiment_name], resolve=True))
-        
-        # Use load_experiment_config to resolve defaults (datamodule, trainer, etc.)
-        exp_cfg = load_experiment_config(exp_cfg_raw, config_root=PROJECT_ROOT / "configs" / "exps")
+        # Convert to container and recreate to remove struct mode
+        exp_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
         
         # Wire up manifest paths from CLI args (use ICASSP for train/val, synthetic for e2)
         if experiment_name in ("e0", "e1"):

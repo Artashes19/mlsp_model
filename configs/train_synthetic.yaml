@@ -1,0 +1,157 @@
+# @package _global_
+name: train
+seed: 42
+print_config: True
+ignore_warnings: True
+fast_dev: false
+
+# training uses synthetic only; validation uses ICASSP via data_dir
+ckpt_path: null
+load_weights_only: False
+
+defaults:
+  - trainer: default
+  - datamodule: synthetic
+  - optimizer: adam
+  - scheduler: null
+  - algorithm: indoor
+  - network: txunet
+  - callbacks: [ tqdm_progress_bar, model_checkpoint_0, model_checkpoint_every ]
+  - loggers: [ aim ]
+  - strategy: null
+  - _self_
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  accelerator: gpu
+  devices: [ 0 ]
+  use_distributed_sampler: True
+  precision: bf16-mixed
+  max_epochs: 20
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  num_sanity_val_steps: 0
+
+datamodule:
+  _target_: src.datamodules.IndoorDatamodule
+  name: synth_only_pretrain
+  batch_size: 24
+  num_workers: 20
+  data_dir: ${oc.env:ICASSP_ORIG_PATH}
+  synthetic_dir: ${oc.env:SYNTH_ROOT}
+  inference: False
+  freqs_mhz: [ 868, 1800, 3500 ]
+  freqs: [ 1, 2, 3 ]
+  sparse_range: [ 0.0, 0.01 ]
+  modality_dropout_prob: 0.6666
+  # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
+  sparse_dropout_given_dropout: 0.5
+  train_augmentations:
+    _target_: src.utils.indoor.augmentations.AugmentationPipeline
+    augmentations:
+      - _target_: src.utils.indoor.augmentations.CardinalRotationAugmentation
+        p: 1.0
+  use_synthetic_train: True
+  use_small_train: False
+  train_manifest_path: ${oc.env:ICASSP_TRAIN_MANIFEST}
+  train_small_manifest_path: ${oc.env:ICASSP_TRAIN_SMALL_MANIFEST}
+  val_manifest_path: ${oc.env:ICASSP_VAL_MANIFEST}
+  synthetic_manifest_path: ${oc.env:SYNTH_TRAIN_MANIFEST}
+  synthetic_val_manifest_path: ${oc.env:SYNTH_VAL_MANIFEST}
+  test_manifest_path: []
+  synthetic_limit: null
+  train_samples_per_epoch: 6240
+  multi_gpu: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  name: adam
+  lr: 3e-4
+
+algorithm:
+  _target_: src.algorithms.Indoor
+  name: indoor
+  out_norm: 160
+  fixed_scale: False
+  use_sip2net: False
+  sip2net_params:
+    mse_weight: 0.02
+    alpha1: 500.0
+    alpha2: 1.0
+    alpha3: 0.0
+  compiled:
+    _target_: src.utils.CompileParams
+    fullgraph: True
+    dynamic: False
+    backend: inductor
+    mode: max-autotune
+    options: null
+    disable: False
+  finetune:
+    enable: False
+    ckpt_path: null
+    freeze_encoder_epochs: 0
+    bn_recalibration:
+      enable: False
+      num_batches: 200
+    l2sp:
+      enable: False
+      alpha: 1e-4
+      include_patterns: []
+      exclude_patterns: []
+    teacher_anchoring:
+      enable: False
+      alpha: 0.1
+
+network:
+  _target_: src.networks.TxUNetModel
+  name: txunet
+  in_ch: 11
+  out_ch: 1
+  base_ch: 48
+  depths: [ 4, 6, 6, 8 ]
+  heads: [ 4, 4, 8, 8 ]
+  expand: 2.66
+  use_checkpoint: False
+  ln_eps: 1e-5
+  window0: null
+  window0_stride: null
+  sra0_enabled: True
+  sra0_stride: 4
+
+callbacks:
+  tqdm_progress_bar:
+    _target_: pytorch_lightning.callbacks.TQDMProgressBar
+  model_checkpoint_0:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    monitor: val_3_loss  # overrides
+    mode: min
+    save_top_k: 1
+    save_last: True
+    verbose: False
+    dirpath: synthetic/checkpoints/hard  # overrides
+    filename: epoch_{epoch:04d}
+    auto_insert_metric_name: False
+  model_checkpoint_every:
+    _target_: src.utils.scheduled_checkpoint.ScheduledEpochModelCheckpoint
+    monitor: null
+    save_top_k: -1
+    save_last: true
+    verbose: false
+    dirpath: synthetic/checkpoints/every  # overrides
+    filename: epoch_{epoch:04d}_every
+    auto_insert_metric_name: false
+    schedule_epochs: [ 9, 19, 39, 79, 159, 319, 639 ]
+
+loggers:
+  aim:
+    _target_: aim.pytorch_lightning.AimLogger
+    repo: ${oc.env:AIM_REPO}
+    experiment: v4_synthetic  # overrides
+
+hydra:
+  run:
+    dir: ${oc.env:OUTPUT_DIR}/train/${now:%Y-%m-%d_%H-%M-%S.%f}
+  job:
+    chdir: True

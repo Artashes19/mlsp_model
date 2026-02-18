@@ -1,0 +1,13 @@
+_target_: src.schedulers.wsd_s.WSDScheduler
+
+name: wsd_finetune_bs60
+warmup_steps: 256
+stable_steps:
+  - 3584
+decay_steps:
+  - 1280
+peak_lr: 0.0006
+min_lr_factor: 0.1
+last_epoch: -1
+interval: step
+frequency: 1

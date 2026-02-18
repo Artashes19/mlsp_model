@@ -81,11 +81,8 @@ def encode_frequency_fourier(freq_mhz: float) -> tuple:
     return tuple(activations)
 
 
-def get_num_channels(channels: str = None) -> int:
-    """
-    Return the number of channels from channel_config.
-    The channels parameter is deprecated and ignored - use channel_config.CHANNEL_ORDER instead.
-    """
+def get_num_channels() -> int:
+    """Return the number of channels from channel_config.CHANNEL_ORDER."""
     return NUM_CHANNELS
 
 

@@ -66,8 +66,10 @@ class AlgorithmBase(pl.LightningModule):
         return self._network
     
     def configure_optimizers(self):
+        optimizer_conf = OmegaConf.create(self._optimizer_conf)
+        optimizer_conf.pop("name", None)
         optimizer = hydra.utils.instantiate(
-            OmegaConf.create(self._optimizer_conf),
+            optimizer_conf,
             params=filter(lambda p: p.requires_grad, self.parameters()),
         )
         try:
@@ -80,6 +82,7 @@ class AlgorithmBase(pl.LightningModule):
         ret_opt = {"optimizer": optimizer}
         if self._scheduler_conf is not None:
             scheduler_conf = OmegaConf.create(self._scheduler_conf)
+            scheduler_conf.pop("name", None)
             # Get monitor if exists, else None
             monitor = scheduler_conf.get("monitor", None)
             if "monitor" in scheduler_conf:

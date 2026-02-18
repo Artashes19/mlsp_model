@@ -14,85 +14,59 @@ from pytorch_lightning.strategies import ParallelStrategy
 from src.algorithms.algorithm_base import AlgorithmBase
 from src.algorithms.indoor import Indoor
 from src.datamodules.indoor import IndoorDatamodule
-from src.utils import EpochCounter, load_experiment_config, log_hyperparameters, print_config
-from src.utils.indoor.featurizer import get_num_channels
+from src.utils import EpochCounter, log_hyperparameters
+from src.utils.indoor.channel_config import NUM_CHANNELS
 
 log = logging.getLogger(__name__)
 
 
-def clone_cfg(cfg: DictConfig) -> DictConfig:
-    return OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
-
-
-def train_prep(config: DictConfig, project_root: str):
-    # Orchestrated multi-experiment run
-    raw_exps = config.get("exps", "")
-    exp_list = [str(x).strip() for x in raw_exps if str(x).strip()]
-    
-    for exp in exp_list:
-        cfg_e = clone_cfg(config["exps"][exp])
-        config["exps"][exp] = load_experiment_config(cfg_e, config_root=os.path.join(project_root, "configs/exps"))
-    
-    if config.get("print_config"):
-        print_config(config, fields=tuple(config.keys()), resolve=True)
-    
-    # Fast-dev toggle
-    fast_dev = bool(config.get("fast_dev")) or bool(os.environ.get("FAST_DEV"))
-    if fast_dev:
-        log.info("[orchestrator] fast_dev enabled: will cap epochs/batches for quick smoke run")
-    for exp in exp_list:
-        cfg_e = clone_cfg(config["exps"][exp])
-        log.info(
-            f"[trainer@{exp}] devices={cfg_e.trainer.devices}, accelerator={cfg_e.trainer.accelerator}, "
-            f"precision={cfg_e.trainer.precision}, max_epochs={cfg_e.trainer.max_epochs}"
-        )
-        
-        if fast_dev:
-            cfg_e.trainer.max_epochs = 1
-            cfg_e.trainer.limit_train_batches = 4
-            cfg_e.trainer.limit_val_batches = 2
-        
-        # Enforce required data roots (no fallbacks)
-        data_dir_req = cfg_e.datamodule.get("data_dir")
-        data_dir_req = os.path.expanduser(str(data_dir_req)) if data_dir_req is not None else ""
-        if not data_dir_req or not os.path.isdir(data_dir_req):
-            raise RuntimeError(
-                f"datamodule.data_dir must point to an existing ICASSP root. Got: {cfg_e.datamodule.get('data_dir')}"
-            )
-        if exp == "e2":
-            synth_dir_req = cfg_e.datamodule.get("synthetic_dir")
-            synth_dir_req = os.path.expanduser(str(synth_dir_req)) if synth_dir_req is not None else ""
-            if not synth_dir_req or not os.path.isdir(synth_dir_req):
-                raise RuntimeError(
-                    f"datamodule.synthetic_dir must point to an existing synthetic root for e2. Got: {cfg_e.datamodule.get('synthetic_dir')}"
-                )
-        
-        # Summarize datamodule plan for this experiment
-        try:
-            dm = cfg_e.datamodule
-            plan = dict(
-                use_synthetic_train=bool(dm.get("use_synthetic_train", False)),
-                train_manifest_path=dm.get("train_manifest_path", None),
-                val_manifest_path=dm.get("val_manifest_path", None),
-                synthetic_manifest_path=dm.get("synthetic_manifest_path", None),
-                data_dir=dm.get("data_dir", None),
-                synthetic_dir=dm.get("synthetic_dir", None),
-            )
-            log.info(f"[datamodule@{exp}] plan={plan}")
-        except Exception:
-            pass
-        
-        t0 = time.perf_counter()
-        best = train(cfg_e)
-        log.info(f"[train@{exp}] finished in {(time.perf_counter() - t0):.2f}s; best_checkpoint={best}")
-    return None
-
-
 def train(config: DictConfig) -> str | None:
+    # ── fast_dev toggle ──────────────────────────────────────────────────
+    fast_dev = bool(config.get("fast_dev"))
+    if fast_dev:
+        log.info("[train] fast_dev enabled: will cap epochs/batches for quick smoke run")
+        config.trainer.max_epochs = 1
+        config.trainer.limit_train_batches = 4
+        config.trainer.limit_val_batches = 2
+    
+    # ── Trainer config logging ───────────────────────────────────────────
+    log.info(
+        f"[trainer] devices={config.trainer.devices}, accelerator={config.trainer.accelerator}, "
+        f"precision={config.trainer.precision}, max_epochs={config.trainer.max_epochs}"
+    )
+    
+    # ── Data dir validation ──────────────────────────────────────────────
+    data_dir_req = config.datamodule.get("data_dir")
+    data_dir_req = os.path.expanduser(str(data_dir_req)) if data_dir_req is not None else ""
+    if not data_dir_req or not os.path.isdir(data_dir_req):
+        raise RuntimeError(
+            f"datamodule.data_dir must point to an existing ICASSP root. Got: {config.datamodule.get('data_dir')}"
+        )
+    if bool(config.datamodule.get("use_synthetic_train", False)):
+        synth_dir_req = config.datamodule.get("synthetic_dir")
+        synth_dir_req = os.path.expanduser(str(synth_dir_req)) if synth_dir_req is not None else ""
+        if not synth_dir_req or not os.path.isdir(synth_dir_req):
+            raise RuntimeError(
+                f"datamodule.synthetic_dir must point to an existing synthetic root. "
+                f"Got: {config.datamodule.get('synthetic_dir')}"
+            )
+    
+    # ── Datamodule plan logging ──────────────────────────────────────────
+    dm = config.datamodule
+    plan = dict(
+        use_synthetic_train=bool(dm.get("use_synthetic_train", False)),
+        train_manifest_path=dm.get("train_manifest_path", None),
+        val_manifest_path=dm.get("val_manifest_path", None),
+        synthetic_manifest_path=dm.get("synthetic_manifest_path", None),
+        data_dir=dm.get("data_dir", None),
+        synthetic_dir=dm.get("synthetic_dir", None),
+    )
+    log.info(f"[datamodule] plan={plan}")
+    
+    # ── Begin training setup ─────────────────────────────────────────────
     epoch_counter = EpochCounter()
     start_time = time.time()
-    exp_name = config.get("exp_name")
-    finetune_from = config.get("ckpt_path") if exp_name == "e3" else None
+    finetune_from = config.get("ckpt_path") if config.get("load_weights_only") else None
     gpus = config.trainer.devices
     multi_gpu = gpus == -1 or (isinstance(gpus, Iterable) and len(gpus) > 1) or (isinstance(gpus, int) and gpus > 1)
     
@@ -115,17 +89,15 @@ def train(config: DictConfig) -> str | None:
     
     log.info(f"Instantiating algorithm {config.algorithm._target_}")
     
-    # Compute num_channels from datamodule.channels and inject into network config
-    if "network" in config and "datamodule" in config:
-        num_channels = get_num_channels(config.datamodule.channels)
-        # Update the appropriate parameter based on network type
+    # Inject num_channels into network config from channel_config
+    if "network" in config:
         if "in_ch" in config.network:
-            config.network.in_ch = num_channels
+            config.network.in_ch = NUM_CHANNELS
         if "n_channels" in config.network:
-            config.network.n_channels = num_channels
+            config.network.n_channels = NUM_CHANNELS
         if "in_chans" in config.network:
-            config.network.in_chans = num_channels
-        log.info(f"[network] input channels set to {num_channels} from datamodule.channels='{config.datamodule.channels}'")
+            config.network.in_chans = NUM_CHANNELS
+        log.info(f"[network] input channels set to {NUM_CHANNELS}")
     
     ft_conf = config.algorithm.get("finetune")
     if ft_conf and bool(ft_conf["enable"]):
@@ -193,7 +165,9 @@ def train(config: DictConfig) -> str | None:
     
     if "strategy" in config:
         log.info(f"Instantiating strategy <{config.strategy}>")
-        strategy: Optional[ParallelStrategy] = hydra.utils.instantiate(config.strategy)
+        strategy_conf = OmegaConf.create(OmegaConf.to_container(config.strategy, resolve=True))
+        strategy_conf.pop("name", None)
+        strategy: Optional[ParallelStrategy] = hydra.utils.instantiate(strategy_conf)
     else:
         if multi_gpu:
             log.error("In case of using multiple GPUs, you must provide a strategy")
