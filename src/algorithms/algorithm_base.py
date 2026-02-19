@@ -54,12 +54,16 @@ class AlgorithmBase(pl.LightningModule):
         self._should_count_flops = True  # Only count once, during first training step
         self._num_flops_train = None
         self._num_flops_val = None
+        self._num_flops_backward = None
         self._last_elapsed_ms = None
+        self._last_backward_ms = None
         self._is_compiled = False
         self._compiled_forward = None
         self._original_forward = None
         self._start = torch.cuda.Event(enable_timing=True)
         self._end = torch.cuda.Event(enable_timing=True)
+        self._start_backward = torch.cuda.Event(enable_timing=True)
+        self._end_backward = torch.cuda.Event(enable_timing=True)
     
     @property
     def network(self) -> nn.Module:
@@ -207,8 +211,26 @@ class AlgorithmBase(pl.LightningModule):
     def _step(self, batch, *args, **kwargs):
         raise NotImplementedError
     
-    def __step(self, batch, split_name):
+    def __step(self, batch, split_name, dataloader_idx: int = 0):
         output = self._step(batch, split_name)
+        
+        # After first forward (FLOPs measured), measure backward FLOPS on first train step
+        if (
+            split_name == "train"
+            and self._num_flops_backward is None
+            and self._num_flops_train is not None
+            and self.global_rank == 0
+        ):
+            flop_counter = FlopCounterMode(display=False, depth=1)
+            with flop_counter:
+                output_measure = self._step(batch, split_name)
+                output_measure["loss"].backward()
+            total_flops = flop_counter.get_total_flops()
+            self._num_flops_backward = total_flops - self._num_flops_train
+            log.info(
+                f"[FLOPs] Measured network FLOPs (backward): {self._num_flops_backward:.2e}"
+            )
+            self.optimizers().zero_grad(set_to_none=True)
         
         # After first forward (FLOPs measured), compile the network
         if not self._is_compiled and not self._compile.disable:
@@ -216,14 +238,19 @@ class AlgorithmBase(pl.LightningModule):
         
         # Select the appropriate FLOP count based on phase
         is_training = split_name == "train"
+        # FLOPS only for first validation set (dataloader_idx 0)
+        should_compute_flops = is_training or (split_name == "val" and dataloader_idx == 0)
         num_flops = self._num_flops_train if is_training else self._num_flops_val
         
-        # Calculate FLOP/s using cached FLOPs and timing from network forward
-        if num_flops is not None and self._last_elapsed_ms is not None and self._last_elapsed_ms > 0:
-            flops = num_flops / (self._last_elapsed_ms / 1000)
-            output["flops"] = flops
+        # Calculate flops_forward; val uses it as flops_overall; train gets overall in on_train_batch_end
+        forward_time_s = self._last_elapsed_ms / 1000.0 if self._last_elapsed_ms else None
+        if should_compute_flops and num_flops is not None and forward_time_s is not None and forward_time_s > 0:
+            flops_forward = num_flops / forward_time_s
+            output["flops_forward"] = flops_forward
+            if not is_training:
+                output["flops_overall"] = flops_forward
             progress_bar_dict = {
-                "flops": flops,
+                "flops_forward": flops_forward,
                 "loss": output["loss"].item(),
             }
             self.trainer.progress_bar_metrics.update(progress_bar_dict)
@@ -238,8 +265,25 @@ class AlgorithmBase(pl.LightningModule):
         
         return output_dict
     
+    def on_before_backward(self, loss: torch.Tensor) -> None:
+        self._start_backward.record()
+    
+    def on_after_backward(self) -> None:
+        self._end_backward.record()
+        torch.cuda.synchronize()
+        self._last_backward_ms = self._start_backward.elapsed_time(self._end_backward)
+    
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
+        # Add flops_backward and flops_overall for train (backward time now available)
+        if "flops_forward" in outputs:
+            backward_time_s = self._last_backward_ms / 1000.0
+            flops_backward = self._num_flops_backward / backward_time_s
+            outputs["flops_backward"] = flops_backward
+            forward_time_s = self._last_elapsed_ms / 1000.0
+            total_flops = self._num_flops_train + self._num_flops_backward
+            total_time_s = forward_time_s + backward_time_s
+            outputs["flops_overall"] = total_flops / total_time_s
         self.training_step_outputs.append(outputs)
     
     def on_validation_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
@@ -254,8 +298,8 @@ class AlgorithmBase(pl.LightningModule):
         output = self.__step(batch, split_name="train")
         return output
     
-    def validation_step(self, batch, *args, **kwargs):
-        output = self.__step(batch, split_name="val")
+    def validation_step(self, batch, *args, dataloader_idx: int = 0, **kwargs):
+        output = self.__step(batch, split_name="val", dataloader_idx=dataloader_idx)
         return output
     
     def test_step(self, batch, *args, **kwargs):

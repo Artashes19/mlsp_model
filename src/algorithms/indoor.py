@@ -465,18 +465,26 @@ class Indoor(AlgorithmBase):
         
         return ret_opt
     
+    FLOP_KEYS = ("flops_forward", "flops_backward", "flops_overall")
+    
     def _calculate_epoch_metrics(self, outputs: list[Any]) -> dict:
         # init combined metrics with zero values
         combined_general_metrics = {k: 0 for k in outputs[0].keys()}
+        
+        # For FLOPS metrics, drop last batch when averaging; fallback to all if single batch
+        outputs_for_flops = outputs[:-1] if len(outputs) > 1 else outputs
         
         # add all output values to combined_group_metrics
         for o in outputs:
             for k in o.keys():
                 combined_general_metrics[k] += o[k]
         
-        # compute means of metrics
+        # compute means: FLOPS use outputs_for_flops for both sum and denom
         for k in outputs[0].keys():
-            combined_general_metrics[k] /= len(outputs)
+            if k in self.FLOP_KEYS:
+                combined_general_metrics[k] = sum(o[k] for o in outputs_for_flops) / len(outputs_for_flops)
+            else:
+                combined_general_metrics[k] /= len(outputs)
         
         # Derive log2 versions of key metrics for logging
         if "rmse" in combined_general_metrics or "mae" in combined_general_metrics:
