@@ -61,10 +61,14 @@ def resolve_ckpt_paths(
 def _get_dataset_by_split(
     datamodule: IndoorDatamodule,
     split: str,
+    validation_names: list[str] = None,
 ) -> Optional[Dataset]:
     """
     Get dataset by split name. Returns None if split is not available.
-    
+
+    Validation splits use "val_<name>" format where <name> matches an entry
+    in validation_names. The index in validation_names maps to datamodule.val_datasets.
+
     Test sets are stored in a dict with descriptive names:
     - "test" for single test sets (ICASSP tasks)
     - "test_0.02", "test_0.5" for MLSP sparse rate variants
@@ -79,18 +83,17 @@ def _get_dataset_by_split(
     elif split.startswith("test_"):
         # Named test sets: test_0.02, test_0.5, etc.
         return datamodule.test_sets.get(split)
-    elif split == "val_no_sparse":
-        return datamodule.val_set_no_sparse
-    elif split == "val_no_trans_ref":
-        return datamodule.val_set_no_trans_ref
-    elif split == "val_all_enabled":
-        return datamodule.val_set_all_enabled
-    elif split == "synth_val_no_sparse":
-        return datamodule.synth_val_set_no_sparse
-    elif split == "synth_val_no_trans_ref":
-        return datamodule.synth_val_set_no_trans_ref
-    elif split == "synth_val_all_enabled":
-        return datamodule.synth_val_set_all_enabled
+    elif split.startswith("val_") and validation_names is not None:
+        # Named validation: val_RT, val_S_0.02, val_RTS_0.5, etc.
+        val_name = split[len("val_"):]
+        if val_name in validation_names:
+            idx = validation_names.index(val_name)
+            if idx < len(datamodule.val_datasets):
+                return datamodule.val_datasets[idx]
+            log.warning(f"[inference] Validation index {idx} out of range (have {len(datamodule.val_datasets)} datasets)")
+            return None
+        log.warning(f"[inference] Unknown validation name: {val_name!r} (available: {validation_names})")
+        return None
     else:
         log.warning(f"[inference] Unknown split name: {split}")
         return None
@@ -215,6 +218,7 @@ def inference_prep(
     gpu = int(config.get("gpu", 0))
     splits = list(config["split"])  # Must be a list
     predictions_dir = os.path.expanduser(str(config["predictions_dir"]))
+    validation_names = list(config.get("validation_names", [])) or None
     
     # Resolve checkpoint paths (expand directories to .ckpt files)
     ckpt_paths = resolve_ckpt_paths(paths=raw_ckpt_paths)
@@ -268,7 +272,7 @@ def inference_prep(
         
         # Process each split for this checkpoint
         for split in splits:
-            dataset = _get_dataset_by_split(datamodule=datamodule, split=split)
+            dataset = _get_dataset_by_split(datamodule=datamodule, split=split, validation_names=validation_names)
             if dataset is None:
                 log.warning(f"[inference] Skipping split {split}: dataset not available")
                 continue

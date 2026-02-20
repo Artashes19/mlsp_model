@@ -5,26 +5,33 @@ print_config: True
 ignore_warnings: True
 
 # Inference parameters
-ckpt_paths: []  # List of checkpoint paths or directories to scan recursively for .ckpt files
+ckpt_paths: [ ]  # List of checkpoint paths or directories to scan recursively for .ckpt files
 gpu: 0  # GPU device index
+
+# Validation names (maps index to name, must match datamodule val_modalities order)
+validation_names:
+  - RT
+  - S_0.02
+  - S_0.5
+  - RTS_0.02
+  - RTS_0.5
 
 # Dataset splits to run inference on (must be a list)
 split:
-  - val_no_sparse
-  - val_no_trans_ref
-  - val_all_enabled
-  - synth_val_no_sparse
-  - synth_val_no_trans_ref
-  - synth_val_all_enabled
+  - val_RT
+  - val_S_0.02
+  - val_S_0.5
+  - val_RTS_0.02
+  - val_RTS_0.5
 
 # Output directory (derived from checkpoint path)
 predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 defaults:
+  - _self_
   - datamodule: indoor
   - algorithm: indoor
   - network: txunet
-  - _self_
 
 datamodule:
   _target_: src.datamodules.IndoorDatamodule
@@ -39,6 +46,10 @@ datamodule:
   sparse_range: [ 0.0, 0.01 ]
   modality_dropout_prob: 0.6666
   sparse_dropout_given_dropout: 0.5
+  val_modalities: [ "RT", "S", "RTS" ]
+  val_sparse_ranges:
+    - [ 0.0002, 0.0002 ]
+    - [ 0.005, 0.005 ]
   train_augmentations:
     _target_: src.utils.indoor.augmentations.AugmentationPipeline
     augmentations:
@@ -51,7 +62,7 @@ datamodule:
   val_manifest_path: ${oc.env:ICASSP_VAL_MANIFEST}
   synthetic_manifest_path: ${oc.env:SYNTH_TRAIN_MANIFEST}
   synthetic_val_manifest_path: ${oc.env:SYNTH_VAL_MANIFEST}
-  test_manifest_path: []
+  test_manifest_path: [ ]
   synthetic_limit: null
   train_samples_per_epoch: null
   multi_gpu: False
@@ -59,6 +70,12 @@ datamodule:
 algorithm:
   _target_: src.algorithms.Indoor
   name: indoor
+  validation_names:
+    - RT
+    - S_0.02
+    - S_0.5
+    - RTS_0.02
+    - RTS_0.5
   out_norm: 160
   fixed_scale: False
   use_sip2net: False
@@ -85,8 +102,8 @@ algorithm:
     l2sp:
       enable: False
       alpha: 1e-4
-      include_patterns: []
-      exclude_patterns: []
+      include_patterns: [ ]
+      exclude_patterns: [ ]
     teacher_anchoring:
       enable: False
       alpha: 0.1

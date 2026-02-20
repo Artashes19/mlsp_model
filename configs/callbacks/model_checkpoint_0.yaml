@@ -5,6 +5,6 @@ model_checkpoint_0:
   save_top_k: 1 # save k best models (determined by above metric) | if -1, all models are saved.
   save_last: True # additionally, always save model from last epoch
   verbose: False
-  dirpath: checkpoints/hard/
+  dirpath: checkpoints/
   filename: epoch_{epoch:04d}
   auto_insert_metric_name: False

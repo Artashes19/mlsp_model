@@ -122,6 +122,7 @@ def train(config: DictConfig) -> str | None:
             network=None,
             network_conf=(OmegaConf.to_yaml(config.network) if "network" in config else None),
             gpu=None,
+            validation_names=list(config.algorithm.get("validation_names", [])),
             finetune=OmegaConf.to_container(ft_conf, resolve=True),
             epoch_counter=epoch_counter,
         )

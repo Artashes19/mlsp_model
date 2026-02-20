@@ -1,0 +1,10 @@
+model_checkpoint_RTS_0.5:
+  _target_: pytorch_lightning.callbacks.ModelCheckpoint
+  monitor: val_RTS_0.5_loss
+  mode: min
+  save_top_k: 1
+  save_last: False
+  verbose: False
+  dirpath: checkpoints/RTS_0.5
+  filename: epoch_{epoch:04d}
+  auto_insert_metric_name: False

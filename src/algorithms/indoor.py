@@ -31,6 +31,7 @@ class Indoor(AlgorithmBase):
         network: nn.Module = None,
         network_conf: DictConfig = None,
         gpu: int = None,
+        validation_names: list[str] = None,
         *args, **kwargs
     ):
         super().__init__(
@@ -39,7 +40,8 @@ class Indoor(AlgorithmBase):
             scheduler_conf=scheduler_conf,
             network=network,
             network_conf=network_conf,
-            gpu=gpu
+            gpu=gpu,
+            validation_names=validation_names,
         )
         
         self.out_norm = out_norm
@@ -150,7 +152,7 @@ class Indoor(AlgorithmBase):
             name: p.detach().clone().cpu()
             for name, p in self._network.named_parameters()
         }
-
+    
     def _init_teacher(self) -> None:
         teacher = copy.deepcopy(self._network)
         teacher.eval()
@@ -158,7 +160,7 @@ class Indoor(AlgorithmBase):
             p.requires_grad = False
         # Avoid registering teacher as a submodule (keeps it out of state_dict)
         object.__setattr__(self, "_teacher", teacher)
-
+    
     def _ensure_teacher_on_device(self) -> None:
         if self._teacher is None:
             raise RuntimeError("Teacher anchoring enabled but teacher was not initialized.")
@@ -229,7 +231,7 @@ class Indoor(AlgorithmBase):
             self._finetune_conf.get("teacher_anchoring", {}).get("enable", False)
         ):
             self._ensure_teacher_on_device()
-
+        
         # Optional BN recalibration
         bn_conf = self._finetune_conf.get("bn_recalibration", {}) if self._finetune_conf else {}
         if bool(self._finetune_conf.get("enable", False)) and bool(bn_conf.get("enable", False)):
@@ -269,11 +271,11 @@ class Indoor(AlgorithmBase):
         # Lightning's bf16-mixed precision handles autocast for both forward AND loss
         # (matches korean-model's AMP setup where autocast wraps forward + loss)
         preds = self._network(inputs)
-
+        
         # Squeeze channel dim: [B, 1, H, W] -> [B, H, W] to match targets shape
         if preds.dim() == 4:
             preds = preds.squeeze(1)
-
+        
         teacher_preds = None
         if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
             self._finetune_conf.get("teacher_anchoring", {}).get("enable", False)
@@ -337,9 +339,9 @@ class Indoor(AlgorithmBase):
             # Switch primary objective to L1 (MAE)
             loss_task = batch_mae
             loss = batch_mae
-
+        
         loss_anchor = None
-
+        
         l2sp_value = None
         # L2-SP regularization (optional, train-only)
         if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
@@ -348,7 +350,7 @@ class Indoor(AlgorithmBase):
             alpha = float(self._finetune_conf.get("l2sp", {}).get("alpha", 1e-4))
             l2sp_value = self._l2sp_penalty()
             loss = loss + alpha * l2sp_value
-
+        
         # Teacher anchoring (optional, train-only)
         if split_name == "train" and bool(self._finetune_conf.get("enable", False)) and bool(
             self._finetune_conf.get("teacher_anchoring", {}).get("enable", False)
@@ -384,7 +386,7 @@ class Indoor(AlgorithmBase):
                 l2sp_value = self._l2sp_penalty()
             metrics["loss_l2sp"] = l2sp_value
             metrics["loss_l2sp_scaled"] = alpha * l2sp_value
-
+        
         return metrics
     
     # Override to support discriminative LR and warmup
@@ -465,8 +467,6 @@ class Indoor(AlgorithmBase):
         
         return ret_opt
     
-    FLOP_KEYS = ("flops_forward", "flops_backward", "flops_overall")
-    
     def _calculate_epoch_metrics(self, outputs: list[Any]) -> dict:
         # init combined metrics with zero values
         combined_general_metrics = {k: 0 for k in outputs[0].keys()}
@@ -481,7 +481,7 @@ class Indoor(AlgorithmBase):
         
         # compute means: FLOPS use outputs_for_flops for both sum and denom
         for k in outputs[0].keys():
-            if k in self.FLOP_KEYS:
+            if "flops" in k:
                 combined_general_metrics[k] = sum(o[k] for o in outputs_for_flops) / len(outputs_for_flops)
             else:
                 combined_general_metrics[k] /= len(outputs)

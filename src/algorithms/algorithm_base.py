@@ -25,11 +25,16 @@ class AlgorithmBase(pl.LightningModule):
         network: nn.Module = None,
         network_conf: DictConfig = None,
         gpu: int = None,
+        validation_names: list[str] = None,
         *args,
         **kwargs,
     ):
         super().__init__()
-        
+
+        if validation_names is None:
+            raise ValueError("validation_names must be provided (e.g. ['RT'], ['RTS_0.02', 'RTS_0.5'])")
+        self.validation_names = validation_names
+
         self._compile = compiled
         self._optimizer_conf = optimizer_conf
         self._scheduler_conf = scheduler_conf
@@ -329,14 +334,16 @@ class AlgorithmBase(pl.LightningModule):
             num_dataloaders = len(self.trainer.val_dataloaders)
         # Log same training metrics with different prefixes for each validation dataloader
         for i in range(num_dataloaders):
-            self._epoch_end(outputs, split_name=f"train_{i}")
+            name = self.validation_names[i]
+            self._epoch_end(outputs, split_name=f"train_{name}")
         self.training_step_outputs.clear()
     
     def on_validation_epoch_end(self) -> None:
-        # Log metrics for ALL validation dataloaders
+        # Log metrics for ALL validation dataloaders using named prefixes
         for dataloader_idx in sorted(self.validation_step_outputs.keys()):
             outputs = self.validation_step_outputs[dataloader_idx]
-            self._epoch_end(outputs, split_name=f"val_{dataloader_idx}")
+            name = self.validation_names[dataloader_idx]
+            self._epoch_end(outputs, split_name=f"val_{name}")
         self.validation_step_outputs.clear()
     
     def on_test_epoch_end(self) -> None:
