@@ -1,5 +1,0 @@
-_target_: src.networks.SegFormerModel
-
-encoder_name: mit_b2
-encoder_weights: null
-in_chans: 10

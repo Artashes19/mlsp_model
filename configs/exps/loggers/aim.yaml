@@ -1,3 +1,0 @@
-_target_: aim.pytorch_lightning.AimLogger
-repo: ${oc.env:AIM_REPO}
-experiment: default

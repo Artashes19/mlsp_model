@@ -1,8 +1,0 @@
-_target_: src.utils.val_aliases.ValMetricAliasLogger
-metric_map:
-  val_0_rmse: rt_rmse_0.2
-  val_1_rmse: s_rmse_0.2
-  val_2_rmse: rts_rmse_0.2
-  val_3_rmse: rt_rmse_0.5
-  val_4_rmse: s_rmse_0.5
-  val_5_rmse: rts_rmse_0.5

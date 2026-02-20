@@ -1,3 +1,0 @@
-_target_: pytorch_lightning.strategies.DDPStrategy
-
-find_unused_parameters: False
