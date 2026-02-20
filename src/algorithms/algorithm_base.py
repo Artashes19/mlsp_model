@@ -57,6 +57,7 @@ class AlgorithmBase(pl.LightningModule):
         
         # FLOPs and timing tracking state
         self._should_count_flops = True  # Only count once, during first training step
+        self._has_logged_flop_counts = False
         self._num_flops_train = None
         self._num_flops_backward = None
         self._last_elapsed_ms = None
@@ -275,6 +276,16 @@ class AlgorithmBase(pl.LightningModule):
             total_flops = self._num_flops_train + self._num_flops_backward
             total_time_s = forward_time_s + backward_time_s
             outputs["flops_overall"] = total_flops / total_time_s
+            # Log FLOP counts as hparams once (same mechanism as log_hyperparameters)
+            if not self._has_logged_flop_counts and self.logger:
+                orig = self.trainer._original_log_hyperparams
+                flop_hparams = {
+                    "algorithm/num_flops_forward": self._num_flops_train,
+                    "algorithm/num_flops_backward": self._num_flops_backward,
+                    "algorithm/num_flops_overall": total_flops,
+                }
+                orig(flop_hparams)
+                self._has_logged_flop_counts = True
         self.training_step_outputs.append(outputs)
     
     def on_validation_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:

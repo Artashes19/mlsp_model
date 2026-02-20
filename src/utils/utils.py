@@ -93,7 +93,8 @@ def log_hyperparameters(
         p.numel() for p in algorithm.parameters() if not p.requires_grad
     )
     
-    # send hparams to all loggers
+    # send hparams to all loggers (preserve original for later FLOP hparams)
+    trainer._original_log_hyperparams = trainer.logger.log_hyperparams
     trainer.logger.log_hyperparams(hparams)
     
     # disable logging any more hyperparameters for all loggers
