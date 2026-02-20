@@ -1,6 +1,6 @@
 # Generated files from running python run.py
 data/
-aim_repo/
+wandb/
 checkpoints/
 runs/
 ngrok*
@@ -59,8 +59,8 @@ cache/
 # Hydra working directory (if using Hydra)
 .multirun/
 
-# Aim
-.aim/
+# wandb
+.wandb/
 
 .hydra/
 

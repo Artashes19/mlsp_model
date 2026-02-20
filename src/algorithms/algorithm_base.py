@@ -312,23 +312,39 @@ class AlgorithmBase(pl.LightningModule):
         epoch_metrics = self._calculate_epoch_metrics(outputs)
         
         prefixed_metrics = {}
+        wandb_metrics = {"epoch": self.trainer.current_epoch}
+        
         for k, v in epoch_metrics.items():
             if "flops" in k:
                 prefixed_metrics[k] = v
+                wandb_metrics[k] = v
             else:
-                prefixed_metrics[f"{split_name}_{k}"] = v
+                original_key = f"{split_name}_{k}"
+                prefixed_metrics[original_key] = v
+                
+                if split_name.startswith("train_"):
+                    group_name = split_name.replace("train_", "", 1)
+                    wandb_metrics[f"{k}/{group_name}/train"] = v
+                elif split_name.startswith("val_"):
+                    group_name = split_name.replace("val_", "", 1)
+                    wandb_metrics[f"{k}/{group_name}/val"] = v
+                elif split_name.startswith("test_"):
+                    group_name = split_name.replace("test_", "", 1)
+                    wandb_metrics[f"{k}/{group_name}/test"] = v
+                else:
+                    wandb_metrics[original_key] = v
                 
         epoch_metrics = prefixed_metrics
         
         for checkpoint in self.trainer.checkpoint_callbacks:
-            if checkpoint.monitor in epoch_metrics:
+            if getattr(checkpoint, "monitor", None) in epoch_metrics:
                 epoch_metrics[checkpoint.monitor] = torch.Tensor(
                     epoch_metrics[checkpoint.monitor]
                 )
         
         self.trainer.callback_metrics.update(epoch_metrics)
         if self.logger:
-            self.logger.log_metrics(epoch_metrics, self.trainer.current_epoch)
+            self.logger.log_metrics(wandb_metrics, self.trainer.current_epoch)
         else:
             log.info(f"""\n{epoch_metrics}\n""")
     

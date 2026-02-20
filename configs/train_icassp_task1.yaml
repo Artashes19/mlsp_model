@@ -18,7 +18,7 @@ defaults:
   - optimizer: null # adam
   - scheduler: null # icassp1_sd_finetune_32
   - callbacks: null # [ tqdm_progress_bar, model_checkpoint_rt, model_checkpoint_every_4 ]
-  - loggers: null # [ aim ]
+  - loggers: null # [ wandb ]
 
 trainer:
   _target_: pytorch_lightning.Trainer
@@ -165,10 +165,11 @@ callbacks:
     every_n_epochs: 4
 
 loggers:
-  aim:
-    _target_: aim.pytorch_lightning.AimLogger
-    repo: ${oc.env:AIM_REPO}
-    experiment: v4_icassp_task1  # overrides
+  wandb:
+    _target_: pytorch_lightning.loggers.WandbLogger
+    project: indoor
+    name: v4_icassp_task1  # overrides
+    save_dir: ${oc.env:WANDB_SAVE_DIR}
 
 hydra:
   run:

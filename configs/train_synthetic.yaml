@@ -19,7 +19,7 @@ defaults:
   - optimizer: null # adam
   - scheduler: null
   - callbacks: null # [ tqdm_progress_bar, model_checkpoint_rt, model_checkpoint_rtS_0.02, model_checkpoint_rtS_0.5, model_checkpoint_every ]
-  - loggers: null # [ aim ]
+  - loggers: null # [ wandb ]
 
 trainer:
   _target_: pytorch_lightning.Trainer
@@ -180,10 +180,11 @@ callbacks:
     schedule_epochs: [ 9, 19, 39, 79, 159, 319, 639 ]
 
 loggers:
-  aim:
-    _target_: aim.pytorch_lightning.AimLogger
-    repo: ${oc.env:AIM_REPO}
-    experiment: v4_synthetic  # overrides
+  wandb:
+    _target_: pytorch_lightning.loggers.WandbLogger
+    project: indoor
+    name: v4_synthetic  # overrides
+    save_dir: ${oc.env:WANDB_SAVE_DIR}
 
 hydra:
   run:

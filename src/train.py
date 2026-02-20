@@ -195,6 +195,12 @@ def train(config: DictConfig) -> str | None:
     
     log_hyperparameters(config=config, algorithm=algorithm, trainer=trainer)
     
+    import wandb
+    
+    if wandb.run is not None:
+        wandb.define_metric("epoch")
+        wandb.define_metric("*", step_metric="epoch")
+    
     # Train the model
     log.info("Starting training!")
     fit_t0 = time.time()

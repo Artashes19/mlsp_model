@@ -95,7 +95,10 @@ def log_hyperparameters(
     
     # send hparams to all loggers (preserve original for later FLOP hparams)
     trainer._original_log_hyperparams = trainer.logger.log_hyperparams
-    trainer.logger.log_hyperparams(hparams)
+    
+    # Convert OmegaConf objects to standard dicts so W&B logs them as JSON trees
+    sanitized_hparams = OmegaConf.to_container(OmegaConf.create(hparams), resolve=True)
+    trainer.logger.log_hyperparams(sanitized_hparams)
     
     # disable logging any more hyperparameters for all loggers
     # this is just a trick to prevent trainer from logging hparams of model,
