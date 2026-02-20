@@ -3,16 +3,16 @@ _target_: src.algorithms.Indoor
 name: indoor
 
 validation_names:
-  - RT
-  - S_0.02
-  - S_0.5
-  - RTS_0.02
-  - RTS_0.5
-  - synth_RT
-  - synth_S_0.02
-  - synth_S_0.5
-  - synth_RTS_0.02
-  - synth_RTS_0.5
+  - rt
+  - s_0.02
+  - s_0.5
+  - rts_0.02
+  - rts_0.5
+  - synth_rt
+  - synth_s_0.02
+  - synth_s_0.5
+  - synth_rts_0.02
+  - synth_rts_0.5
 
 out_norm: 160
 fixed_scale: False

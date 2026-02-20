@@ -32,7 +32,7 @@ class AlgorithmBase(pl.LightningModule):
         super().__init__()
 
         if validation_names is None:
-            raise ValueError("validation_names must be provided (e.g. ['RT'], ['RTS_0.02', 'RTS_0.5'])")
+            raise ValueError("validation_names must be provided (e.g. ['rt'], ['rts_0.02', 'rts_0.5'])")
         self.validation_names = validation_names
 
         self._compile = compiled

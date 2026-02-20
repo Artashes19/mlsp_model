@@ -18,7 +18,7 @@ defaults:
   - network: null # txunet
   - optimizer: null # adam
   - scheduler: null
-  - callbacks: null # [ tqdm_progress_bar, model_checkpoint_RT, model_checkpoint_RTS_0.02, model_checkpoint_RTS_0.5, model_checkpoint_every ]
+  - callbacks: null # [ tqdm_progress_bar, model_checkpoint_rt, model_checkpoint_rtS_0.02, model_checkpoint_rtS_0.5, model_checkpoint_every ]
   - loggers: null # [ aim ]
 
 trainer:
@@ -47,7 +47,7 @@ datamodule:
   modality_dropout_prob: 0.6666
   # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
   sparse_dropout_given_dropout: 0.5
-  val_modalities: [ "RT", "S", "RTS" ]
+  val_modalities: [ "rt", "s", "rts" ]
   val_sparse_ranges:
     - [ 0.0002, 0.0002 ]
     - [ 0.005, 0.005 ]
@@ -77,16 +77,16 @@ algorithm:
   _target_: src.algorithms.Indoor
   name: indoor
   validation_names:
-    - RT
-    - S_0.02
-    - S_0.5
-    - RTS_0.02
-    - RTS_0.5
-    - synth_RT
-    - synth_S_0.02
-    - synth_S_0.5
-    - synth_RTS_0.02
-    - synth_RTS_0.5
+    - rt
+    - s_0.02
+    - s_0.5
+    - rts_0.02
+    - rts_0.5
+    - synth_rt
+    - synth_s_0.02
+    - synth_s_0.5
+    - synth_rts_0.02
+    - synth_rts_0.5
   out_norm: 160
   fixed_scale: False
   use_sip2net: False
@@ -138,34 +138,34 @@ network:
 callbacks:
   tqdm_progress_bar:
     _target_: pytorch_lightning.callbacks.TQDMProgressBar
-  model_checkpoint_RT:
+  model_checkpoint_rt:
     _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    monitor: val_RT_loss
+    monitor: val_rt_loss
     mode: min
     save_top_k: 1
     save_last: True
     verbose: False
-    dirpath: checkpoints/RT
+    dirpath: checkpoints/rt
     filename: epoch_{epoch:04d}
     auto_insert_metric_name: False
-  model_checkpoint_RTS_0.02:
+  model_checkpoint_rtS_0.02:
     _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    monitor: val_RTS_0.02_loss
+    monitor: val_rts_0.02_loss
     mode: min
     save_top_k: 1
     save_last: False
     verbose: False
-    dirpath: checkpoints/RTS_0.02
+    dirpath: checkpoints/rtS_0.02
     filename: epoch_{epoch:04d}
     auto_insert_metric_name: False
-  model_checkpoint_RTS_0.5:
+  model_checkpoint_rtS_0.5:
     _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    monitor: val_RTS_0.5_loss
+    monitor: val_rts_0.5_loss
     mode: min
     save_top_k: 1
     save_last: False
     verbose: False
-    dirpath: checkpoints/RTS_0.5
+    dirpath: checkpoints/rtS_0.5
     filename: epoch_{epoch:04d}
     auto_insert_metric_name: False
   model_checkpoint_every:

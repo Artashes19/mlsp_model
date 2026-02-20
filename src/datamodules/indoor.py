@@ -64,9 +64,9 @@ class IndoorDatamodule(pl.LightningDataModule):
         self.synthetic_limit = int(synthetic_limit) if synthetic_limit is not None else None
         self.train_samples_per_epoch = int(train_samples_per_epoch) if train_samples_per_epoch is not None else None
         
-        # Validation modality types: "RT" (no sparse), "S" (sparse only), "RTS" (all)
+        # Validation modality types: "rt" (no sparse), "s" (sparse only), "rts" (all)
         if val_modalities is None:
-            raise ValueError("val_modalities must be provided (e.g. ['RT'], ['RTS'], ['RT', 'S', 'RTS'])")
+            raise ValueError("val_modalities must be provided (e.g. ['rt'], ['rts'], ['rt', 's', 'rts'])")
         self._val_modalities = list(val_modalities)
         
         self._val_sparse_ranges = None
@@ -83,10 +83,10 @@ class IndoorDatamodule(pl.LightningDataModule):
             if ranges:
                 self._val_sparse_ranges = ranges
         
-        # Validate: S and RTS modalities require sparse ranges
-        needs_sparse = any(m in ("S", "RTS") for m in self._val_modalities)
+        # Validate: s and rts modalities require sparse ranges
+        needs_sparse = any(m in ("s", "rts") for m in self._val_modalities)
         if needs_sparse and not self._val_sparse_ranges:
-            raise ValueError("val_sparse_ranges required when val_modalities contains 'S' or 'RTS'")
+            raise ValueError("val_sparse_ranges required when val_modalities contains 's' or 'rts'")
         
         # Store kwargs for dataset
         self.dataset_kwargs = kwargs
@@ -196,11 +196,11 @@ class IndoorDatamodule(pl.LightningDataModule):
         """
         Create validation datasets based on val_modalities config.
 
-        Order: RT first, then S per sparse range, then RTS per sparse range.
+        Order: rt first, then s per sparse range, then rts per sparse range.
         """
         datasets = []
         for modality in self._val_modalities:
-            if modality == "RT":
+            if modality == "rt":
                 # No sparse, has reflectance+transmittance
                 datasets.append(
                     self._create_val_dataset(
@@ -209,7 +209,7 @@ class IndoorDatamodule(pl.LightningDataModule):
                         force_drop_trans_ref=False,
                     )
                 )
-            elif modality == "S":
+            elif modality == "s":
                 # Sparse only (no trans+ref), one per sparse range
                 for sparse_range in self._val_sparse_ranges:
                     datasets.append(
@@ -220,7 +220,7 @@ class IndoorDatamodule(pl.LightningDataModule):
                             sparse_range=sparse_range,
                         )
                     )
-            elif modality == "RTS":
+            elif modality == "rts":
                 # All modalities enabled, one per sparse range
                 for sparse_range in self._val_sparse_ranges:
                     datasets.append(
@@ -232,7 +232,7 @@ class IndoorDatamodule(pl.LightningDataModule):
                         )
                     )
             else:
-                raise ValueError(f"Unknown val_modality: {modality!r}. Must be 'RT', 'S', or 'RTS'.")
+                raise ValueError(f"Unknown val_modality: {modality!r}. Must be 'rt', 's', or 'rts'.")
         return datasets
     
     def prepare_data(self) -> None:

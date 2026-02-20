@@ -84,7 +84,7 @@ def _get_dataset_by_split(
         # Named test sets: test_0.02, test_0.5, etc.
         return datamodule.test_sets.get(split)
     elif split.startswith("val_") and validation_names is not None:
-        # Named validation: val_RT, val_S_0.02, val_RTS_0.5, etc.
+        # Named validation: val_rt, val_s_0.02, val_rts_0.5, etc.
         val_name = split[len("val_"):]
         if val_name in validation_names:
             idx = validation_names.index(val_name)

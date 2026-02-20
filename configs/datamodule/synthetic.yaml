@@ -21,7 +21,7 @@ modality_dropout_prob: 0.6666
 # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
 sparse_dropout_given_dropout: 0.5
 
-val_modalities: [ "RT", "S", "RTS" ]
+val_modalities: [ "rt", "s", "rts" ]
 val_sparse_ranges:
   - [ 0.0002, 0.0002 ]
   - [ 0.005, 0.005 ]
