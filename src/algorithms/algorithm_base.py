@@ -58,7 +58,6 @@ class AlgorithmBase(pl.LightningModule):
         # FLOPs and timing tracking state
         self._should_count_flops = True  # Only count once, during first training step
         self._num_flops_train = None
-        self._num_flops_val = None
         self._num_flops_backward = None
         self._last_elapsed_ms = None
         self._last_backward_ms = None
@@ -153,18 +152,6 @@ class AlgorithmBase(pl.LightningModule):
                         result = fwd(*args, **kwargs)
                     self._num_flops_train = flop_counter_train.get_total_flops()
                     log.info(f"[FLOPs] Measured network FLOPs (train): {self._num_flops_train:.2e}")
-                    
-                    # 2. Measure validation FLOPs by temporarily switching to eval mode
-                    self._network.eval()
-                    flop_counter_val = FlopCounterMode(display=False, depth=1)
-                    with torch.no_grad():
-                        with flop_counter_val:
-                            _ = fwd(*args, **kwargs)
-                    self._num_flops_val = flop_counter_val.get_total_flops()
-                    log.info(f"[FLOPs] Measured network FLOPs (val): {self._num_flops_val:.2e}")
-                    
-                    # 3. Switch back to training mode
-                    self._network.train()
                 else:
                     result = fwd(*args, **kwargs)
                 self._should_count_flops = False
@@ -243,9 +230,8 @@ class AlgorithmBase(pl.LightningModule):
         
         # Select the appropriate FLOP count based on phase
         is_training = split_name == "train"
-        # FLOPS only for first validation set (dataloader_idx 0)
-        should_compute_flops = is_training or (split_name == "val" and dataloader_idx == 0)
-        num_flops = self._num_flops_train if is_training else self._num_flops_val
+        should_compute_flops = is_training
+        num_flops = self._num_flops_train if is_training else None
         
         # Calculate flops_forward; val uses it as flops_overall; train gets overall in on_train_batch_end
         forward_time_s = self._last_elapsed_ms / 1000.0 if self._last_elapsed_ms else None
@@ -313,7 +299,15 @@ class AlgorithmBase(pl.LightningModule):
     
     def _epoch_end(self, outputs: dict[str, list], split_name):
         epoch_metrics = self._calculate_epoch_metrics(outputs)
-        epoch_metrics = {f"{split_name}_{k}": v for k, v in epoch_metrics.items()}
+        
+        prefixed_metrics = {}
+        for k, v in epoch_metrics.items():
+            if "flops" in k:
+                prefixed_metrics[k] = v
+            else:
+                prefixed_metrics[f"{split_name}_{k}"] = v
+                
+        epoch_metrics = prefixed_metrics
         
         for checkpoint in self.trainer.checkpoint_callbacks:
             if checkpoint.monitor in epoch_metrics:
