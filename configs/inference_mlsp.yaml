@@ -15,9 +15,9 @@ predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 defaults:
   - _self_
-  - datamodule: mlsp
-  - algorithm: indoor
-  - network: txunet
+  - datamodule: null # mlsp
+  - algorithm: null # indoor
+  - network: null # txunet
 
 datamodule:
   _target_: src.datamodules.IndoorDatamodule

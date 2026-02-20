@@ -21,6 +21,7 @@ modality_dropout_prob: 0
 # If dropout happens, prob of choosing sparse to turn off (vs trans+ref)
 sparse_dropout_given_dropout: 1.0
 
+val_modalities: [ "RT" ]
 val_sparse_ranges: []
 
 # Training augmentations (Hydra-instantiated)

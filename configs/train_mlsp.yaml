@@ -9,16 +9,16 @@ ckpt_path: null
 load_weights_only: False
 
 defaults:
-  - trainer: default
-  - datamodule: mlsp
-  - algorithm: indoor
-  - callbacks: [ tqdm_progress_bar, model_checkpoint_RTS_0.02, model_checkpoint_RTS_0.5, model_checkpoint_every_4 ]
-  - loggers: [ aim ]
-  - strategy: null
   - _self_
-  - scheduler: mlsp_sd_finetune_32
-  - optimizer: adam
-  - network: txunet
+  - trainer: null # default
+  - strategy: null
+  - datamodule: null # mlsp
+  - algorithm: null # indoor
+  - network: null # txunet
+  - optimizer: null # adam
+  - scheduler: null # mlsp_sd_finetune_32
+  - callbacks: null # [ tqdm_progress_bar, model_checkpoint_RTS_0.02, model_checkpoint_RTS_0.5, model_checkpoint_every_4 ]
+  - loggers: null # [ aim ]
 
 trainer:
   _target_: pytorch_lightning.Trainer

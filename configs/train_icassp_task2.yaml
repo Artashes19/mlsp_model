@@ -10,15 +10,15 @@ load_weights_only: False
 
 defaults:
   - _self_
-  - trainer: default
-  - datamodule: icassp_task2
-  - optimizer: adam
-  - scheduler: icassp2_sd_finetune_32
-  - algorithm: indoor
-  - network: txunet
-  - callbacks: [ tqdm_progress_bar, model_checkpoint_RT, model_checkpoint_every_4 ]
-  - loggers: [ aim ]
+  - trainer: null # default
   - strategy: null
+  - datamodule: null # icassp_task2
+  - algorithm: null # indoor
+  - network: null # txunet
+  - optimizer: null # adam
+  - scheduler: null # icassp2_sd_finetune_32
+  - callbacks: null # [ tqdm_progress_bar, model_checkpoint_RT, model_checkpoint_every_4 ]
+  - loggers: null # [ aim ]
 
 trainer:
   _target_: pytorch_lightning.Trainer

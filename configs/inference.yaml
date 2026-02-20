@@ -29,9 +29,9 @@ predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 defaults:
   - _self_
-  - datamodule: indoor
-  - algorithm: indoor
-  - network: txunet
+  - datamodule: null # indoor
+  - algorithm: null # indoor
+  - network: null # txunet
 
 datamodule:
   _target_: src.datamodules.IndoorDatamodule

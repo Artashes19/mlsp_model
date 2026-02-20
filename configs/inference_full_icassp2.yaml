@@ -14,9 +14,9 @@ predictions_dir: ${oc.env:PREDICTIONS_DIR}
 
 defaults:
   - _self_
-  - datamodule: full_icassp_task2
-  - algorithm: indoor
-  - network: txunet
+  - datamodule: null # full_icassp_task2
+  - algorithm: null # indoor
+  - network: null # txunet
 
 datamodule:
   _target_: src.datamodules.IndoorDatamodule

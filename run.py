@@ -26,7 +26,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 @hydra.main(config_path="configs", version_base="1.2")
 def main(config: DictConfig) -> None:
     from src import utils
-    
+    from src.utils.config_prune import prune_config
+
+    config = prune_config(config)
+
     warnings.filterwarnings("ignore", ".*beta state*")
     
     terminal_col = config.get("terminal_col")
