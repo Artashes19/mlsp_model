@@ -178,7 +178,7 @@ callbacks:
     save_last: false  # overrides
     verbose: false
     dirpath: checkpoints/every
-    filename: step_{step:07d}_every
+    filename: step_{step:08d}_every
     auto_insert_metric_name: false
     schedule_samples: [ 62500, 125000, 250000, 500000, 1000000, 2000000, 4000000 ]
 
