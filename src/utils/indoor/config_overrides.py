@@ -48,7 +48,6 @@ def _load_config() -> OverridesConfig:
     config = OverridesConfig(
         normalization_stats=normalization_stats,
     )
-    print(f"[config_overrides] Loaded from {config_path}: {config}")
     return config
 
 
