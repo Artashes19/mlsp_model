@@ -26,6 +26,7 @@ class Indoor(AlgorithmBase):
         use_sip2net: bool,
         sip2net_params: dict[str, int],
         compiled: CompileParams,
+        log_every_n_steps: int,
         optimizer_conf: DictConfig = None,
         scheduler_conf: DictConfig = None,
         network: nn.Module = None,
@@ -36,6 +37,7 @@ class Indoor(AlgorithmBase):
     ):
         super().__init__(
             compiled=compiled,
+            log_every_n_steps=log_every_n_steps,
             optimizer_conf=optimizer_conf,
             scheduler_conf=scheduler_conf,
             network=network,
@@ -450,6 +452,7 @@ class Indoor(AlgorithmBase):
             if "frequency" in scheduler_conf:
                 del scheduler_conf["frequency"]
             
+            scheduler_conf["batch_size"] = self.trainer.datamodule._batch_size
             scheduler: LRScheduler = hydra.utils.instantiate(
                 scheduler_conf,
                 optimizer=optimizer,
@@ -508,7 +511,7 @@ class Indoor(AlgorithmBase):
         }
         
         if self.logger:
-            self.logger.log_metrics(epoch_metrics_shared, self.trainer.current_epoch)
+            self.logger.log_metrics(epoch_metrics_shared, self.global_step)
         else:
             log.info(f"""\n{epoch_metrics_shared}\n""")
         

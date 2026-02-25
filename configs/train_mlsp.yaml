@@ -31,6 +31,8 @@ trainer:
   gradient_clip_val: 1.0
   gradient_clip_algorithm: norm
   num_sanity_val_steps: 0
+  val_check_interval: 300
+  check_val_every_n_epoch: null
 
 datamodule:
   _target_: src.datamodules.IndoorDatamodule
@@ -80,11 +82,11 @@ optimizer:
 scheduler:
   _target_: src.schedulers.wsd_s.WSDScheduler
   name: mlsp_sd_finetune_32
-  warmup_steps: 0
-  stable_steps:
-    - 3840
-  decay_steps:
-    - 2560
+  warmup_samples: 0
+  stable_samples:
+    - 57600
+  decay_samples:
+    - 38400
   peak_lr: 0.0001
   min_lr_factor: 0.01
   last_epoch: -1
@@ -94,6 +96,7 @@ scheduler:
 algorithm:
   _target_: src.algorithms.Indoor
   name: indoor
+  log_every_n_steps: 300
   validation_names: [ "rts_0.02", "rts_0.5" ]
   out_norm: 160
   fixed_scale: False

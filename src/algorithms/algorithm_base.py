@@ -20,6 +20,7 @@ class AlgorithmBase(pl.LightningModule):
     def __init__(
         self,
         compiled: CompileParams,
+        log_every_n_steps: int,
         optimizer_conf: DictConfig = None,
         scheduler_conf: DictConfig = None,
         network: nn.Module = None,
@@ -30,15 +31,20 @@ class AlgorithmBase(pl.LightningModule):
         **kwargs,
     ):
         super().__init__()
-
+        
         if validation_names is None:
             raise ValueError("validation_names must be provided (e.g. ['rt'], ['rts_0.02', 'rts_0.5'])")
         self.validation_names = validation_names
-
+        
+        self._log_every_n_steps = log_every_n_steps
+        
         self._compile = compiled
         self._optimizer_conf = optimizer_conf
         self._scheduler_conf = scheduler_conf
-        log.info(f"[algorithm] init compile={self._compile}, has_scheduler={self._scheduler_conf is not None}")
+        log.info(
+            f"[algorithm] init compile={self._compile}, has_scheduler={self._scheduler_conf is not None}, "
+            f"log_every_n_steps={self._log_every_n_steps}"
+        )
         
         if network is None:
             self._network: nn.Module = hydra.utils.instantiate(
@@ -112,6 +118,7 @@ class AlgorithmBase(pl.LightningModule):
             if "frequency" in scheduler_conf:
                 del scheduler_conf["frequency"]
             
+            scheduler_conf["batch_size"] = self.trainer.datamodule._batch_size
             scheduler: LRScheduler = hydra.utils.instantiate(
                 scheduler_conf,
                 optimizer=optimizer,
@@ -287,6 +294,9 @@ class AlgorithmBase(pl.LightningModule):
                 orig(flop_hparams)
                 self._has_logged_flop_counts = True
         self.training_step_outputs.append(outputs)
+        
+        if len(self.training_step_outputs) >= self._log_every_n_steps:
+            self._log_training_step_metrics()
     
     def on_validation_batch_end(self, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
@@ -308,11 +318,14 @@ class AlgorithmBase(pl.LightningModule):
         output = self.__step(batch, split_name="test")
         return output
     
-    def _epoch_end(self, outputs: dict[str, list], split_name):
+    def _epoch_end(self, outputs: dict[str, list], split_name: str) -> None:
         epoch_metrics = self._calculate_epoch_metrics(outputs)
         
         prefixed_metrics = {}
-        wandb_metrics = {"epoch": self.trainer.current_epoch}
+        wandb_metrics = {
+            "global_step": self.global_step,
+            "epoch": self.current_epoch,
+        }
         
         for k, v in epoch_metrics.items():
             if "flops" in k:
@@ -344,11 +357,11 @@ class AlgorithmBase(pl.LightningModule):
         
         self.trainer.callback_metrics.update(epoch_metrics)
         if self.logger:
-            self.logger.log_metrics(wandb_metrics, self.trainer.current_epoch)
+            self.logger.log_metrics(wandb_metrics, self.global_step)
         else:
             log.info(f"""\n{epoch_metrics}\n""")
     
-    def on_train_epoch_end(self) -> None:
+    def _log_training_step_metrics(self) -> None:
         outputs = self.training_step_outputs
         num_dataloaders = 1
         if isinstance(self.trainer.val_dataloaders, (list, tuple)):
@@ -358,6 +371,9 @@ class AlgorithmBase(pl.LightningModule):
             name = self.validation_names[i]
             self._epoch_end(outputs, split_name=f"train_{name}")
         self.training_step_outputs.clear()
+    
+    def on_train_epoch_end(self) -> None:
+        pass
     
     def on_validation_epoch_end(self) -> None:
         # Log metrics for ALL validation dataloaders using named prefixes

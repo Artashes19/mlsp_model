@@ -1,11 +1,11 @@
 _target_: src.schedulers.wsd_s.WSDScheduler
 
 name: wsd_finetune_bs40
-warmup_steps: 384
-stable_steps:
-  - 5376
-decay_steps:
-  - 1920
+warmup_samples: 15360
+stable_samples:
+  - 215040
+decay_samples:
+  - 76800
 peak_lr: 0.0006
 min_lr_factor: 0.05
 last_epoch: -1

@@ -1,0 +1,25 @@
+_target_: src.schedulers.wsd_s.WSDScheduler
+
+name: wsd_s_pretraining_bs24
+warmup_samples: 6250
+stable_samples:
+  - 50000
+  - 50000
+  - 100000
+  - 200000
+  - 400000
+  - 800000
+  - 1600000
+decay_samples:
+  - 6250
+  - 12500
+  - 25000
+  - 50000
+  - 100000
+  - 200000
+  - 400000
+peak_lr: 0.0003
+min_lr_factor: 0.0
+last_epoch: -1
+interval: step
+frequency: 1
