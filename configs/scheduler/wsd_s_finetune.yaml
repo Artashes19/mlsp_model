@@ -1,0 +1,25 @@
+_target_: src.schedulers.wsd_s.WSDScheduler
+
+name: wsd_s_finetune_bs15
+warmup_samples: 1000
+stable_samples:
+  - 3000
+  - 4000
+  - 8000
+  - 16000
+  - 32000
+  - 64000
+  - 128000
+decay_samples:
+  - 1000
+  - 1000
+  - 2000
+  - 4000
+  - 8000
+  - 16000
+  - 32000
+peak_lr: 0.0003
+min_lr_factor: 0.0
+last_epoch: -1
+interval: step
+frequency: 1

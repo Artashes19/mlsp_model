@@ -1,47 +1,50 @@
 import os
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 
-class ScheduledEpochModelCheckpoint(ModelCheckpoint):
+class ScheduledSampleModelCheckpoint(ModelCheckpoint):
     """
-    Save checkpoints only at selected epochs plus the final epoch.
+    Save checkpoints at selected sample counts (converted to global steps).
 
-    Epoch indices are 0-based (i.e., epoch 0 -> first epoch).
+    Retrieves batch_size from the datamodule at setup time and converts
+    sample thresholds to step thresholds. Saves when trainer.global_step
+    reaches a threshold.
     """
-
-    def __init__(self, schedule_epochs: Sequence[int] | None = None, **kwargs) -> None:
-        # Disable base-class monitoring logic; we control saving explicitly.
+    
+    def __init__(
+        self,
+        schedule_samples: Sequence[int],
+        **kwargs,
+    ) -> None:
         kwargs.setdefault("monitor", None)
         kwargs.setdefault("save_last", False)
-        # Force saving on train epoch end
-        kwargs.setdefault("save_on_train_epoch_end", True)
+        kwargs.setdefault("save_on_train_epoch_end", False)
         super().__init__(**kwargs)
-        self._schedule = {int(e) for e in (schedule_epochs or [])}
-
-    def _should_save_epoch(self, trainer) -> bool:
-        epoch = int(getattr(trainer, "current_epoch", 0))
-        max_epochs = getattr(trainer, "max_epochs", None)
-        if epoch in self._schedule:
-            return True
-        if max_epochs is not None and epoch == max_epochs - 1:
-            return True
-        return False
-
+        self._schedule_samples = tuple(schedule_samples)
+        self._schedule_steps: set[int] = set()
+    
+    def setup(self, trainer, pl_module, stage=None) -> None:
+        batch_size: int = trainer.datamodule._batch_size
+        self._schedule_steps = {
+            s // batch_size for s in self._schedule_samples
+        }
+    
+    def _should_save_step(self, trainer) -> bool:
+        step = int(getattr(trainer, "global_step", 0))
+        return step in self._schedule_steps
+    
     def on_validation_end(self, trainer, pl_module) -> None:
-        # Disable validation-based saving in the base class;
-        # we only save on selected train epochs.
         return
-
+    
     def on_train_epoch_end(self, trainer, pl_module, *args, **kwargs) -> None:
-        if self._should_save_epoch(trainer):
-            # Explicitly trigger checkpoint save with proper epoch formatting
-            epoch = trainer.current_epoch
-            # Format filename ourselves to avoid Lightning's "epoch=X" format
-            filename = self.filename.format(epoch=epoch)
+        return
+    
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
+        if self._should_save_step(trainer):
+            step = trainer.global_step
+            filename = self.filename.format(step=step)
             filepath = os.path.join(self.dirpath, f"{filename}.ckpt")
             self._save_checkpoint(trainer, filepath)
-            self._last_global_step_saved = trainer.global_step
-
-
+            self._last_global_step_saved = step

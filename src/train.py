@@ -117,6 +117,7 @@ def train(config: DictConfig) -> str | None:
                 config.algorithm["sip2net_params"], resolve=True
             ) if "sip2net_params" in config.algorithm else {}),
             compiled=compiled_obj,
+            log_every_n_steps=int(config.algorithm["log_every_n_steps"]),
             optimizer_conf=(OmegaConf.to_yaml(config.optimizer) if "optimizer" in config else None),
             scheduler_conf=(OmegaConf.to_yaml(config.scheduler) if "scheduler" in config else None),
             network=None,
@@ -194,6 +195,12 @@ def train(config: DictConfig) -> str | None:
         config["ckpt_path"] = None
     
     log_hyperparameters(config=config, algorithm=algorithm, trainer=trainer)
+    
+    import wandb
+    
+    if wandb.run is not None:
+        wandb.define_metric("global_step")
+        wandb.define_metric("*", step_metric="global_step")
     
     # Train the model
     log.info("Starting training!")

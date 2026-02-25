@@ -18,7 +18,7 @@ defaults:
   - optimizer: null # adam
   - scheduler: null # icassp1_sd_finetune_32
   - callbacks: null # [ tqdm_progress_bar, model_checkpoint_rt, model_checkpoint_every_4 ]
-  - loggers: null # [ aim ]
+  - loggers: null # [ wandb ]
 
 trainer:
   _target_: pytorch_lightning.Trainer
@@ -31,6 +31,8 @@ trainer:
   gradient_clip_val: 1.0
   gradient_clip_algorithm: norm
   num_sanity_val_steps: 0
+  val_check_interval: 100
+  check_val_every_n_epoch: null
 
 datamodule:
   _target_: src.datamodules.IndoorDatamodule
@@ -77,11 +79,11 @@ optimizer:
 scheduler:
   _target_: src.schedulers.wsd_s.WSDScheduler
   name: icassp1_sd_finetune_32
-  warmup_steps: 0
-  stable_steps:
-    - 1280
-  decay_steps:
-    - 854
+  warmup_samples: 0
+  stable_samples:
+    - 19200
+  decay_samples:
+    - 12800
   peak_lr: 0.0001
   min_lr_factor: 0.01
   last_epoch: -1
@@ -91,6 +93,7 @@ scheduler:
 algorithm:
   _target_: src.algorithms.Indoor
   name: indoor
+  log_every_n_steps: 100
   validation_names: [ "rt" ]
   out_norm: 160
   fixed_scale: False
@@ -165,10 +168,11 @@ callbacks:
     every_n_epochs: 4
 
 loggers:
-  aim:
-    _target_: aim.pytorch_lightning.AimLogger
-    repo: ${oc.env:AIM_REPO}
-    experiment: v4_icassp_task1  # overrides
+  wandb:
+    _target_: pytorch_lightning.loggers.WandbLogger
+    project: indoor
+    name: v4_icassp_task1  # overrides
+    save_dir: ${oc.env:WANDB_SAVE_DIR}
 
 hydra:
   run:

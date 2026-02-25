@@ -1,11 +1,11 @@
 _target_: src.schedulers.wsd_s.WSDScheduler
 
 name: icassp1_sd_finetune_32
-warmup_steps: 0
-stable_steps:
-  - 1280
-decay_steps:
-  - 854
+warmup_samples: 0
+stable_samples:
+  - 19200
+decay_samples:
+  - 12800
 peak_lr: 0.0001
 min_lr_factor: 0.01
 last_epoch: -1

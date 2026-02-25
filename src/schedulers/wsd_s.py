@@ -9,18 +9,20 @@ Phase = dict[str, Any]
 
 class WSDScheduler(_LRScheduler):
     """
-    Warmup-Stable-Decay (WSD-S) scheduler that follows a predefined step allocation.
-    It ramps the learning rate from zero to the peak during warmup and then alternates
-    between stable plateaus and decay ramps that connect the plateaus linearly.
-    The final learning rate is controlled by min_lr_factor (default 0.0).
+    Warmup-Stable-Decay (WSD-S) scheduler with sample-based phase allocation.
+
+    Accepts warmup/stable/decay durations in number of samples and a batch_size.
+    Internally converts samples to optimizer steps (samples // batch_size) and
+    then builds the same warmup -> stable -> decay phase schedule.
     """
     
     def __init__(
         self,
         optimizer: Optimizer,
-        warmup_steps: int,
-        stable_steps: Sequence[int],
-        decay_steps: Sequence[int],
+        warmup_samples: int,
+        stable_samples: Sequence[int],
+        decay_samples: Sequence[int],
+        batch_size: int,
         peak_lr: float,
         last_epoch: int,
         min_lr_factor: float,
@@ -28,6 +30,9 @@ class WSDScheduler(_LRScheduler):
         frequency: int | None = None,
     ):
         self._last_lr = None
+        warmup_steps = warmup_samples // batch_size
+        stable_steps = tuple(s // batch_size for s in stable_samples)
+        decay_steps = tuple(s // batch_size for s in decay_samples)
         self._validate_inputs(
             warmup_steps=warmup_steps,
             stable_steps=stable_steps,
@@ -36,8 +41,8 @@ class WSDScheduler(_LRScheduler):
             min_lr_factor=min_lr_factor,
         )
         self._warmup_steps = warmup_steps
-        self._stable_steps = tuple(int(step) for step in stable_steps)
-        self._decay_steps = tuple(int(step) for step in decay_steps)
+        self._stable_steps = stable_steps
+        self._decay_steps = decay_steps
         self._peak_lr = float(peak_lr)
         self._min_lr_factor = float(min_lr_factor)
         self._phases = self._build_phases()

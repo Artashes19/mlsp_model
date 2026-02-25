@@ -1,0 +1,5 @@
+wandb:
+  _target_: pytorch_lightning.loggers.WandbLogger
+  project: indoor
+  name: default
+  save_dir: ${oc.env:WANDB_SAVE_DIR}
