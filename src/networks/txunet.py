@@ -67,6 +67,97 @@ class LayerNorm2d(nn.Module):
         return y
 
 
+def _apply_rotary_2d(
+    x: torch.Tensor,
+    cos_row: torch.Tensor,
+    sin_row: torch.Tensor,
+    cos_col: torch.Tensor,
+    sin_col: torch.Tensor,
+    d_row: int,
+) -> torch.Tensor:
+    """
+    Apply 2D rotary embedding to the last dimension of x.
+
+    Works with shapes like [B, h, T, d] or [B*h, T, d].
+    """
+    x_row = x[..., :d_row]
+    x_col = x[..., d_row:]
+
+    half_r = d_row // 2
+    r1, r2 = x_row[..., :half_r], x_row[..., half_r:]
+    x_row = torch.cat(
+        [
+            r1 * cos_row - r2 * sin_row,
+            r1 * sin_row + r2 * cos_row,
+        ],
+        dim=-1,
+    )
+
+    half_c = x_col.shape[-1] // 2
+    c1, c2 = x_col[..., :half_c], x_col[..., half_c:]
+    x_col = torch.cat(
+        [
+            c1 * cos_col - c2 * sin_col,
+            c1 * sin_col + c2 * cos_col,
+        ],
+        dim=-1,
+    )
+
+    return torch.cat([x_row, x_col], dim=-1)
+
+
+class RotaryEmbedding2D(nn.Module):
+    """
+    2D Rotary Position Embedding for spatial attention.
+
+    Stores inverse frequency vectors as non-persistent buffers so state_dict
+    stays compatible with checkpoints from models without RoPE.
+    """
+
+    def __init__(self, d_head: int, base: float = 10000.0) -> None:
+        super().__init__()
+        self.d_head = int(d_head)
+        self.d_row = self.d_head // 2
+        self.d_col = self.d_head - self.d_row
+
+        inv_freq_row = 1.0 / (base ** (torch.arange(0, self.d_row, 2).float() / max(self.d_row, 1)))
+        inv_freq_col = 1.0 / (base ** (torch.arange(0, self.d_col, 2).float() / max(self.d_col, 1)))
+        self.register_buffer("inv_freq_row", inv_freq_row, persistent=False)
+        self.register_buffer("inv_freq_col", inv_freq_col, persistent=False)
+
+    def forward(self, x: torch.Tensor, H: int, W: int, stride: int = 1) -> torch.Tensor:
+        """
+        Apply 2D RoPE rotation to x where T == H * W in row-major order.
+        """
+        T = x.shape[-2]
+        if T != H * W:
+            raise ValueError(f"Expected T == H*W ({H*W}), got T={T}")
+
+        device = x.device
+        rows = torch.arange(H, device=device, dtype=torch.float32) * float(stride)
+        cols = torch.arange(W, device=device, dtype=torch.float32) * float(stride)
+
+        inv_freq_row = self.inv_freq_row.to(device=device)
+        inv_freq_col = self.inv_freq_col.to(device=device)
+
+        angles_row = rows.unsqueeze(-1) * inv_freq_row
+        angles_col = cols.unsqueeze(-1) * inv_freq_col
+
+        cos_row = angles_row.cos().unsqueeze(1).expand(H, W, -1).reshape(H * W, -1)
+        sin_row = angles_row.sin().unsqueeze(1).expand(H, W, -1).reshape(H * W, -1)
+        cos_col = angles_col.cos().unsqueeze(0).expand(H, W, -1).reshape(H * W, -1)
+        sin_col = angles_col.sin().unsqueeze(0).expand(H, W, -1).reshape(H * W, -1)
+
+        return _apply_rotary_2d(
+            x,
+            cos_row.to(dtype=x.dtype),
+            sin_row.to(dtype=x.dtype),
+            cos_col.to(dtype=x.dtype),
+            sin_col.to(dtype=x.dtype),
+            self.d_row,
+        )
+
+
 # ---------- Attention ----------
 
 class EfficientGlobalAttention(nn.Module):
@@ -87,7 +178,14 @@ class EfficientGlobalAttention(nn.Module):
     Output: [B, C, H, W]
     """
     
-    def __init__(self, dim: int, num_heads: int, kv_stride: int = 1) -> None:
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        kv_stride: int = 1,
+        rope_enabled: bool = False,
+        rope_base: float = 10000.0,
+    ) -> None:
         super().__init__()
         assert dim % num_heads == 0, "dim must be divisible by num_heads"
         self.dim = dim
@@ -102,6 +200,7 @@ class EfficientGlobalAttention(nn.Module):
         
         # Output projection
         self.proj = nn.Conv2d(dim, dim, kernel_size=1, bias=True)
+        self.rope = RotaryEmbedding2D(self.d, base=rope_base) if rope_enabled else None
     
     @torch.no_grad()
     def _choose_chunks(self, T: int, d: int, bytes_per_el: int = 4) -> tuple[int, int]:
@@ -201,6 +300,10 @@ class EfficientGlobalAttention(nn.Module):
             q_bhtd = to_bhtd_q(q)
             k_bhtd = to_bhtd_kv(k)
             v_bhtd = to_bhtd_kv(v)
+
+            if self.rope is not None:
+                q_bhtd = self.rope(q_bhtd, H, W, stride=1)
+                k_bhtd = self.rope(k_bhtd, Hk, Wk, stride=kv_stride if kv_stride > 1 else 1)
             
             # SDPA auto-selects best backend (Flash for FP16/BF16, else fallback)
             out_bhtd = F.scaled_dot_product_attention(q_bhtd, k_bhtd, v_bhtd, dropout_p=0.0, is_causal=False)
@@ -221,6 +324,11 @@ class EfficientGlobalAttention(nn.Module):
         q_bhd = to_bhd_q(q)
         k_bhd = to_bhd_kv(k)
         v_bhd = to_bhd_kv(v)
+
+        if self.rope is not None:
+            q_bhd = self.rope(q_bhd, H, W, stride=1)
+            k_bhd = self.rope(k_bhd, Hk, Wk, stride=kv_stride if kv_stride > 1 else 1)
+
         out_bhd = self._attn_streaming(q_bhd, k_bhd, v_bhd)  # [B*h, Tq, d]
         out = out_bhd.view(B, h, H, W, d).permute(0, 1, 4, 2, 3).contiguous().view(B, C, H, W)
         return self.proj(out)
@@ -318,11 +426,26 @@ class TransformerBlock(nn.Module):
     Output: [B, C, H, W]
     """
     
-    def __init__(self, dim: int, heads: int, expand: float = 2.66, ln_eps: float = 1e-5, kv_stride: int = 1) -> None:
+    def __init__(
+        self,
+        dim: int,
+        heads: int,
+        expand: float = 2.66,
+        ln_eps: float = 1e-5,
+        kv_stride: int = 1,
+        rope_enabled: bool = False,
+        rope_base: float = 10000.0,
+    ) -> None:
         super().__init__()
         # Module registration order must match korean-model for weight reproducibility
         self.norm1 = LayerNorm2d(dim, eps=ln_eps)
-        self.attn = EfficientGlobalAttention(dim, heads, kv_stride=kv_stride)
+        self.attn = EfficientGlobalAttention(
+            dim,
+            heads,
+            kv_stride=kv_stride,
+            rope_enabled=rope_enabled,
+            rope_base=rope_base,
+        )
         self.norm2 = LayerNorm2d(dim, eps=ln_eps)
         self.ffn = GatedDepthwiseFFN(dim, expand)
     
@@ -346,12 +469,22 @@ class WindowedTransformerBlock(nn.Module):
         window: int = 8,
         stride: int | None = None,
         kv_stride: int = 1,
+        rope_enabled: bool = False,
+        rope_base: float = 10000.0,
     ) -> None:
         super().__init__()
         # Module registration order must match korean-model for weight reproducibility
         self.norm1 = LayerNorm2d(dim, eps=ln_eps)
         self.attn = WindowAttention(
-            EfficientGlobalAttention(dim, heads, kv_stride=kv_stride), window=window, stride=stride
+            EfficientGlobalAttention(
+                dim,
+                heads,
+                kv_stride=kv_stride,
+                rope_enabled=rope_enabled,
+                rope_base=rope_base,
+            ),
+            window=window,
+            stride=stride,
         )
         self.norm2 = LayerNorm2d(dim, eps=ln_eps)
         self.ffn = GatedDepthwiseFFN(dim, expand)
@@ -491,12 +624,15 @@ class TxUNetModel(nn.Module):
         window0_stride: int | None = None,
         sra0_enabled: bool = False,
         sra0_stride: int = 2,
+        rope_enabled: bool = False,
+        rope_base: float = 10000.0,
         **kwargs,
     ) -> None:
         super().__init__()
         c = base_ch
         self.use_checkpoint = use_checkpoint
         self.ln_eps = float(ln_eps)
+        rope_kwargs = {"rope_enabled": rope_enabled, "rope_base": rope_base}
         
         # ============ STEM ============
         # 3×3 conv: in_ch → C
@@ -510,13 +646,14 @@ class TxUNetModel(nn.Module):
         # ============ ENCODER ============
         # Level 0: [B, C, H, W]
         enc0_cls: type[nn.Module]
-        enc0_kwargs: dict | None = None
+        enc0_kwargs: dict = {**rope_kwargs}
         if sra0_enabled:
             enc0_cls = TransformerBlock
-            enc0_kwargs = {"kv_stride": sra0_stride}
+            enc0_kwargs["kv_stride"] = sra0_stride
         elif window0:
             enc0_cls = WindowedTransformerBlock
-            enc0_kwargs = {"window": window0, "stride": window0_stride}
+            enc0_kwargs["window"] = window0
+            enc0_kwargs["stride"] = window0_stride
         else:
             enc0_cls = TransformerBlock
         self.enc0 = make_blocks(
@@ -527,19 +664,19 @@ class TxUNetModel(nn.Module):
         self.down1 = Downsample(c, 2 * c)
         
         # Level 1: [B, 2C, H/2, W/2]
-        self.enc1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps)
+        self.enc1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs=rope_kwargs)
         
         # Downsample: 2C → 4C, spatial /2
         self.down2 = Downsample(2 * c, 4 * c)
         
         # Level 2: [B, 4C, H/4, W/4]
-        self.enc2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps)
+        self.enc2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs=rope_kwargs)
         
         # Downsample: 4C → 8C, spatial /2
         self.down3 = Downsample(4 * c, 8 * c)
         
         # Bottleneck (Level 3): [B, 8C, H/8, W/8]
-        self.enc3 = make_blocks(8 * c, depths[3], heads[3], expand, self.ln_eps)
+        self.enc3 = make_blocks(8 * c, depths[3], heads[3], expand, self.ln_eps, block_kwargs=rope_kwargs)
         
         # ============ SKIP CONNECTIONS ============
         # Level 0: NO skip conv (concat only)
@@ -554,34 +691,35 @@ class TxUNetModel(nn.Module):
         self.up3 = Upsample(8 * c, 4 * c)
         # Fuse after concat: 8C → 4C
         self.fuse2 = nn.Conv2d(8 * c, 4 * c, kernel_size=1)
-        self.dec2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps)
+        self.dec2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs=rope_kwargs)
         
         # Level 1 decoder
         # Upsample: 4C → 2C
         self.up2 = Upsample(4 * c, 2 * c)
         # Fuse after concat: 4C → 2C
         self.fuse1 = nn.Conv2d(4 * c, 2 * c, kernel_size=1)
-        self.dec1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps)
+        self.dec1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs=rope_kwargs)
         
         # Level 0 decoder (special handling)
         # Upsample: 2C → C
         self.up1 = Upsample(2 * c, c)
         # NO fuse0 - just concat (C + C = 2C)
         # N₁ transformer blocks at 2C
+        dec0_kwargs: dict = {**rope_kwargs}
         if sra0_enabled:
             dec0_cls = TransformerBlock
-            dec0_kwargs = {"kv_stride": sra0_stride}
+            dec0_kwargs["kv_stride"] = sra0_stride
         elif window0:
             dec0_cls = WindowedTransformerBlock
-            dec0_kwargs = {"window": window0, "stride": window0_stride}
+            dec0_kwargs["window"] = window0
+            dec0_kwargs["stride"] = window0_stride
         else:
             dec0_cls = TransformerBlock
-            dec0_kwargs = None
         self.dec0 = make_blocks(
             2 * c, depths[0], heads[0], expand, self.ln_eps, block_cls=dec0_cls, block_kwargs=dec0_kwargs
         )
         # +1 extra single transformer block
-        self.dec0_extra = dec0_cls(2 * c, heads[0], expand, ln_eps=self.ln_eps, **(dec0_kwargs or {}))
+        self.dec0_extra = dec0_cls(2 * c, heads[0], expand, ln_eps=self.ln_eps, **dec0_kwargs)
         
         # ============ HEAD ============
         # 3×3 conv: 2C → C

@@ -13,3 +13,5 @@ window0: null
 window0_stride: null
 sra0_enabled: True
 sra0_stride: 4
+rope_enabled: True
+rope_base: 10000.0
