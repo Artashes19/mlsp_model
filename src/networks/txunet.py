@@ -450,14 +450,7 @@ class NSA2DAttention(nn.Module):
             importance_batch = importance.sum(dim=1, keepdim=True)
             _, top_idx = importance_batch.topk(n, dim=-1)
 
-        # GPU path: Triton kernels
-        if q.is_cuda and G > 1:
-            from src.ops.selection_attention_2d_gqa import SelectionAttn2DGQA, make_patch_starts
-            patch_starts = make_patch_starts(H, W, p, q.device)
-            return SelectionAttn2DGQA.apply(
-                q, k, v, top_idx.to(torch.int32),
-                patch_starts, pp, H, W, p, 1.0 / math.sqrt(d), G,
-            )
+        # GPU path: Triton kernel (MHA only; GQA uses gather+SDPA below)
         if q.is_cuda and G == 1:
             from src.ops.selection_attention_2d import SelectionAttn2D, make_patch_starts
             patch_starts = make_patch_starts(H, W, p, q.device)
@@ -1025,6 +1018,7 @@ class TxUNetModel(nn.Module):
         nsa_top_n: Sequence[int] = (32, 16, 16, 16),
         nsa_window_sizes: Sequence[int] = (16, 16, 8, 8),
         nsa_gqa_group_size: int = 1,
+        nsa_levels: Sequence[int] | None = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -1033,6 +1027,7 @@ class TxUNetModel(nn.Module):
         self.ln_eps = float(ln_eps)
         rope_kwargs = {"rope_enabled": rope_enabled, "rope_base": rope_base}
         self.nsa_enabled = bool(nsa_enabled)
+        self._nsa_levels = set(nsa_levels if nsa_levels is not None else range(4))
 
         if len(depths) != 4 or len(heads) != 4:
             raise ValueError("depths and heads must each have 4 entries (levels L0-L3)")
@@ -1095,7 +1090,7 @@ class TxUNetModel(nn.Module):
         
         # ============ ENCODER ============
         # Level 0: [B, C, H, W]
-        if self.nsa_enabled:
+        if self.nsa_enabled and 0 in self._nsa_levels:
             self.enc0 = _make_nsa_block_seq(c, depths[0], heads[0], 0)
         else:
             enc0_cls: type[nn.Module]
@@ -1117,7 +1112,7 @@ class TxUNetModel(nn.Module):
         self.down1 = Downsample(c, 2 * c)
         
         # Level 1: [B, 2C, H/2, W/2]
-        if self.nsa_enabled:
+        if self.nsa_enabled and 1 in self._nsa_levels:
             self.enc1 = _make_nsa_block_seq(2 * c, depths[1], heads[1], 1)
         else:
             self.enc1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs=rope_kwargs)
@@ -1126,7 +1121,7 @@ class TxUNetModel(nn.Module):
         self.down2 = Downsample(2 * c, 4 * c)
         
         # Level 2: [B, 4C, H/4, W/4]
-        if self.nsa_enabled:
+        if self.nsa_enabled and 2 in self._nsa_levels:
             self.enc2 = _make_nsa_block_seq(4 * c, depths[2], heads[2], 2)
         else:
             self.enc2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs=rope_kwargs)
@@ -1135,7 +1130,7 @@ class TxUNetModel(nn.Module):
         self.down3 = Downsample(4 * c, 8 * c)
         
         # Bottleneck (Level 3): [B, 8C, H/8, W/8]
-        if self.nsa_enabled:
+        if self.nsa_enabled and 3 in self._nsa_levels:
             self.enc3 = _make_nsa_block_seq(8 * c, depths[3], heads[3], 3)
         else:
             self.enc3 = make_blocks(8 * c, depths[3], heads[3], expand, self.ln_eps, block_kwargs=rope_kwargs)
@@ -1153,7 +1148,7 @@ class TxUNetModel(nn.Module):
         self.up3 = Upsample(8 * c, 4 * c)
         # Fuse after concat: 8C → 4C
         self.fuse2 = nn.Conv2d(8 * c, 4 * c, kernel_size=1)
-        if self.nsa_enabled:
+        if self.nsa_enabled and 2 in self._nsa_levels:
             self.dec2 = _make_nsa_block_seq(4 * c, depths[2], heads[2], 2)
         else:
             self.dec2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs=rope_kwargs)
@@ -1163,7 +1158,7 @@ class TxUNetModel(nn.Module):
         self.up2 = Upsample(4 * c, 2 * c)
         # Fuse after concat: 4C → 2C
         self.fuse1 = nn.Conv2d(4 * c, 2 * c, kernel_size=1)
-        if self.nsa_enabled:
+        if self.nsa_enabled and 1 in self._nsa_levels:
             self.dec1 = _make_nsa_block_seq(2 * c, depths[1], heads[1], 1)
         else:
             self.dec1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs=rope_kwargs)
@@ -1173,7 +1168,7 @@ class TxUNetModel(nn.Module):
         self.up1 = Upsample(2 * c, c)
         # NO fuse0 - just concat (C + C = 2C)
         # N₁ transformer blocks at 2C
-        if self.nsa_enabled:
+        if self.nsa_enabled and 0 in self._nsa_levels:
             self.dec0 = _make_nsa_block_seq(2 * c, depths[0], heads[0], 0)
             self.dec0_extra = _make_nsa_single_block(2 * c, heads[0], 0)
         else:
