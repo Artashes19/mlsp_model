@@ -1,0 +1,121 @@
+import pytest
+import torch
+import torch.nn.functional as F
+
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+
+def _naive_gqa_selection(q, k, v, top_idx, patch_starts, pp, P, W_spatial, G):
+    """Reference: gather + SDPA for GQA selection attention."""
+    B, h_q, T, d = q.shape
+    h_kv = h_q // G
+    top_n = top_idx.shape[2]
+    H_spatial = T // W_spatial
+    nH, nW = H_spatial // P, W_spatial // P
+    n_patches = nH * nW
+
+    k_2d = k.view(B, h_kv, H_spatial, W_spatial, d)
+    k_patches = k_2d.view(B, h_kv, nH, P, nW, P, d).permute(0, 1, 2, 4, 3, 5, 6).contiguous()
+    k_patches = k_patches.view(B, h_kv, n_patches, pp, d)
+    v_2d = v.view(B, h_kv, H_spatial, W_spatial, d)
+    v_patches = v_2d.view(B, h_kv, nH, P, nW, P, d).permute(0, 1, 2, 4, 3, 5, 6).contiguous()
+    v_patches = v_patches.view(B, h_kv, n_patches, pp, d)
+
+    idx = top_idx.long()[:, :, :, None, None].expand(B, h_kv, top_n, pp, d)
+    k_sel = k_patches.gather(2, idx).reshape(B, h_kv, top_n * pp, d)
+    v_sel = v_patches.gather(2, idx).reshape(B, h_kv, top_n * pp, d)
+
+    return F.scaled_dot_product_attention(q, k_sel, v_sel, enable_gqa=True)
+
+
+class TestGQASelectionForward:
+    @pytest.mark.parametrize("h_q,h_kv,d", [(8, 2, 24), (4, 1, 12), (8, 2, 48)])
+    def test_fwd_matches_naive(self, h_q, h_kv, d):
+        from src.ops.selection_attention_2d_gqa import SelectionAttn2DGQA, make_patch_starts
+        B, H, W, P = 1, 16, 16, 4
+        T, pp, top_n, G = H * W, P * P, 4, h_q // h_kv
+        n_patches = (H // P) * (W // P)
+
+        torch.manual_seed(42)
+        q = torch.randn(B, h_q, T, d, device="cuda")
+        k = torch.randn(B, h_kv, T, d, device="cuda")
+        v = torch.randn(B, h_kv, T, d, device="cuda")
+        top_idx = torch.randint(0, n_patches, (B, h_kv, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+        scale = 1.0 / (d ** 0.5)
+
+        o_triton = SelectionAttn2DGQA.apply(q, k, v, top_idx, patch_starts, pp, H, W, P, scale, G)
+        o_naive = _naive_gqa_selection(q, k, v, top_idx, patch_starts, pp, P, W, G)
+        assert torch.allclose(o_triton, o_naive, atol=1e-2, rtol=1e-2)
+
+    def test_fwd_bf16(self):
+        from src.ops.selection_attention_2d_gqa import SelectionAttn2DGQA, make_patch_starts
+        B, h_q, h_kv, d, H, W, P = 1, 8, 2, 24, 16, 16, 4
+        T, pp, top_n, G = H * W, P * P, 4, 4
+        n_patches = (H // P) * (W // P)
+
+        q = torch.randn(B, h_q, T, d, device="cuda", dtype=torch.bfloat16)
+        k = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.bfloat16)
+        v = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.bfloat16)
+        top_idx = torch.randint(0, n_patches, (B, h_kv, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+        scale = 1.0 / (d ** 0.5)
+
+        o = SelectionAttn2DGQA.apply(q, k, v, top_idx, patch_starts, pp, H, W, P, scale, G)
+        assert o.dtype == torch.bfloat16
+        assert not torch.isnan(o).any()
+
+
+class TestGQASelectionBackward:
+    @pytest.mark.parametrize("h_q,h_kv,d", [(8, 2, 24), (4, 1, 12)])
+    def test_backward_dq_matches_naive(self, h_q, h_kv, d):
+        from src.ops.selection_attention_2d_gqa import SelectionAttn2DGQA, make_patch_starts
+        B, H, W, P = 1, 16, 16, 4
+        T, pp, top_n, G = H * W, P * P, 4, h_q // h_kv
+        n_patches = (H // P) * (W // P)
+
+        torch.manual_seed(42)
+        q = torch.randn(B, h_q, T, d, device="cuda", requires_grad=True)
+        k = torch.randn(B, h_kv, T, d, device="cuda")
+        v = torch.randn(B, h_kv, T, d, device="cuda")
+        top_idx = torch.randint(0, n_patches, (B, h_kv, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+        scale = 1.0 / (d ** 0.5)
+
+        o = SelectionAttn2DGQA.apply(q, k, v, top_idx, patch_starts, pp, H, W, P, scale, G)
+        o.sum().backward()
+        dq_triton = q.grad.clone()
+
+        q2 = q.detach().clone().requires_grad_(True)
+        o_naive = _naive_gqa_selection(q2, k, v, top_idx, patch_starts, pp, P, W, G)
+        o_naive.sum().backward()
+        dq_naive = q2.grad
+
+        assert torch.allclose(dq_triton, dq_naive, atol=5e-2, rtol=5e-2)
+
+    @pytest.mark.parametrize("h_q,h_kv,d", [(8, 2, 24), (4, 1, 12)])
+    def test_backward_dk_dv_matches_naive(self, h_q, h_kv, d):
+        from src.ops.selection_attention_2d_gqa import SelectionAttn2DGQA, make_patch_starts
+        B, H, W, P = 1, 16, 16, 4
+        T, pp, top_n, G = H * W, P * P, 4, h_q // h_kv
+        n_patches = (H // P) * (W // P)
+
+        torch.manual_seed(42)
+        q = torch.randn(B, h_q, T, d, device="cuda")
+        k = torch.randn(B, h_kv, T, d, device="cuda", requires_grad=True)
+        v = torch.randn(B, h_kv, T, d, device="cuda", requires_grad=True)
+        top_idx = torch.randint(0, n_patches, (B, h_kv, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+        scale = 1.0 / (d ** 0.5)
+
+        o = SelectionAttn2DGQA.apply(q, k, v, top_idx, patch_starts, pp, H, W, P, scale, G)
+        o.sum().backward()
+        dk_triton = k.grad.clone()
+        dv_triton = v.grad.clone()
+
+        k2 = k.detach().clone().requires_grad_(True)
+        v2 = v.detach().clone().requires_grad_(True)
+        o_naive = _naive_gqa_selection(q, k2, v2, top_idx, patch_starts, pp, P, W, G)
+        o_naive.sum().backward()
+
+        assert torch.allclose(dk_triton, k2.grad, atol=5e-2, rtol=5e-2)
+        assert torch.allclose(dv_triton, v2.grad, atol=5e-2, rtol=5e-2)
