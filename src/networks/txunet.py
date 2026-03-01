@@ -442,9 +442,22 @@ class NSA2DAttention(nn.Module):
                     logits = torch.einsum("bhgtd,bhnd->bhgtn", q_chunk * scale, k_cmp)
                     importance += F.softmax(logits, dim=-1).sum(dim=3).sum(dim=2)
 
-        _, top_idx = importance.topk(n, dim=-1)  # [B, h_kv, n]
+        if G > 1:
+            # GQA: per-KV-head selection — [B, h_kv, n]
+            _, top_idx = importance.topk(n, dim=-1)
+        else:
+            # MHA: all heads share patches — sum across heads → [B, 1, n]
+            importance_batch = importance.sum(dim=1, keepdim=True)
+            _, top_idx = importance_batch.topk(n, dim=-1)
 
-        # GPU path: Triton MHA kernel for gqa_group_size==1, gather+SDPA otherwise
+        # GPU path: Triton kernels
+        if q.is_cuda and G > 1:
+            from src.ops.selection_attention_2d_gqa import SelectionAttn2DGQA, make_patch_starts
+            patch_starts = make_patch_starts(H, W, p, q.device)
+            return SelectionAttn2DGQA.apply(
+                q, k, v, top_idx.to(torch.int32),
+                patch_starts, pp, H, W, p, 1.0 / math.sqrt(d), G,
+            )
         if q.is_cuda and G == 1:
             from src.ops.selection_attention_2d import SelectionAttn2D, make_patch_starts
             patch_starts = make_patch_starts(H, W, p, q.device)
@@ -453,8 +466,7 @@ class NSA2DAttention(nn.Module):
                 patch_starts, pp, H, W, p, 1.0 / math.sqrt(d),
             )
 
-        # Phase A path for GQA (G > 1) on GPU, and CPU fallback for all cases:
-        # gather + SDPA with enable_gqa=True
+        # CPU fallback: gather + SDPA with enable_gqa=True
         k_patches = self._bhtd_to_patches(k, B, h_kv, H, W, p)  # [B, h_kv, n_patches, pp, d]
         v_patches = self._bhtd_to_patches(v, B, h_kv, H, W, p)
 

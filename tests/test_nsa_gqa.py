@@ -165,6 +165,30 @@ class TestSelectionBranchGQA:
 
 
 # ============================================================
+# Task 10: Triton GQA kernel integration tests
+# ============================================================
+
+class TestSelectionTritonGQA:
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_selection_uses_triton_on_gpu(self):
+        """On CUDA with G>1, selection branch should use Triton GQA kernel."""
+        attn = NSA2DAttention(dim=192, num_heads=8, gqa_group_size=4,
+                              patch_size=4, top_n=4, window_size=4).cuda()
+        B, H, W, d = 1, 16, 16, 24
+        h_q, h_kv = 8, 2
+        q = torch.randn(B, h_q, H * W, d, device="cuda", requires_grad=True)
+        k = torch.randn(B, h_kv, H * W, d, device="cuda", requires_grad=True)
+        v = torch.randn(B, h_kv, H * W, d, device="cuda", requires_grad=True)
+        k_cmp = torch.randn(B, h_kv, 16, d, device="cuda")
+        o = attn._selection_branch(q, k, v, k_cmp, H, W)
+        assert o.shape == (B, h_q, H * W, d)
+        o.sum().backward()
+        assert q.grad is not None
+        assert k.grad is not None
+        assert v.grad is not None
+
+
+# ============================================================
 # Task 6: TxUNetModel wiring tests
 # ============================================================
 

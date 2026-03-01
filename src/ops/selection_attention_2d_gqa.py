@@ -29,19 +29,9 @@ def _next_power_of_2(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
 
-def _select_block_q_backward(d: int, top_n: int, pp: int) -> int:
-    selected_tokens = top_n * pp
-    return 32 if (d <= 64 or selected_tokens >= 256) else 64
-
-
 def _select_num_warps(block_q: int, G: int) -> int:
     total_rows = block_q * G
-    if total_rows <= 32:
-        return 4
-    elif total_rows <= 64:
-        return 4
-    else:
-        return 8
+    return 4 if total_rows <= 64 else 8
 
 
 def make_patch_starts(H: int, W: int, patch_size: int, device: torch.device) -> torch.Tensor:
