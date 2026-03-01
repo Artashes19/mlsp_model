@@ -162,3 +162,54 @@ class TestSelectionBranchGQA:
         assert q.grad is not None
         assert k.grad is not None
         assert v.grad is not None
+
+
+# ============================================================
+# Task 6: TxUNetModel wiring tests
+# ============================================================
+
+from src.networks.txunet import TxUNetModel
+
+class TestTxUNetModelGQA:
+    def test_model_accepts_gqa_group_size(self):
+        """TxUNetModel should accept nsa_gqa_group_size param."""
+        model = TxUNetModel(
+            in_ch=4, out_ch=1, base_ch=48,
+            depths=(2, 2, 2, 2), heads=(4, 4, 8, 8),
+            nsa_enabled=True, nsa_gqa_group_size=4,
+            nsa_patch_sizes=[4, 4, 4, 4],
+            nsa_top_n=[4, 4, 4, 4],
+            nsa_window_sizes=[4, 4, 4, 4],
+        )
+        x = torch.randn(1, 4, 16, 16)
+        out = model(x)
+        assert out.shape == (1, 1, 16, 16)
+
+    def test_model_gqa_default_is_mha(self):
+        """Default gqa_group_size=1 (MHA) for backward compat."""
+        model = TxUNetModel(
+            in_ch=4, out_ch=1, base_ch=48,
+            depths=(2, 2, 2, 2), heads=(4, 4, 8, 8),
+            nsa_enabled=True,
+            nsa_patch_sizes=[4, 4, 4, 4],
+            nsa_top_n=[4, 4, 4, 4],
+            nsa_window_sizes=[4, 4, 4, 4],
+        )
+        x = torch.randn(1, 4, 16, 16)
+        out = model(x)
+        assert out.shape == (1, 1, 16, 16)
+
+    def test_model_gqa_backward(self):
+        """Full model backward with GQA should work."""
+        model = TxUNetModel(
+            in_ch=4, out_ch=1, base_ch=48,
+            depths=(2, 2, 2, 2), heads=(4, 4, 8, 8),
+            nsa_enabled=True, nsa_gqa_group_size=4,
+            nsa_patch_sizes=[4, 4, 4, 4],
+            nsa_top_n=[4, 4, 4, 4],
+            nsa_window_sizes=[4, 4, 4, 4],
+        )
+        x = torch.randn(1, 4, 16, 16, requires_grad=True)
+        out = model(x)
+        out.sum().backward()
+        assert x.grad is not None

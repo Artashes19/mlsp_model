@@ -1012,6 +1012,7 @@ class TxUNetModel(nn.Module):
         nsa_patch_sizes: Sequence[int] = (8, 8, 4, 4),
         nsa_top_n: Sequence[int] = (32, 16, 16, 16),
         nsa_window_sizes: Sequence[int] = (16, 16, 8, 8),
+        nsa_gqa_group_size: int = 1,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -1039,6 +1040,7 @@ class TxUNetModel(nn.Module):
                     patch_size=nsa_patch_sizes[level_idx],
                     top_n=nsa_top_n[level_idx],
                     window_size=nsa_window_sizes[level_idx],
+                    gqa_group_size=nsa_gqa_group_size,
                     **rope_kwargs,
                 )
                 blocks.append(
@@ -1059,6 +1061,7 @@ class TxUNetModel(nn.Module):
                 patch_size=nsa_patch_sizes[level_idx],
                 top_n=nsa_top_n[level_idx],
                 window_size=nsa_window_sizes[level_idx],
+                gqa_group_size=nsa_gqa_group_size,
                 **rope_kwargs,
             )
             return TransformerBlock(
