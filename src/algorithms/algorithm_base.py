@@ -75,6 +75,37 @@ class AlgorithmBase(pl.LightningModule):
         self._end = torch.cuda.Event(enable_timing=True)
         self._start_backward = torch.cuda.Event(enable_timing=True)
         self._end_backward = torch.cuda.Event(enable_timing=True)
+
+        # torch.utils.flop_counter does not fully support SDPA enable_gqa paths.
+        # Disable initial FLOPs counting for GQA runs to avoid first-step crashes.
+        try:
+            gqa_group_size = int(getattr(self._network, "nsa_gqa_group_size", 1))
+            if gqa_group_size > 1:
+                self._should_count_flops = False
+        except Exception:
+            pass
+
+    def _disable_flop_counting(self, reason: str) -> None:
+        """Disable FLOPs bookkeeping after unsupported shape/operator is detected."""
+        self._should_count_flops = False
+        self._num_flops_train = None
+        self._num_flops_backward = None
+        if self.global_rank == 0:
+            log.warning(f"[FLOPs] disabled: {reason}")
+
+    @staticmethod
+    def _is_known_flop_counter_issue(exc: Exception) -> bool:
+        msg = str(exc)
+        if "sdpa_flop_count" in msg or "query/key/value shapes are incompatible" in msg:
+            return True
+
+        tb = exc.__traceback__
+        while tb is not None:
+            frame_path = tb.tb_frame.f_code.co_filename.replace("\\", "/")
+            if "torch/utils/flop_counter.py" in frame_path:
+                return True
+            tb = tb.tb_next
+        return False
     
     @property
     def network(self) -> nn.Module:
@@ -272,44 +303,51 @@ class AlgorithmBase(pl.LightningModule):
             micro_batch_size=micro_batch_size,
         )
 
-        flop_counter_train = FlopCounterMode(
-            display=False,
-            depth=1,
-        )
-        with flop_counter_train:
-            _ = self._step(
-                micro_batch,
-                split_name,
+        try:
+            flop_counter_train = FlopCounterMode(
+                display=False,
+                depth=1,
             )
-        flops_train_micro = float(flop_counter_train.get_total_flops())
+            with flop_counter_train:
+                _ = self._step(
+                    micro_batch,
+                    split_name,
+                )
+            flops_train_micro = float(flop_counter_train.get_total_flops())
 
-        flop_counter_total = FlopCounterMode(
-            display=False,
-            depth=1,
-        )
-        with flop_counter_total:
-            output_measure = self._step(
-                micro_batch,
-                split_name,
+            flop_counter_total = FlopCounterMode(
+                display=False,
+                depth=1,
             )
-            output_measure["loss"].backward()
-        flops_total_micro = float(flop_counter_total.get_total_flops())
-        flops_backward_micro = max(
-            0.0,
-            flops_total_micro - flops_train_micro,
-        )
+            with flop_counter_total:
+                output_measure = self._step(
+                    micro_batch,
+                    split_name,
+                )
+                output_measure["loss"].backward()
+            flops_total_micro = float(flop_counter_total.get_total_flops())
+            flops_backward_micro = max(
+                0.0,
+                flops_total_micro - flops_train_micro,
+            )
 
-        scale = float(actual_batch_size) / float(micro_batch_size)
-        self._num_flops_train = flops_train_micro * scale
-        self._num_flops_backward = flops_backward_micro * scale
-        self._should_count_flops = False
-        self._network.zero_grad(set_to_none=True)
+            scale = float(actual_batch_size) / float(micro_batch_size)
+            self._num_flops_train = flops_train_micro * scale
+            self._num_flops_backward = flops_backward_micro * scale
+            self._should_count_flops = False
+            self._network.zero_grad(set_to_none=True)
 
-        log.info(
-            f"[FLOPs] micro-batch={micro_batch_size}, actual_batch={actual_batch_size}, scale={scale:.2f}"
-        )
-        log.info(f"[FLOPs] Measured network FLOPs (train, scaled): {self._num_flops_train:.2e}")
-        log.info(f"[FLOPs] Measured network FLOPs (backward, scaled): {self._num_flops_backward:.2e}")
+            log.info(
+                f"[FLOPs] micro-batch={micro_batch_size}, actual_batch={actual_batch_size}, scale={scale:.2f}"
+            )
+            log.info(f"[FLOPs] Measured network FLOPs (train, scaled): {self._num_flops_train:.2e}")
+            log.info(f"[FLOPs] Measured network FLOPs (backward, scaled): {self._num_flops_backward:.2e}")
+        except Exception as e:
+            if self._is_known_flop_counter_issue(e):
+                self._network.zero_grad(set_to_none=True)
+                self._disable_flop_counting(f"unsupported SDPA/GQA flop path ({e})")
+                return
+            raise
     
     def __step(self, batch, split_name, dataloader_idx: int = 0):
         # Measure FLOPs before the training forward pass to avoid holding
@@ -364,7 +402,11 @@ class AlgorithmBase(pl.LightningModule):
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
         # Add flops_backward and flops_overall for train (backward time now available)
-        if "flops_forward" in outputs:
+        if (
+            "flops_forward" in outputs
+            and self._num_flops_train is not None
+            and self._num_flops_backward is not None
+        ):
             backward_time_s = self._last_backward_ms / 1000.0
             flops_backward = self._num_flops_backward / backward_time_s
             outputs["flops_backward"] = flops_backward
