@@ -44,27 +44,19 @@ class LayerNorm2d(nn.Module):
     """
     Channel-wise LayerNorm over [C] at each spatial location.
 
-    Stability:
-    - Upcasts to float32 inside LN to avoid tiny-eps issues in AMP/bfloat16.
-    - eps=1e-5 (safer than 1e-6 for half precision).
+    Wraps nn.LayerNorm which handles float32 upcast internally in a way
+    that torch.compile / Inductor respects (both forward and backward).
 
     Input: [B, C, H, W]
     Output: [B, C, H, W]
     """
-    
+
     def __init__(self, num_channels: int, eps: float = 1e-5) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(num_channels))
-        self.bias = nn.Parameter(torch.zeros(num_channels))
-        self.eps = eps
-    
+        self.ln = nn.LayerNorm(num_channels, eps=eps)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        dtype_in = x.dtype
-        # Permute to [B, H, W, C] for LayerNorm
-        y = x.permute(0, 2, 3, 1).to(torch.float32)
-        y = F.layer_norm(y, (y.shape[-1],), self.weight.to(y.dtype), self.bias.to(y.dtype), self.eps)
-        y = y.to(dtype_in).permute(0, 3, 1, 2)
-        return y
+        return self.ln(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
 
 def _apply_rotary_2d(
@@ -739,7 +731,7 @@ class TxUNetModel(nn.Module):
         """
         # ============ STEM ============
         # Save F₀ for residual connection in head
-        f0 = self.stem(x)  # [B, C, H, W]
+        f0 = self.stem(x).clone()  # [B, C, H, W]
         
         # ============ ENCODER ============
         # Level 0
