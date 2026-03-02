@@ -75,6 +75,37 @@ class AlgorithmBase(pl.LightningModule):
         self._end = torch.cuda.Event(enable_timing=True)
         self._start_backward = torch.cuda.Event(enable_timing=True)
         self._end_backward = torch.cuda.Event(enable_timing=True)
+
+        # torch.utils.flop_counter does not fully support SDPA enable_gqa paths.
+        # Disable initial FLOPs counting for GQA runs to avoid first-step crashes.
+        try:
+            gqa_group_size = int(getattr(self._network, "nsa_gqa_group_size", 1))
+            if gqa_group_size > 1:
+                self._should_count_flops = False
+        except Exception:
+            pass
+
+    def _disable_flop_counting(self, reason: str) -> None:
+        """Disable FLOPs bookkeeping after unsupported shape/operator is detected."""
+        self._should_count_flops = False
+        self._num_flops_train = None
+        self._num_flops_backward = None
+        if self.global_rank == 0:
+            log.warning(f"[FLOPs] disabled: {reason}")
+
+    @staticmethod
+    def _is_known_flop_counter_issue(exc: Exception) -> bool:
+        msg = str(exc)
+        if "sdpa_flop_count" in msg or "query/key/value shapes are incompatible" in msg:
+            return True
+
+        tb = exc.__traceback__
+        while tb is not None:
+            frame_path = tb.tb_frame.f_code.co_filename.replace("\\", "/")
+            if "torch/utils/flop_counter.py" in frame_path:
+                return True
+            tb = tb.tb_next
+        return False
     
     @property
     def network(self) -> nn.Module:
@@ -155,11 +186,18 @@ class AlgorithmBase(pl.LightningModule):
             if self._should_count_flops and self._network.training:
                 if self.global_rank == 0:
                     # 1. Measure training FLOPs (already in training mode)
-                    flop_counter_train = FlopCounterMode(display=False, depth=1)
-                    with flop_counter_train:
-                        result = fwd(*args, **kwargs)
-                    self._num_flops_train = flop_counter_train.get_total_flops()
-                    log.info(f"[FLOPs] Measured network FLOPs (train): {self._num_flops_train:.2e}")
+                    try:
+                        flop_counter_train = FlopCounterMode(display=False, depth=1)
+                        with flop_counter_train:
+                            result = fwd(*args, **kwargs)
+                        self._num_flops_train = flop_counter_train.get_total_flops()
+                        log.info(f"[FLOPs] Measured network FLOPs (train): {self._num_flops_train:.2e}")
+                    except Exception as e:
+                        if self._is_known_flop_counter_issue(e):
+                            self._disable_flop_counting(f"unsupported SDPA/GQA flop path ({e})")
+                            result = fwd(*args, **kwargs)
+                        else:
+                            raise
                 else:
                     result = fwd(*args, **kwargs)
                 self._should_count_flops = False
@@ -221,16 +259,22 @@ class AlgorithmBase(pl.LightningModule):
             and self._num_flops_train is not None
             and self.global_rank == 0
         ):
-            flop_counter = FlopCounterMode(display=False, depth=1)
-            with flop_counter:
-                output_measure = self._step(batch, split_name)
-                output_measure["loss"].backward()
-            total_flops = flop_counter.get_total_flops()
-            self._num_flops_backward = total_flops - self._num_flops_train
-            log.info(
-                f"[FLOPs] Measured network FLOPs (backward): {self._num_flops_backward:.2e}"
-            )
-            self.optimizers().zero_grad(set_to_none=True)
+            try:
+                flop_counter = FlopCounterMode(display=False, depth=1)
+                with flop_counter:
+                    output_measure = self._step(batch, split_name)
+                    output_measure["loss"].backward()
+                total_flops = flop_counter.get_total_flops()
+                self._num_flops_backward = total_flops - self._num_flops_train
+                log.info(
+                    f"[FLOPs] Measured network FLOPs (backward): {self._num_flops_backward:.2e}"
+                )
+                self.optimizers().zero_grad(set_to_none=True)
+            except Exception as e:
+                if self._is_known_flop_counter_issue(e):
+                    self._disable_flop_counting(f"unsupported SDPA/GQA flop path ({e})")
+                else:
+                    raise
         
         # After first forward (FLOPs measured), compile the network
         if not self._is_compiled and not self._compile.disable:
@@ -275,7 +319,11 @@ class AlgorithmBase(pl.LightningModule):
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         outputs = AlgorithmBase.convert_to_numpy(outputs)
         # Add flops_backward and flops_overall for train (backward time now available)
-        if "flops_forward" in outputs:
+        if (
+            "flops_forward" in outputs
+            and self._num_flops_train is not None
+            and self._num_flops_backward is not None
+        ):
             backward_time_s = self._last_backward_ms / 1000.0
             flops_backward = self._num_flops_backward / backward_time_s
             outputs["flops_backward"] = flops_backward
