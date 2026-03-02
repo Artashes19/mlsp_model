@@ -312,17 +312,18 @@ class AlgorithmBase(pl.LightningModule):
         log.info(f"[FLOPs] Measured network FLOPs (backward, scaled): {self._num_flops_backward:.2e}")
     
     def __step(self, batch, split_name, dataloader_idx: int = 0):
-        output = self._step(batch, split_name)
-
-        # Measure FLOPs on a one-sample micro-batch, then scale to actual batch size.
+        # Measure FLOPs before the training forward pass to avoid holding
+        # full-batch activations and micro-batch activations simultaneously.
         self._measure_flops_with_micro_batch(
             batch=batch,
             split_name=split_name,
         )
-        
+
         # After first forward (FLOPs measured), compile the network
         if not self._is_compiled and not self._compile.disable:
             self._compile_network()
+
+        output = self._step(batch, split_name)
         
         # Select the appropriate FLOP count based on phase
         is_training = split_name == "train"
