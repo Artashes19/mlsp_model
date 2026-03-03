@@ -391,23 +391,31 @@ class NSA2DAttention(nn.Module):
         H: int,
         W: int,
     ) -> torch.Tensor:
+        block_idx = self._compute_selection_block_idx(q, k_cmp)
+        return self._selection_from_block_idx(q, k, v, block_idx, H, W)
+
+    def _compute_selection_block_idx(
+        self,
+        q: torch.Tensor,      # [B, h_q, T, d]
+        k_cmp: torch.Tensor,  # [B, h_kv, n_patches, d]
+    ) -> torch.Tensor:
+        """
+        Compute per-query per-KV-head selected patch indices.
+
+        Returns:
+            block_idx: [B, h_kv, T, top_n] int32 (non-causal)
+        """
         B = q.shape[0]
         h_q, h_kv, G = self.h_q, self.h_kv, self.gqa_group_size
         d = self.d
-        p = self.patch_size
-        pp = p * p
-        nH, nW = H // p, W // p
-        n_patches = nH * nW
-        n = min(self.top_n, n_patches)
         T = q.shape[2]
+        n_patches = k_cmp.shape[2]
+        n = min(self.top_n, n_patches)
+        if h_q != h_kv * G:
+            raise ValueError("q head/group shape mismatch for GQA selection")
 
-        # --- Adaptive importance scoring (per KV head) ---
         with torch.no_grad():
             scale = 1.0 / math.sqrt(d)
-            importance = torch.zeros(B, h_kv, n_patches, device=q.device, dtype=torch.float32)
-
-            # Chunking policy for importance scoring.
-            # Optional fixed chunk avoids per-step mem_get_info sync overhead.
             elem_per_token = B * h_kv * G * n_patches * 4  # bytes for [B, h_kv, G, chunk, n_patches] fp32
             if self.importance_chunk_size is not None:
                 chunk_size = min(T, self.importance_chunk_size)
@@ -426,49 +434,91 @@ class NSA2DAttention(nn.Module):
 
             while True:
                 try:
-                    importance.zero_()
+                    idx_chunks: list[torch.Tensor] = []
                     for start in range(0, T, chunk_size):
                         end = min(start + chunk_size, T)
                         q_chunk = q_grouped[:, :, :, start:end, :]  # [B, h_kv, G, chunk, d]
-                        # logits: [B, h_kv, G, chunk, n_patches]
                         logits = torch.einsum("bhgtd,bhnd->bhgtn", q_chunk * scale, k_cmp)
-                        # softmax over n_patches, sum out chunk (dim=3) and G (dim=2)
-                        importance += F.softmax(logits, dim=-1).sum(dim=3).sum(dim=2)
-                    break
+                        scores = F.softmax(logits.float(), dim=-1).sum(dim=2)
+                        idx_chunks.append(scores.topk(n, dim=-1).indices.to(torch.int32))
+                    return torch.cat(idx_chunks, dim=2).contiguous()
                 except RuntimeError as e:
-                    if "out of memory" not in str(e):
+                    if "out of memory" not in str(e).lower():
                         raise
-                    # OOM fallback: halve chunk and retry until minimum chunk.
                     if chunk_size <= 64:
                         raise
                     chunk_size = max(64, chunk_size // 2)
+                    if q.is_cuda:
+                        torch.cuda.empty_cache()
 
-        if G > 1:
-            # GQA: per-KV-head selection — [B, h_kv, n]
-            _, top_idx = importance.topk(n, dim=-1)
-        else:
-            # MHA: all heads share patches — sum across heads → [B, 1, n]
-            importance_batch = importance.sum(dim=1, keepdim=True)
-            _, top_idx = importance_batch.topk(n, dim=-1)
+    def _selection_from_block_idx(
+        self,
+        q: torch.Tensor,             # [B, h_q, T, d]
+        k: torch.Tensor,             # [B, h_kv, T, d]
+        v: torch.Tensor,             # [B, h_kv, T, d]
+        block_idx: torch.Tensor,     # [B, h_kv, T, top_n]
+        H: int,
+        W: int,
+    ) -> torch.Tensor:
+        """
+        Non-causal per-query selection reference path.
+        """
+        B, h_q, T, d = q.shape
+        h_kv, G = self.h_kv, self.gqa_group_size
+        p = self.patch_size
+        pp = p * p
+        n = block_idx.shape[-1]
+        scale = 1.0 / math.sqrt(d)
+        selected_tokens = n * pp
 
-        # GPU path: Triton kernel (MHA only; GQA uses gather+SDPA below)
-        if q.is_cuda and G == 1:
-            from src.ops.selection_attention_2d import SelectionAttn2D, make_patch_starts
-            patch_starts = make_patch_starts(H, W, p, q.device)
-            return SelectionAttn2D.apply(
-                q, k, v, top_idx.squeeze(1).to(torch.int32),
-                patch_starts, pp, H, W, p, 1.0 / math.sqrt(d),
-            )
-
-        # CPU fallback: gather + SDPA with enable_gqa=True
         k_patches = self._bhtd_to_patches(k, B, h_kv, H, W, p)  # [B, h_kv, n_patches, pp, d]
         v_patches = self._bhtd_to_patches(v, B, h_kv, H, W, p)
 
-        gather_idx = top_idx[:, :, :, None, None].expand(B, h_kv, n, pp, d)
-        k_slc = k_patches.gather(2, gather_idx).reshape(B, h_kv, n * pp, d)
-        v_slc = v_patches.gather(2, gather_idx).reshape(B, h_kv, n * pp, d)
+        k_flat = k_patches.view(B * h_kv, -1, pp, d)
+        v_flat = v_patches.view(B * h_kv, -1, pp, d)
+        idx_flat = block_idx.view(B * h_kv, T * n).to(torch.int64)
+        gather_idx = idx_flat[:, :, None, None].expand(B * h_kv, T * n, pp, d)
+        k_slc = k_flat.gather(1, gather_idx).view(B * h_kv, T, selected_tokens, d)
+        v_slc = v_flat.gather(1, gather_idx).view(B * h_kv, T, selected_tokens, d)
 
-        return F.scaled_dot_product_attention(q, k_slc, v_slc, enable_gqa=True)
+        q_grouped = q.view(B, h_kv, G, T, d).reshape(B * h_kv, G, T, d)
+        out_grouped = torch.empty_like(q_grouped)
+
+        elem_per_token = B * h_kv * G * selected_tokens * 4
+        if self.importance_chunk_size is not None:
+            chunk_size = min(T, self.importance_chunk_size)
+        elif q.is_cuda and self.importance_use_mem_get_info:
+            free_mem = torch.cuda.mem_get_info(q.device)[0]
+            budget = int(free_mem * 0.2)
+            chunk_size = max(32, min(T, budget // max(elem_per_token, 1)))
+            chunk_size = (chunk_size // 32) * 32 or 32
+        elif q.is_cuda:
+            chunk_size = min(T, 1024)
+        else:
+            chunk_size = min(T, 256)
+
+        while True:
+            try:
+                for start in range(0, T, chunk_size):
+                    end = min(start + chunk_size, T)
+                    q_chunk = q_grouped[:, :, start:end, :]            # [Bh_kv, G, chunk, d]
+                    k_chunk = k_slc[:, start:end, :, :]                # [Bh_kv, chunk, S, d]
+                    v_chunk = v_slc[:, start:end, :, :]                # [Bh_kv, chunk, S, d]
+
+                    logits = torch.einsum("bgtd,btsd->bgts", q_chunk * scale, k_chunk).float()
+                    attn = F.softmax(logits, dim=-1).to(v_chunk.dtype)
+                    out_grouped[:, :, start:end, :] = torch.einsum("bgts,btsd->bgtd", attn, v_chunk)
+                break
+            except RuntimeError as e:
+                if "out of memory" not in str(e).lower():
+                    raise
+                if chunk_size <= 32:
+                    raise
+                chunk_size = max(32, chunk_size // 2)
+                if q.is_cuda:
+                    torch.cuda.empty_cache()
+
+        return out_grouped.view(B, h_q, T, d)
 
     @staticmethod
     def _same_window_padding(window_size: int) -> tuple[int, int, int, int]:

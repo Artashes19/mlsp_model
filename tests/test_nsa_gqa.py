@@ -163,6 +163,68 @@ class TestSelectionBranchGQA:
         assert k.grad is not None
         assert v.grad is not None
 
+    def test_selection_block_idx_shape_per_query_gqa(self):
+        """Selection indices must be per-query per-KV-head: [B, h_kv, T, top_n]."""
+        attn = NSA2DAttention(dim=192, num_heads=8, gqa_group_size=4,
+                              patch_size=4, top_n=2, window_size=4)
+        B, H, W, d = 1, 16, 16, 24
+        h_q, h_kv = 8, 2
+        q = torch.randn(B, h_q, H * W, d)
+        k_cmp = torch.randn(B, h_kv, (H // 4) * (W // 4), d)
+
+        block_idx = attn._compute_selection_block_idx(q, k_cmp)
+
+        assert block_idx.shape == (B, h_kv, H * W, 2)
+        assert block_idx.dtype == torch.int32
+        assert block_idx.is_contiguous()
+
+    def test_selection_block_idx_shape_per_query_mha(self):
+        """MHA must still be per-query per-head: [B, h_q, T, top_n]."""
+        attn = NSA2DAttention(dim=96, num_heads=4, gqa_group_size=1,
+                              patch_size=4, top_n=3, window_size=4)
+        B, H, W, d = 2, 8, 8, 24
+        h_q = 4
+        q = torch.randn(B, h_q, H * W, d)
+        k_cmp = torch.randn(B, h_q, (H // 4) * (W // 4), d)
+
+        block_idx = attn._compute_selection_block_idx(q, k_cmp)
+
+        assert block_idx.shape == (B, h_q, H * W, 3)
+        assert block_idx.dtype == torch.int32
+
+    def test_selection_block_idx_forbids_shared_shapes(self):
+        """Shared selection shapes [B, top_n] or [B,1,top_n] are disallowed."""
+        attn = NSA2DAttention(dim=96, num_heads=4, gqa_group_size=1,
+                              patch_size=4, top_n=2, window_size=4)
+        B, H, W, d = 1, 8, 8, 24
+        q = torch.randn(B, 4, H * W, d)
+        k_cmp = torch.randn(B, 4, (H // 4) * (W // 4), d)
+
+        block_idx = attn._compute_selection_block_idx(q, k_cmp)
+        assert block_idx.ndim == 4
+        assert block_idx.shape[2] == H * W
+
+    def test_selection_is_non_causal(self):
+        """Earlier query output is allowed to depend on later tokens."""
+        attn = NSA2DAttention(dim=24, num_heads=1, gqa_group_size=1,
+                              patch_size=2, top_n=1, window_size=2)
+        B, H, W, d = 1, 4, 4, 24
+        T = H * W
+
+        q = torch.randn(B, 1, T, d)
+        k = torch.zeros(B, 1, T, d)
+        v0 = torch.zeros(B, 1, T, d)
+        v1 = v0.clone()
+        v1[:, :, 3, :] = 100.0  # token index 3 is "future" for query token 0
+
+        # Select patch 1 for all queries: indices [2, 3, 6, 7] in row-major layout.
+        block_idx = torch.ones(B, 1, T, 1, dtype=torch.int32)
+
+        o0 = attn._selection_from_block_idx(q, k, v0, block_idx, H, W)
+        o1 = attn._selection_from_block_idx(q, k, v1, block_idx, H, W)
+
+        assert not torch.allclose(o0[:, :, 0, :], o1[:, :, 0, :], atol=1e-5)
+
 
 # ============================================================
 # Task 10: Triton GQA kernel integration tests
