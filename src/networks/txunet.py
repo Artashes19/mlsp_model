@@ -196,6 +196,8 @@ class NSA2DAttention(nn.Module):
         rope_enabled: bool = False,
         rope_base: float = 10000.0,
         gqa_group_size: int = 1,
+        importance_chunk_size: int | None = None,
+        importance_use_mem_get_info: bool = True,
     ) -> None:
         super().__init__()
         if dim % num_heads != 0:
@@ -213,12 +215,16 @@ class NSA2DAttention(nn.Module):
         self.patch_size = int(patch_size)
         self.top_n = int(top_n)
         self.window_size = int(window_size)
+        self.importance_chunk_size = int(importance_chunk_size) if importance_chunk_size is not None else None
+        self.importance_use_mem_get_info = bool(importance_use_mem_get_info)
         if self.patch_size <= 0:
             raise ValueError("patch_size must be > 0")
         if self.window_size <= 0:
             raise ValueError("window_size must be > 0")
         if self.top_n <= 0:
             raise ValueError("top_n must be > 0")
+        if self.importance_chunk_size is not None and self.importance_chunk_size <= 0:
+            raise ValueError("importance_chunk_size must be > 0 when provided")
 
         dim_kv = self.h_kv * self.d  # C_kv = C / G
 
@@ -400,39 +406,42 @@ class NSA2DAttention(nn.Module):
             scale = 1.0 / math.sqrt(d)
             importance = torch.zeros(B, h_kv, n_patches, device=q.device, dtype=torch.float32)
 
-            # Adaptive chunk: largest that fits in ~30% of free GPU memory
-            # Per-chunk alloc: [B, h_kv, G, chunk, n_patches] float32
-            elem_per_token = B * h_kv * G * n_patches * 4  # bytes
-            if q.is_cuda:
+            # Chunking policy for importance scoring.
+            # Optional fixed chunk avoids per-step mem_get_info sync overhead.
+            elem_per_token = B * h_kv * G * n_patches * 4  # bytes for [B, h_kv, G, chunk, n_patches] fp32
+            if self.importance_chunk_size is not None:
+                chunk_size = min(T, self.importance_chunk_size)
+            elif q.is_cuda and self.importance_use_mem_get_info:
                 free_mem = torch.cuda.mem_get_info(q.device)[0]
                 budget = int(free_mem * 0.3)
                 chunk_size = max(64, min(T, budget // max(elem_per_token, 1)))
                 chunk_size = (chunk_size // 64) * 64 or 64
+            elif q.is_cuda:
+                chunk_size = T
             else:
                 chunk_size = min(T, 1024)
 
             # Reshape q for grouped scoring: [B, h_kv, G, T, d]
             q_grouped = q.view(B, h_kv, G, T, d)
 
-            try:
-                for start in range(0, T, chunk_size):
-                    end = min(start + chunk_size, T)
-                    q_chunk = q_grouped[:, :, :, start:end, :]  # [B, h_kv, G, chunk, d]
-                    # logits: [B, h_kv, G, chunk, n_patches]
-                    logits = torch.einsum("bhgtd,bhnd->bhgtn", q_chunk * scale, k_cmp)
-                    # softmax over n_patches, sum out chunk (dim=3) and G (dim=2)
-                    importance += F.softmax(logits, dim=-1).sum(dim=3).sum(dim=2)
-            except RuntimeError as e:
-                if "out of memory" not in str(e):
-                    raise
-                # OOM fallback: halve chunk and retry
-                importance.zero_()
-                chunk_size = max(64, chunk_size // 2)
-                for start in range(0, T, chunk_size):
-                    end = min(start + chunk_size, T)
-                    q_chunk = q_grouped[:, :, :, start:end, :]
-                    logits = torch.einsum("bhgtd,bhnd->bhgtn", q_chunk * scale, k_cmp)
-                    importance += F.softmax(logits, dim=-1).sum(dim=3).sum(dim=2)
+            while True:
+                try:
+                    importance.zero_()
+                    for start in range(0, T, chunk_size):
+                        end = min(start + chunk_size, T)
+                        q_chunk = q_grouped[:, :, :, start:end, :]  # [B, h_kv, G, chunk, d]
+                        # logits: [B, h_kv, G, chunk, n_patches]
+                        logits = torch.einsum("bhgtd,bhnd->bhgtn", q_chunk * scale, k_cmp)
+                        # softmax over n_patches, sum out chunk (dim=3) and G (dim=2)
+                        importance += F.softmax(logits, dim=-1).sum(dim=3).sum(dim=2)
+                    break
+                except RuntimeError as e:
+                    if "out of memory" not in str(e):
+                        raise
+                    # OOM fallback: halve chunk and retry until minimum chunk.
+                    if chunk_size <= 64:
+                        raise
+                    chunk_size = max(64, chunk_size // 2)
 
         if G > 1:
             # GQA: per-KV-head selection — [B, h_kv, n]
@@ -1034,6 +1043,8 @@ class TxUNetModel(nn.Module):
         nsa_window_sizes: Sequence[int] = (16, 16, 8, 8),
         nsa_gqa_group_size: int = 1,
         nsa_levels: Sequence[int] | None = None,
+        nsa_importance_chunk_size: int | None = None,
+        nsa_importance_use_mem_get_info: bool = True,
         ffn_internal_residual: bool = True,
         **kwargs,
     ) -> None:
@@ -1065,6 +1076,8 @@ class TxUNetModel(nn.Module):
                     top_n=nsa_top_n[level_idx],
                     window_size=nsa_window_sizes[level_idx],
                     gqa_group_size=nsa_gqa_group_size,
+                    importance_chunk_size=nsa_importance_chunk_size,
+                    importance_use_mem_get_info=nsa_importance_use_mem_get_info,
                     **rope_kwargs,
                 )
                 blocks.append(
@@ -1087,6 +1100,8 @@ class TxUNetModel(nn.Module):
                 top_n=nsa_top_n[level_idx],
                 window_size=nsa_window_sizes[level_idx],
                 gqa_group_size=nsa_gqa_group_size,
+                importance_chunk_size=nsa_importance_chunk_size,
+                importance_use_mem_get_info=nsa_importance_use_mem_get_info,
                 **rope_kwargs,
             )
             return TransformerBlock(

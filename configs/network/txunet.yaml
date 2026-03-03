@@ -21,4 +21,6 @@ nsa_top_n: [32, 16, 16, 16]
 nsa_window_sizes: [16, 16, 8, 8]
 nsa_gqa_group_size: 1   # 1=MHA, 4=GQA with 4:1 ratio
 nsa_levels: null        # null=all levels, [0, 1]=only L0+L1 use NSA
+nsa_importance_chunk_size: null   # null=auto chunking; set int for fixed chunk size
+nsa_importance_use_mem_get_info: true  # false avoids per-step mem_get_info sync (use with fixed chunk)
 ffn_internal_residual: true  # true=legacy (residual inside FFN), false=standard pre-LN
