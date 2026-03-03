@@ -11,6 +11,7 @@ Backward: triton_sel_bwd_preprocess_kernel, triton_sel_bwd_dq_kernel, triton_sel
 Autograd: SelectionAttn2D (torch.autograd.Function)
 """
 import math
+import os
 
 import torch
 import triton
@@ -34,6 +35,19 @@ def _select_block_q_backward(d: int, top_n: int, pp: int) -> int:
 
 def _select_num_warps(block_q: int) -> int:
     return 4 if block_q <= 32 else 8
+
+
+def _top_idx_has_duplicates(top_idx: torch.Tensor) -> bool:
+    """
+    Returns True if any batch row in top_idx contains duplicate patch ids.
+
+    In the model path, top_idx comes from topk and is unique, so this check
+    selects the no-atomic fast path for dKV backward.
+    """
+    if top_idx.shape[1] <= 1:
+        return False
+    sorted_idx = top_idx.sort(dim=1).values
+    return bool((sorted_idx[:, 1:] == sorted_idx[:, :-1]).any().item())
 
 
 def make_patch_starts(H: int, W: int, patch_size: int, device: torch.device) -> torch.Tensor:
@@ -355,6 +369,7 @@ def _sel_bwd_dkv_kernel(
     BLOCK_D: tl.constexpr,
     BLOCK_KV: tl.constexpr,
     LOG2E: tl.constexpr,
+    USE_ATOMICS: tl.constexpr,
 ):
     """
     Block-vectorized KV-stationary backward kernel.
@@ -433,11 +448,17 @@ def _sel_bwd_dkv_kernel(
         # dK += ds^T @ Q * scale: [BLOCK_KV, BLOCK_Q] @ [BLOCK_Q, BLOCK_D] -> [BLOCK_KV, BLOCK_D]
         b_dk += tl.dot(tl.trans(b_ds).to(tl.float32), b_q) * sm_scale
 
-    # Atomic add all PP tokens — 2D pointers with 2D mask
+    # Store gradients for this selected patch.
+    # For unique top_idx (default model path), selected patches do not overlap
+    # and direct stores are safe/faster. If duplicates exist, fallback to atomics.
     dk_ptrs = DK + off_bh * stride_dkh + flat_indices[:, None] * stride_dkt + offs_d[None, :] * stride_dkd
     dv_ptrs = DV + off_bh * stride_dkh + flat_indices[:, None] * stride_dkt + offs_d[None, :] * stride_dkd
-    tl.atomic_add(dk_ptrs, b_dk.to(DK.dtype.element_ty), mask=valid[:, None] & mask_d[None, :])
-    tl.atomic_add(dv_ptrs, b_dv.to(DV.dtype.element_ty), mask=valid[:, None] & mask_d[None, :])
+    if USE_ATOMICS:
+        tl.atomic_add(dk_ptrs, b_dk.to(DK.dtype.element_ty), mask=valid[:, None] & mask_d[None, :])
+        tl.atomic_add(dv_ptrs, b_dv.to(DV.dtype.element_ty), mask=valid[:, None] & mask_d[None, :])
+    else:
+        tl.store(dk_ptrs, b_dk.to(DK.dtype.element_ty), mask=valid[:, None] & mask_d[None, :])
+        tl.store(dv_ptrs, b_dv.to(DV.dtype.element_ty), mask=valid[:, None] & mask_d[None, :])
 
 
 # ============================================================
@@ -512,6 +533,12 @@ def selection_bwd_dkv(
     LOG2E = 1.4426950408889634
     num_warps = _select_num_warps(BLOCK_Q)
 
+    # MHA selection uses topk indices (unique by construction), so default to
+    # the no-atomic fast path to avoid host sync in backward. Optional env
+    # flags allow diagnostics or strict duplicate-safe behavior.
+    force_atomics = os.getenv("NSA_FORCE_DKV_ATOMICS", "0") == "1"
+    check_duplicates = os.getenv("NSA_CHECK_TOP_IDX_DUPLICATES", "0") == "1"
+    use_atomics = force_atomics or (check_duplicates and _top_idx_has_duplicates(top_idx))
     grid = (1, B * h * top_n)
     _sel_bwd_dkv_kernel[grid](
         q, k, v, do, lse.view(B * h, T), delta,
@@ -524,6 +551,7 @@ def selection_bwd_dkv(
         T=T, D=d, W_spatial=W, P=P, PP=pp,
         TOP_N=top_n, BLOCK_Q=BLOCK_Q, BLOCK_D=BLOCK_D,
         BLOCK_KV=BLOCK_KV, LOG2E=LOG2E,
+        USE_ATOMICS=use_atomics,
         num_warps=num_warps,
     )
     if dk.dtype != k.dtype:
