@@ -713,21 +713,25 @@ class EfficientGlobalAttention(nn.Module):
 
 class GatedDepthwiseFFN(nn.Module):
     """
-    Gated FFN with two SEPARATE DConvBlock paths and internal residual.
+    Gated FFN with two SEPARATE DConvBlock paths.
 
     Architecture:
         Input Y → DConvBlock → u
         Input Y → DConvBlock → GELU → v
         Gate: g = u × v (Hadamard product)
-        Output: 1×1 Conv(g) + Y (internal residual)
+
+    Residual behavior:
+        internal_residual=True  -> Output: 1×1 Conv(g) + Y (legacy)
+        internal_residual=False -> Output: 1×1 Conv(g) (standard pre-LN block-level residual)
 
     Input: [B, C, H, W]
     Output: [B, C, H, W]
     """
     
-    def __init__(self, dim: int, expand: float = 2.66) -> None:
+    def __init__(self, dim: int, expand: float = 2.66, internal_residual: bool = True) -> None:
         super().__init__()
         hidden = int(round(dim * expand))
+        self.internal_residual = bool(internal_residual)
         
         # Two SEPARATE DConvBlock paths
         self.branch1 = DConvBlock(dim, hidden)  # u path (no activation)
@@ -744,7 +748,10 @@ class GatedDepthwiseFFN(nn.Module):
         u = torch.clamp(u, -256.0, 256.0)
         
         g = u * v  # Gated: [B, Hid, H, W]
-        return self.proj(g) + x  # Internal residual: [B, C, H, W]
+        out = self.proj(g)
+        if self.internal_residual:
+            out = out + x
+        return out
 
 
 # ---------- Windowed Attention Wrapper ----------
@@ -795,7 +802,9 @@ class TransformerBlock(nn.Module):
     Complete Transformer block with Pre-LN architecture.
 
     Architecture:
-        x → LN1 → Attention → + x (residual) → LN2 → FFN → + (internal residual) → output
+        x → LN1 → Attention → + x (residual) → LN2 → FFN
+        Legacy mode: FFN has internal residual
+        Standard mode: residual is added outside FFN
 
     Input: [B, C, H, W]
     Output: [B, C, H, W]
@@ -811,8 +820,10 @@ class TransformerBlock(nn.Module):
         rope_enabled: bool = False,
         rope_base: float = 10000.0,
         attn_module: nn.Module | None = None,
+        ffn_internal_residual: bool = True,
     ) -> None:
         super().__init__()
+        self._ffn_internal_residual = bool(ffn_internal_residual)
         # Module registration order must match korean-model for weight reproducibility
         self.norm1 = LayerNorm2d(dim, eps=ln_eps)
         if attn_module is not None:
@@ -826,11 +837,16 @@ class TransformerBlock(nn.Module):
                 rope_base=rope_base,
             )
         self.norm2 = LayerNorm2d(dim, eps=ln_eps)
-        self.ffn = GatedDepthwiseFFN(dim, expand)
+        self.ffn = GatedDepthwiseFFN(dim, expand, internal_residual=ffn_internal_residual)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.norm1(x))
-        x = self.ffn(self.norm2(x))
+        if self._ffn_internal_residual:
+            # Legacy behavior: residual path is internal to FFN and uses norm2(x).
+            x = self.ffn(self.norm2(x))
+        else:
+            # Standard pre-LN behavior: residual path is over raw x.
+            x = x + self.ffn(self.norm2(x))
         return x
 
 
@@ -850,8 +866,10 @@ class WindowedTransformerBlock(nn.Module):
         kv_stride: int = 1,
         rope_enabled: bool = False,
         rope_base: float = 10000.0,
+        ffn_internal_residual: bool = True,
     ) -> None:
         super().__init__()
+        self._ffn_internal_residual = bool(ffn_internal_residual)
         # Module registration order must match korean-model for weight reproducibility
         self.norm1 = LayerNorm2d(dim, eps=ln_eps)
         self.attn = WindowAttention(
@@ -866,11 +884,16 @@ class WindowedTransformerBlock(nn.Module):
             stride=stride,
         )
         self.norm2 = LayerNorm2d(dim, eps=ln_eps)
-        self.ffn = GatedDepthwiseFFN(dim, expand)
+        self.ffn = GatedDepthwiseFFN(dim, expand, internal_residual=ffn_internal_residual)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.norm1(x))
-        x = self.ffn(self.norm2(x))
+        if self._ffn_internal_residual:
+            # Legacy behavior: residual path is internal to FFN and uses norm2(x).
+            x = self.ffn(self.norm2(x))
+        else:
+            # Standard pre-LN behavior: residual path is over raw x.
+            x = x + self.ffn(self.norm2(x))
         return x
 
 
@@ -1011,6 +1034,7 @@ class TxUNetModel(nn.Module):
         nsa_window_sizes: Sequence[int] = (16, 16, 8, 8),
         nsa_gqa_group_size: int = 1,
         nsa_levels: Sequence[int] | None = None,
+        ffn_internal_residual: bool = True,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -1018,6 +1042,7 @@ class TxUNetModel(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.ln_eps = float(ln_eps)
         rope_kwargs = {"rope_enabled": rope_enabled, "rope_base": rope_base}
+        ffn_kwargs = {"ffn_internal_residual": ffn_internal_residual}
         self.nsa_enabled = bool(nsa_enabled)
         self._nsa_levels = set(nsa_levels if nsa_levels is not None else range(4))
 
@@ -1049,6 +1074,7 @@ class TxUNetModel(nn.Module):
                         expand,
                         ln_eps=self.ln_eps,
                         attn_module=attn,
+                        ffn_internal_residual=ffn_internal_residual,
                     )
                 )
             return nn.Sequential(*blocks)
@@ -1069,6 +1095,7 @@ class TxUNetModel(nn.Module):
                 expand,
                 ln_eps=self.ln_eps,
                 attn_module=attn,
+                ffn_internal_residual=ffn_internal_residual,
             )
         
         # ============ STEM ============
@@ -1086,7 +1113,7 @@ class TxUNetModel(nn.Module):
             self.enc0 = _make_nsa_block_seq(c, depths[0], heads[0], 0)
         else:
             enc0_cls: type[nn.Module]
-            enc0_kwargs: dict = {**rope_kwargs}
+            enc0_kwargs: dict = {**rope_kwargs, **ffn_kwargs}
             if sra0_enabled:
                 enc0_cls = TransformerBlock
                 enc0_kwargs["kv_stride"] = sra0_stride
@@ -1107,7 +1134,7 @@ class TxUNetModel(nn.Module):
         if self.nsa_enabled and 1 in self._nsa_levels:
             self.enc1 = _make_nsa_block_seq(2 * c, depths[1], heads[1], 1)
         else:
-            self.enc1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs=rope_kwargs)
+            self.enc1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs={**rope_kwargs, **ffn_kwargs})
         
         # Downsample: 2C → 4C, spatial /2
         self.down2 = Downsample(2 * c, 4 * c)
@@ -1116,7 +1143,7 @@ class TxUNetModel(nn.Module):
         if self.nsa_enabled and 2 in self._nsa_levels:
             self.enc2 = _make_nsa_block_seq(4 * c, depths[2], heads[2], 2)
         else:
-            self.enc2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs=rope_kwargs)
+            self.enc2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs={**rope_kwargs, **ffn_kwargs})
         
         # Downsample: 4C → 8C, spatial /2
         self.down3 = Downsample(4 * c, 8 * c)
@@ -1125,7 +1152,7 @@ class TxUNetModel(nn.Module):
         if self.nsa_enabled and 3 in self._nsa_levels:
             self.enc3 = _make_nsa_block_seq(8 * c, depths[3], heads[3], 3)
         else:
-            self.enc3 = make_blocks(8 * c, depths[3], heads[3], expand, self.ln_eps, block_kwargs=rope_kwargs)
+            self.enc3 = make_blocks(8 * c, depths[3], heads[3], expand, self.ln_eps, block_kwargs={**rope_kwargs, **ffn_kwargs})
         
         # ============ SKIP CONNECTIONS ============
         # Level 0: NO skip conv (concat only)
@@ -1143,7 +1170,7 @@ class TxUNetModel(nn.Module):
         if self.nsa_enabled and 2 in self._nsa_levels:
             self.dec2 = _make_nsa_block_seq(4 * c, depths[2], heads[2], 2)
         else:
-            self.dec2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs=rope_kwargs)
+            self.dec2 = make_blocks(4 * c, depths[2], heads[2], expand, self.ln_eps, block_kwargs={**rope_kwargs, **ffn_kwargs})
         
         # Level 1 decoder
         # Upsample: 4C → 2C
@@ -1153,7 +1180,7 @@ class TxUNetModel(nn.Module):
         if self.nsa_enabled and 1 in self._nsa_levels:
             self.dec1 = _make_nsa_block_seq(2 * c, depths[1], heads[1], 1)
         else:
-            self.dec1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs=rope_kwargs)
+            self.dec1 = make_blocks(2 * c, depths[1], heads[1], expand, self.ln_eps, block_kwargs={**rope_kwargs, **ffn_kwargs})
         
         # Level 0 decoder (special handling)
         # Upsample: 2C → C
@@ -1164,7 +1191,7 @@ class TxUNetModel(nn.Module):
             self.dec0 = _make_nsa_block_seq(2 * c, depths[0], heads[0], 0)
             self.dec0_extra = _make_nsa_single_block(2 * c, heads[0], 0)
         else:
-            dec0_kwargs: dict = {**rope_kwargs}
+            dec0_kwargs: dict = {**rope_kwargs, **ffn_kwargs}
             if sra0_enabled:
                 dec0_cls = TransformerBlock
                 dec0_kwargs["kv_stride"] = sra0_stride
