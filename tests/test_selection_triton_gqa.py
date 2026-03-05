@@ -119,3 +119,123 @@ class TestGQASelectionBackward:
 
         assert torch.allclose(dk_triton, k2.grad, atol=5e-2, rtol=5e-2)
         assert torch.allclose(dv_triton, v2.grad, atol=5e-2, rtol=5e-2)
+
+
+def _naive_gqa_selection_per_query(q, k, v, block_idx, patch_starts, P, W_spatial, G, scale=None):
+    """Reference per-query GQA: block_idx is [B, h_kv, T, top_n]."""
+    B, h_q, T, d = q.shape
+    h_kv = h_q // G
+    top_n = block_idx.shape[-1]
+    out = torch.empty_like(q)
+
+    for b in range(B):
+        for kv in range(h_kv):
+            for t in range(T):
+                flat_idx: list[int] = []
+                for i in range(top_n):
+                    patch = int(block_idx[b, kv, t, i].item())
+                    base = int(patch_starts[patch].item())
+                    for dr in range(P):
+                        for dc in range(P):
+                            flat_idx.append(base + dr * W_spatial + dc)
+                idx_t = torch.tensor(flat_idx, device=q.device, dtype=torch.long)
+                k_t = k[b, kv, idx_t, :].unsqueeze(0)
+                v_t = v[b, kv, idx_t, :].unsqueeze(0)
+                for g in range(G):
+                    qh = kv * G + g
+                    q_t = q[b, qh, t : t + 1, :].unsqueeze(0)
+                    o_t = F.scaled_dot_product_attention(q_t, k_t, v_t, scale=scale)
+                    out[b, qh, t, :] = o_t[0, 0, :]
+    return out
+
+
+class TestGQAPerQuerySelectionForward:
+    @pytest.mark.per_query_parity
+    def test_per_query_forward_matches_naive_gqa(self):
+        """Per-query GQA forward should match naive reference."""
+        from src.ops.selection_attention_2d_per_query import SelectionAttn2DPerQuery, make_patch_starts
+
+        B, h_q, h_kv, d = 1, 4, 2, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        pp = P * P
+        G = h_q // h_kv
+        n_patches = (H // P) * (W // P)
+        scale = 1.0 / d**0.5
+
+        torch.manual_seed(17)
+        q = torch.randn(B, h_q, T, d, device="cuda", dtype=torch.float32)
+        k = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        v = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h_kv, T, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+
+        o_triton = SelectionAttn2DPerQuery.apply(q, k, v, block_idx, patch_starts, pp, H, W, P, scale, G)
+        o_naive = _naive_gqa_selection_per_query(q, k, v, block_idx, patch_starts, P, W, G, scale=scale)
+        torch.testing.assert_close(o_triton, o_naive, atol=1e-2, rtol=1e-2)
+
+
+class TestGQAPerQuerySelectionBackward:
+    @pytest.mark.per_query_parity
+    def test_per_query_backward_dq_matches_naive_gqa(self):
+        """Per-query GQA dQ should match naive autograd dQ."""
+        from src.ops.selection_attention_2d_per_query import SelectionAttn2DPerQuery, make_patch_starts
+
+        B, h_q, h_kv, d = 1, 4, 2, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        pp = P * P
+        G = h_q // h_kv
+        n_patches = (H // P) * (W // P)
+        scale = 1.0 / d**0.5
+
+        torch.manual_seed(29)
+        q = torch.randn(B, h_q, T, d, device="cuda", dtype=torch.float32, requires_grad=True)
+        k = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        v = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h_kv, T, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+
+        o_triton = SelectionAttn2DPerQuery.apply(q, k, v, block_idx, patch_starts, pp, H, W, P, scale, G)
+        o_triton.sum().backward()
+        dq_triton = q.grad.detach().clone()
+
+        q2 = q.detach().clone().requires_grad_(True)
+        o_naive = _naive_gqa_selection_per_query(q2, k, v, block_idx, patch_starts, P, W, G, scale=scale)
+        o_naive.sum().backward()
+        torch.testing.assert_close(dq_triton, q2.grad, atol=5e-2, rtol=5e-2)
+
+    @pytest.mark.per_query_parity
+    def test_per_query_backward_dk_dv_matches_naive_gqa(self):
+        """Per-query GQA dK/dV should match naive autograd dK/dV."""
+        from src.ops.selection_attention_2d_per_query import SelectionAttn2DPerQuery, make_patch_starts
+
+        B, h_q, h_kv, d = 1, 4, 2, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        pp = P * P
+        G = h_q // h_kv
+        n_patches = (H // P) * (W // P)
+        scale = 1.0 / d**0.5
+
+        torch.manual_seed(1337)
+        q = torch.randn(B, h_q, T, d, device="cuda", dtype=torch.float32)
+        k = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32, requires_grad=True)
+        v = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32, requires_grad=True)
+        block_idx = torch.randint(0, n_patches, (B, h_kv, T, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+
+        o_triton = SelectionAttn2DPerQuery.apply(q, k, v, block_idx, patch_starts, pp, H, W, P, scale, G)
+        o_triton.sum().backward()
+        dk_triton = k.grad.detach().clone()
+        dv_triton = v.grad.detach().clone()
+
+        k2 = k.detach().clone().requires_grad_(True)
+        v2 = v.detach().clone().requires_grad_(True)
+        o_naive = _naive_gqa_selection_per_query(q, k2, v2, block_idx, patch_starts, P, W, G, scale=scale)
+        o_naive.sum().backward()
+        torch.testing.assert_close(dk_triton, k2.grad, atol=5e-2, rtol=5e-2)
+        torch.testing.assert_close(dv_triton, v2.grad, atol=5e-2, rtol=5e-2)
