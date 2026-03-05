@@ -175,6 +175,32 @@ class TestGQAPerQuerySelectionForward:
         o_naive = _naive_gqa_selection_per_query(q, k, v, block_idx, patch_starts, P, W, G, scale=scale)
         torch.testing.assert_close(o_triton, o_naive, atol=1e-2, rtol=1e-2)
 
+    @pytest.mark.per_query_parity
+    @pytest.mark.parametrize("h_q,h_kv", [(4, 2), (4, 1)])
+    def test_per_query_forward_matches_naive_gqa_grouped_head_regimes(self, h_q, h_kv):
+        """Per-query forward stays correct for explicit grouped-head regimes."""
+        from src.ops.selection_attention_2d_per_query import SelectionAttn2DPerQuery, make_patch_starts
+
+        B, d = 1, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        pp = P * P
+        G = h_q // h_kv
+        n_patches = (H // P) * (W // P)
+        scale = 1.0 / d**0.5
+
+        torch.manual_seed(3030 + G)
+        q = torch.randn(B, h_q, T, d, device="cuda", dtype=torch.float32)
+        k = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        v = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h_kv, T, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+
+        o_triton = SelectionAttn2DPerQuery.apply(q, k, v, block_idx, patch_starts, pp, H, W, P, scale, G)
+        o_naive = _naive_gqa_selection_per_query(q, k, v, block_idx, patch_starts, P, W, G, scale=scale)
+        torch.testing.assert_close(o_triton, o_naive, atol=1e-2, rtol=1e-2)
+
 
 class TestGQAPerQuerySelectionBackward:
     @pytest.mark.per_query_parity
@@ -192,6 +218,37 @@ class TestGQAPerQuerySelectionBackward:
         scale = 1.0 / d**0.5
 
         torch.manual_seed(29)
+        q = torch.randn(B, h_q, T, d, device="cuda", dtype=torch.float32, requires_grad=True)
+        k = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        v = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h_kv, T, top_n), device="cuda", dtype=torch.int32)
+        patch_starts = make_patch_starts(H, W, P, q.device)
+
+        o_triton = SelectionAttn2DPerQuery.apply(q, k, v, block_idx, patch_starts, pp, H, W, P, scale, G)
+        o_triton.sum().backward()
+        dq_triton = q.grad.detach().clone()
+
+        q2 = q.detach().clone().requires_grad_(True)
+        o_naive = _naive_gqa_selection_per_query(q2, k, v, block_idx, patch_starts, P, W, G, scale=scale)
+        o_naive.sum().backward()
+        torch.testing.assert_close(dq_triton, q2.grad, atol=5e-2, rtol=5e-2)
+
+    @pytest.mark.per_query_parity
+    @pytest.mark.parametrize("h_q,h_kv", [(4, 2), (4, 1)])
+    def test_per_query_backward_dq_matches_naive_gqa_grouped_head_regimes(self, h_q, h_kv):
+        """Per-query dQ stays correct for explicit grouped-head regimes."""
+        from src.ops.selection_attention_2d_per_query import SelectionAttn2DPerQuery, make_patch_starts
+
+        B, d = 1, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        pp = P * P
+        G = h_q // h_kv
+        n_patches = (H // P) * (W // P)
+        scale = 1.0 / d**0.5
+
+        torch.manual_seed(4040 + G)
         q = torch.randn(B, h_q, T, d, device="cuda", dtype=torch.float32, requires_grad=True)
         k = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
         v = torch.randn(B, h_kv, T, d, device="cuda", dtype=torch.float32)
