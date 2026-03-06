@@ -154,6 +154,7 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
         rope_enabled=False,
         gqa_group_size=case.gqa_group_size,
         selection_forward_mode="unpacked",
+        selection_dq_mode="unpacked",
     ).to(device=device, dtype=dtype).eval()
     attn_packed = NSA2DAttention(
         dim=case.channels,
@@ -164,6 +165,7 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
         rope_enabled=False,
         gqa_group_size=case.gqa_group_size,
         selection_forward_mode="packed",
+        selection_dq_mode="packed",
     ).to(device=device, dtype=dtype).eval()
     attn_packed.load_state_dict(attn_unpacked.state_dict())
 
@@ -214,6 +216,30 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
             o_win = attn_packed._window_branch(q, k, v, H, W)
             _ = o_cmp + o_slc + o_win
 
+    def unpacked_selection_backward_q_only():
+        q_local = q.detach().clone().requires_grad_(True)
+        o = attn_unpacked._selection_from_block_idx(q_local, k, v, block_idx, H, W)
+        o.sum().backward()
+
+    def packed_selection_backward_q_only():
+        q_local = q.detach().clone().requires_grad_(True)
+        o = attn_packed._selection_from_block_idx(q_local, k, v, block_idx, H, W)
+        o.sum().backward()
+
+    def unpacked_selection_backward_qkv():
+        q_local = q.detach().clone().requires_grad_(True)
+        k_local = k.detach().clone().requires_grad_(True)
+        v_local = v.detach().clone().requires_grad_(True)
+        o = attn_unpacked._selection_from_block_idx(q_local, k_local, v_local, block_idx, H, W)
+        o.sum().backward()
+
+    def packed_selection_backward_qkv():
+        q_local = q.detach().clone().requires_grad_(True)
+        k_local = k.detach().clone().requires_grad_(True)
+        v_local = v.detach().clone().requires_grad_(True)
+        o = attn_packed._selection_from_block_idx(q_local, k_local, v_local, block_idx, H, W)
+        o.sum().backward()
+
     results = {
         "packing_metadata_build": _timed_cuda(packing_metadata_build, warmup=WARMUP, iters=ITERS),
         "packed_kv_gather": _timed_cuda(packed_kv_gather, warmup=WARMUP, iters=ITERS),
@@ -221,6 +247,10 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
         "packed_selection_forward": _timed_cuda(packed_selection_forward, warmup=WARMUP, iters=ITERS),
         "unpacked_attention_total_forward": _timed_cuda(unpacked_attention_total_forward, warmup=WARMUP, iters=ITERS),
         "packed_attention_total_forward": _timed_cuda(packed_attention_total_forward, warmup=WARMUP, iters=ITERS),
+        "unpacked_selection_backward_q_only": _timed_cuda(unpacked_selection_backward_q_only, warmup=WARMUP, iters=ITERS),
+        "packed_selection_backward_q_only": _timed_cuda(packed_selection_backward_q_only, warmup=WARMUP, iters=ITERS),
+        "unpacked_selection_backward_qkv": _timed_cuda(unpacked_selection_backward_qkv, warmup=WARMUP, iters=ITERS),
+        "packed_selection_backward_qkv": _timed_cuda(packed_selection_backward_qkv, warmup=WARMUP, iters=ITERS),
     }
 
     for key, fn in {
@@ -230,6 +260,10 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
         "packed_selection_forward": packed_selection_forward,
         "unpacked_attention_total_forward": unpacked_attention_total_forward,
         "packed_attention_total_forward": packed_attention_total_forward,
+        "unpacked_selection_backward_q_only": unpacked_selection_backward_q_only,
+        "packed_selection_backward_q_only": packed_selection_backward_q_only,
+        "unpacked_selection_backward_qkv": unpacked_selection_backward_qkv,
+        "packed_selection_backward_qkv": packed_selection_backward_qkv,
     }.items():
         results[key]["peak_alloc_mb"] = _peak_alloc_mb(fn)
 

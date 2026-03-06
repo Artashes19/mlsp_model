@@ -264,6 +264,41 @@ Meaning:
 - Next packing work, if any, should target `dQ` only.
 - If packed `dQ` does not produce a clear long-sequence gain, stop packing work and pivot to FFN / shell.
 
+## Packed dQ Benchmark Snapshot
+
+Reference artifact:
+
+- `artifacts/nsa_diagnostics/selection_packing_vs_unpacked_a100_20260306_140943.json`
+
+What changed:
+
+- Added packed backward `dQ`
+- Benchmarked packed vs unpacked backward on the same A100 shapes used for forward packing
+
+Results:
+
+- `128x128`
+  - `k=8`
+    - backward q-only: `3.970 ms` packed vs `3.611 ms` unpacked
+    - backward qkv: `4.926 ms` packed vs `4.412 ms` unpacked
+  - `k=16`
+    - backward q-only: `6.786 ms` packed vs `6.210 ms` unpacked
+    - backward qkv: `6.435 ms` packed vs `6.787 ms` unpacked
+
+- `256x256`
+  - `k=8`
+    - backward q-only: `12.161 ms` packed vs `11.758 ms` unpacked
+    - backward qkv: `11.599 ms` packed vs `11.230 ms` unpacked
+  - `k=16`
+    - backward q-only: `20.016 ms` packed vs `19.098 ms` unpacked
+    - backward qkv: `20.132 ms` packed vs `19.734 ms` unpacked
+
+Interpretation:
+
+1. Packed `dQ` does not show a convincing long-sequence win.
+2. At `256x256`, unpacked still wins in both q-only and qkv backward.
+3. At `128x128`, results are mixed and too small to justify an automatic switch.
+
 ## Current Priority Order
 
 1. Packed `dQ` for the selection path
