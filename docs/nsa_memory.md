@@ -148,6 +148,7 @@ These should not be retried casually without a new structural idea.
 2. Shell and FFN matter for full block speedup and must be optimized too.
 3. Best short-term move is selection packing / layout cleanup.
 4. Best medium-term move is a Flash/FlexAttention-style sparse backend for H100.
+5. FFN and shell changes must be preceded by granular full-layer profiling on A100.
 
 ## Packing Contract
 
@@ -259,52 +260,66 @@ Why:
 4. `dQ` remains one of the main hotspots, so it is the only backward path where packing still has a clear chance to matter.
 5. `128x128` evidence is too mixed to justify a full packed-backward expansion right now.
 
-Meaning:
-
-- Next packing work, if any, should target `dQ` only.
-- If packed `dQ` does not produce a clear long-sequence gain, stop packing work and pivot to FFN / shell.
-
 ## Packed dQ Benchmark Snapshot
 
 Reference artifact:
 
 - `artifacts/nsa_diagnostics/selection_packing_vs_unpacked_a100_20260306_140943.json`
 
-What changed:
-
-- Added packed backward `dQ`
-- Benchmarked packed vs unpacked backward on the same A100 shapes used for forward packing
-
 Results:
+
+- `64x64`
+  - `k=8`
+    - `bwd_q_only`: unpacked `0.891 ms`, packed `8.398 ms`
+    - `bwd_qkv`: unpacked `8.57 ms`, packed `14.65 ms`
+  - `k=16`
+    - `bwd_q_only`: unpacked `1.633 ms`, packed `2.843 ms`
+    - `bwd_qkv`: unpacked `3.118 ms`, packed `3.58 ms`
 
 - `128x128`
   - `k=8`
-    - backward q-only: `3.970 ms` packed vs `3.611 ms` unpacked
-    - backward qkv: `4.926 ms` packed vs `4.412 ms` unpacked
+    - `bwd_q_only`: unpacked `3.611 ms`, packed `3.97 ms`
+    - `bwd_qkv`: unpacked `4.412 ms`, packed `4.926 ms`
   - `k=16`
-    - backward q-only: `6.786 ms` packed vs `6.210 ms` unpacked
-    - backward qkv: `6.435 ms` packed vs `6.787 ms` unpacked
+    - `bwd_q_only`: unpacked `6.21 ms`, packed `6.786 ms`
+    - `bwd_qkv`: unpacked `6.787 ms`, packed `6.435 ms`
 
 - `256x256`
   - `k=8`
-    - backward q-only: `12.161 ms` packed vs `11.758 ms` unpacked
-    - backward qkv: `11.599 ms` packed vs `11.230 ms` unpacked
+    - `bwd_q_only`: unpacked `11.758 ms`, packed `12.161 ms`
+    - `bwd_qkv`: unpacked `11.23 ms`, packed `11.599 ms`
   - `k=16`
-    - backward q-only: `20.016 ms` packed vs `19.098 ms` unpacked
-    - backward qkv: `20.132 ms` packed vs `19.734 ms` unpacked
+    - `bwd_q_only`: unpacked `19.098 ms`, packed `20.016 ms`
+    - `bwd_qkv`: unpacked `19.734 ms`, packed `20.132 ms`
 
-Interpretation:
+Decision:
 
-1. Packed `dQ` does not show a convincing long-sequence win.
-2. At `256x256`, unpacked still wins in both q-only and qkv backward.
-3. At `128x128`, results are mixed and too small to justify an automatic switch.
+- `selection_dq_mode="auto"` stays unpacked
+- packed `dQ` is not strong enough to justify auto-enable
+- stop packing work after `dQ`
+
+Why:
+
+1. There is no convincing long-sequence win on A100.
+2. The only backward case that edges ahead is `128x128, k=16, bwd_qkv`, and the gain is too small and too narrow.
+3. `256x256` is the regime that matters most for NSA scaling, and packed `dQ` loses there.
+4. The correct next step is granular full-layer profiling, not more packing variants.
 
 ## Current Priority Order
 
-1. Packed `dQ` for the selection path
-2. FFN runtime redesign
-3. Attention shell optimization
-4. H100 sparse backend prototype
+1. Build a granular A100 profiling baseline for the full NSA layer:
+   - attention shell
+   - attention core branches
+   - FFN
+2. Choose the next optimization target from the measured block share, not intuition.
+3. Keep packed forward as a narrow locality improvement.
+4. Keep `selection_dq_mode="auto"` on unpacked unless new data proves otherwise.
+5. Revisit H100 sparse backend work after the A100 full-layer baseline is in place.
+
+Meaning:
+
+- Next packing work, if any, should target `dQ` only.
+- If packed `dQ` does not produce a clear long-sequence gain, stop packing work and pivot to FFN / shell.
 
 ## Update Protocol
 
