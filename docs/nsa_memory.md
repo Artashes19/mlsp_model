@@ -310,6 +310,21 @@ Tooling decision:
 2. Build one selection harness that can feed all profiling tools
 3. Use cheap/high-level tools first and low-level kernel tools second
 
+torch profiler harness status:
+
+- selection hotspot harness now supports:
+  - Chrome trace export
+  - execution trace export
+  - memory timeline export
+- smoke artifact on A100:
+  - `artifacts/nsa_diagnostics/nsa_selection_triton_hotspots_a100_20260307_012348.json`
+- produced side artifacts:
+  - `C384_h6_g3_256x256_top8_trace.json`
+  - `C384_h6_g3_256x256_top8_execution_trace.json`
+  - `C384_h6_g3_256x256_top8_memory_timeline.html`
+- observed caveat:
+  - `ExecutionTraceObserver` emitted a callback-registration warning once during the smoke run, but the artifacts were still produced successfully
+
 ## Packing Contract
 
 Current packing metadata contract:

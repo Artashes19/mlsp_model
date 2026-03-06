@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 import torch
+from torch.profiler import ProfilerActivity, profile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -355,6 +356,131 @@ def benchmark_selection_components(
     }
 
 
+def profile_selection_case(
+    prepared: dict[str, torch.Tensor | int | float],
+    args: argparse.Namespace,
+    trace_dir: Path,
+    label: str,
+) -> dict[str, str]:
+    q = prepared["q"]
+    k = prepared["k"]
+    v = prepared["v"]
+    k_cmp = prepared["k_cmp"]
+    patch_starts = prepared["patch_starts"]
+    H = int(prepared["H"])
+    W = int(prepared["W"])
+    P = int(prepared["P"])
+    pp = int(prepared["pp"])
+    scale = float(prepared["scale"])
+    G = int(prepared["G"])
+    attn = prepared["attn"]
+
+    block_idx = prepared["block_idx"]
+
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = trace_dir / f"{label}_trace.json"
+    artifacts: dict[str, str] = {"trace_json": str(trace_path)}
+
+    execution_trace_observer = None
+    execution_trace_path: Path | None = None
+    if args.with_execution_trace:
+        try:
+            from torch.profiler import ExecutionTraceObserver
+
+            execution_trace_path = trace_dir / f"{label}_execution_trace.json"
+            execution_trace_observer = ExecutionTraceObserver().register_callback(str(execution_trace_path))
+            artifacts["execution_trace_json"] = str(execution_trace_path)
+        except Exception as exc:  # pragma: no cover - depends on torch build
+            artifacts["execution_trace_error"] = repr(exc)
+
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        record_shapes=True,
+        profile_memory=args.with_memory_timeline,
+        with_stack=True,
+        execution_trace_observer=execution_trace_observer,
+    ) as prof:
+        with torch.profiler.record_function("selection_scoring"):
+            prof.toggle_collection_dynamic(True, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+            block_idx = attn._compute_selection_block_idx(q, k_cmp)
+            prof.toggle_collection_dynamic(False, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+
+        with torch.profiler.record_function("selection_forward"):
+            prof.toggle_collection_dynamic(True, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+            o, lse = selection_attn_2d_per_query_forward(
+                q.contiguous(),
+                k.contiguous(),
+                v.contiguous(),
+                block_idx.contiguous(),
+                patch_starts.contiguous(),
+                pp,
+                H,
+                W,
+                P,
+                scale,
+                G,
+            )
+            prof.toggle_collection_dynamic(False, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+
+        do = torch.randn_like(o)
+        delta = (o.float() * do.float()).sum(dim=-1)
+
+        with torch.profiler.record_function("selection_bwd_dq"):
+            prof.toggle_collection_dynamic(True, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+            selection_per_query_bwd_dq(
+                q.contiguous(),
+                k.contiguous(),
+                v.contiguous(),
+                do.contiguous(),
+                lse,
+                delta,
+                block_idx.contiguous(),
+                patch_starts.contiguous(),
+                pp,
+                H,
+                W,
+                P,
+                scale,
+                G,
+            )
+            prof.toggle_collection_dynamic(False, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+
+        with torch.profiler.record_function("selection_bwd_dkv"):
+            prof.toggle_collection_dynamic(True, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+            selection_per_query_bwd_dkv(
+                q.contiguous(),
+                k.contiguous(),
+                v.contiguous(),
+                do.contiguous(),
+                lse,
+                delta,
+                block_idx.contiguous(),
+                patch_starts.contiguous(),
+                pp,
+                H,
+                W,
+                P,
+                scale,
+                G,
+            )
+            prof.toggle_collection_dynamic(False, [ProfilerActivity.CPU, ProfilerActivity.CUDA])
+
+    prof.export_chrome_trace(str(trace_path))
+
+    if args.with_memory_timeline:
+        try:
+            memory_path = trace_dir / f"{label}_memory_timeline.html"
+            prof.export_memory_timeline(str(memory_path))
+            artifacts["memory_timeline"] = str(memory_path)
+        except Exception as exc:  # pragma: no cover - depends on profiler support
+            artifacts["memory_timeline_error"] = repr(exc)
+
+    if execution_trace_observer is not None:
+        execution_trace_observer.unregister_callback()
+
+    return artifacts
+
+
 def run_case(
     model_config: ModelConfig,
     case: CaseConfig,
@@ -400,8 +526,16 @@ def run_case(
 
     validation = validate_split_wrappers(prepared, block_idx)
     timings = benchmark_selection_components(prepared, warmup=args.warmup, iters=args.iters)
+    profiler_artifacts = None
+    if args.with_execution_trace or args.with_memory_timeline:
+        profiler_artifacts = profile_selection_case(
+            prepared,
+            args,
+            args.trace_dir,
+            f"{model_config.label}_{case.label}",
+        )
 
-    return {
+    case_result = {
         "model": {
             "dim": model_config.dim,
             "heads": model_config.heads,
@@ -415,6 +549,9 @@ def run_case(
         "validation": validation,
         "timings_ms": timings,
     }
+    if profiler_artifacts is not None:
+        case_result["profiler_artifacts"] = profiler_artifacts
+    return case_result
 
 
 def parse_args() -> argparse.Namespace:
@@ -433,6 +570,9 @@ def parse_args() -> argparse.Namespace:
         help="dim:heads:gqa_group_size",
     )
     parser.add_argument("--out-dir", type=Path, default=PROJECT_ROOT / "artifacts" / "nsa_diagnostics")
+    parser.add_argument("--trace-dir", type=Path, default=PROJECT_ROOT / "artifacts" / "nsa_diagnostics")
+    parser.add_argument("--with-execution-trace", action="store_true")
+    parser.add_argument("--with-memory-timeline", action="store_true")
     return parser.parse_args()
 
 
@@ -475,6 +615,8 @@ def main() -> None:
                 lines.append(f"{key}: {value:.6e}")
             for key, value in case_result["timings_ms"].items():
                 lines.append(f"{key}: {value:.3f}")
+            if "profiler_artifacts" in case_result:
+                lines.append(f"profiler_artifacts: {case_result['profiler_artifacts']}")
 
     json_path = args.out_dir / f"nsa_selection_triton_hotspots_a100_{timestamp}.json"
     txt_path = args.out_dir / f"nsa_selection_triton_hotspots_a100_{timestamp}.txt"
