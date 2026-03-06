@@ -811,3 +811,43 @@ Decision:
 3. Proton third for scoped tree attribution inside the selection path
 4. Nsight Systems fourth for API/NVTX/host-side correlation
 5. Nsight Compute only when GPU counter permissions are available
+
+## Structural dQ Rewrite Direction
+
+Reference artifact:
+
+- `artifacts/nsa_diagnostics/selection_patch_reuse_a100_20260307_014742.json`
+
+Key measured fact:
+
+- in the practical `256x256, p=8` regime, every patch is selected
+- average queries per used patch:
+  - `top_n=8`: `512`
+  - `top_n=16`: `1024`
+
+Metadata cost:
+
+- `_build_active_query_index_per_patch(...)` is cheap relative to `dQ`
+- measured A100 build time:
+  - `~1.75 ms` at `256x256, C=384, top_n=8`
+  - `~2.26 ms` at `256x256, C=384, top_n=16`
+
+Interpretation:
+
+1. current query-centric `dQ` is structurally reloading the same patch K/V hundreds of times
+2. packing alone cannot remove this waste because it changes layout, not reuse
+3. the next real `dQ` rewrite should be compact and reverse-mapped:
+   - group queries by `(batch, kv_head, patch_id)`
+   - load patch K/V once
+   - iterate only the active queries for that patch
+
+Important technical insight:
+
+- this compact `dQ` shape can still stay on Triton's fast `tl.dot` path because matmul `M` becomes `BLOCK_Q`, not `G`
+- so it does not repeat the failed forward real-`G` mistake
+
+Decision:
+
+1. next `dQ` implementation target is a compact reverse-mapped patch-centric kernel
+2. do not spend more time on packing-only `dQ`
+3. do not spend more time on minor `dQ` launch-meta tuning at `256x256`
