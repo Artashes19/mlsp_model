@@ -171,6 +171,42 @@ Why packing is per `(batch, kv_head)` and not per query:
    - a better current Triton path
    - a future H100 block-sparse / FlexAttention-style backend
 
+## Packing Benchmark Snapshot
+
+Reference artifact:
+
+- `artifacts/nsa_diagnostics/selection_packing_vs_unpacked_a100_20260306_132736.json`
+
+Result:
+
+- Packing cost is small enough to continue for `128x128` and `256x256`.
+- At `256x256`, packing metadata build plus packed K/V gather is still under `1 ms`:
+  - `k=8`: `0.325 + 0.211 = 0.536 ms`
+  - `k=16`: `0.557 + 0.219 = 0.776 ms`
+- Current unpacked selection forward at the same shape is much larger:
+  - `k=8`: `6.809 ms`
+  - `k=16`: `13.036 ms`
+- So pure packing overhead is about:
+  - `7.9%` of current selection forward for `256x256, k=8`
+  - `6.0%` of current selection forward for `256x256, k=16`
+
+Important dedup observation:
+
+- Selected patches are heavily reused across queries, which supports packing once per `(batch, kv_head)`:
+  - `64x64`: only `63-64` unique patches per head
+  - `128x128`: about `251` unique patches at `k=8`, `256` at `k=16`
+  - `256x256`: about `820` unique patches at `k=8`, `955` at `k=16`
+- In terms of selected slots over unique packed patches:
+  - `64x64`: about `520x` at `k=8`, `1024x` at `k=16`
+  - `128x128`: about `522x` at `k=8`, `1024x` at `k=16`
+  - `256x256`: about `639x` at `k=8`, `1098x` at `k=16`
+
+Interpretation:
+
+1. The packing build and gather work is cheap relative to the current long-sequence selection kernel.
+2. Reuse of selected patches across queries is very high, so per-head packing has a strong structural basis.
+3. This is promising for `256x256`, somewhat promising for `128x128`, and less compelling for `64x64`.
+
 ## Current Priority Order
 
 1. Packing-first selection path
