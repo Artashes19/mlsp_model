@@ -647,6 +647,51 @@ def _naive_selection_attention_per_query(q, k, v, block_idx, patch_starts, P, W,
 
 class TestPerQuerySelectionForward:
     @pytest.mark.per_query_parity
+    def test_packed_per_query_forward_matches_unpacked_mha(self):
+        """Packed per-query forward should match unpacked forward in MHA mode."""
+        from src.networks.txunet import NSA2DAttention
+
+        B, h, d = 1, 4, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        C = h * d
+        n_patches = (H // P) * (W // P)
+
+        torch.manual_seed(9090)
+        attn_unpacked = NSA2DAttention(
+            dim=C,
+            num_heads=h,
+            patch_size=P,
+            top_n=top_n,
+            window_size=2,
+            rope_enabled=False,
+            gqa_group_size=1,
+            selection_forward_mode="unpacked",
+        ).to(device=DEVICE, dtype=torch.float32)
+        attn_packed = NSA2DAttention(
+            dim=C,
+            num_heads=h,
+            patch_size=P,
+            top_n=top_n,
+            window_size=2,
+            rope_enabled=False,
+            gqa_group_size=1,
+            selection_forward_mode="packed",
+        ).to(device=DEVICE, dtype=torch.float32)
+
+        q = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        k = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        v = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h, T, top_n), device=DEVICE, dtype=torch.int32)
+
+        with torch.no_grad():
+            o_unpacked = attn_unpacked._selection_from_block_idx(q, k, v, block_idx, H, W)
+            o_packed = attn_packed._selection_from_block_idx(q, k, v, block_idx, H, W)
+
+        torch.testing.assert_close(o_packed, o_unpacked, atol=1e-2, rtol=1e-2)
+
+    @pytest.mark.per_query_parity
     def test_per_query_forward_shape_contract_mha(self):
         """Per-query MHA signature uses block_idx [B, h_q, T, top_k]."""
         from src.ops.selection_attention_2d_per_query import SelectionAttn2DPerQuery, make_patch_starts

@@ -114,6 +114,56 @@ def _build_packed_patch_metadata(
     return unique_patch_ids, cu_unique_counts, packed_idx
 
 
+def _bhtd_to_patch_table(
+    t: torch.Tensor,  # [B, h_kv, T, d]
+    H: int,
+    W: int,
+    P: int,
+) -> torch.Tensor:
+    """Convert [B, h_kv, T, d] tokens into [B*h_kv, n_patches, pp, d] patch tables."""
+    B, h_kv, _, d = t.shape
+    nH, nW = H // P, W // P
+    pp = P * P
+    n_patches = nH * nW
+    t_2d = t.view(B, h_kv, H, W, d)
+    t_patches = t_2d.view(B, h_kv, nH, P, nW, P, d).permute(0, 1, 2, 4, 3, 5, 6).contiguous()
+    return t_patches.view(B * h_kv, n_patches, pp, d)
+
+
+def _gather_packed_patch_tables(
+    k: torch.Tensor,  # [B, h_kv, T, d]
+    v: torch.Tensor,  # [B, h_kv, T, d]
+    unique_patch_ids: torch.Tensor,  # [total_unique] int32
+    cu_unique_counts: torch.Tensor,  # [B*h_kv + 1] int32
+    H: int,
+    W: int,
+    P: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Gather unique selected patches into contiguous packed K/V tables.
+
+    Returns:
+      packed_k: [total_unique, pp, d]
+      packed_v: [total_unique, pp, d]
+    """
+    k_patches = _bhtd_to_patch_table(k, H, W, P)
+    v_patches = _bhtd_to_patch_table(v, H, W, P)
+
+    B, h_kv, _, _ = k.shape
+    packed_k_chunks: list[torch.Tensor] = []
+    packed_v_chunks: list[torch.Tensor] = []
+    for bh in range(B * h_kv):
+        start = int(cu_unique_counts[bh].item())
+        end = int(cu_unique_counts[bh + 1].item())
+        patch_ids = unique_patch_ids[start:end].to(torch.long)
+        packed_k_chunks.append(k_patches[bh].index_select(0, patch_ids))
+        packed_v_chunks.append(v_patches[bh].index_select(0, patch_ids))
+
+    packed_k = torch.cat(packed_k_chunks, dim=0).contiguous()
+    packed_v = torch.cat(packed_v_chunks, dim=0).contiguous()
+    return packed_k, packed_v
+
+
 def make_patch_starts(H: int, W: int, patch_size: int, device: torch.device) -> torch.Tensor:
     """Return flat start offsets (row-major) for each patch top-left token."""
     p = patch_size
@@ -248,6 +298,132 @@ def _sel_perq_fwd_kernel(
         b_r = tl.exp2(b_m - b_m_new)
         b_p = tl.exp2(b_s - b_m_new[:, None])
         b_p = tl.where(valid[None, :], b_p, 0.0)
+
+        b_acc = b_acc * b_r + tl.sum(b_p, axis=1)
+        b_o = b_o * b_r[:, None] + tl.dot(b_p.to(tl.float32), b_v)
+        b_m = b_m_new
+
+    b_o = b_o / tl.maximum(b_acc[:, None], 1e-6)
+    b_lse = b_m / LOG2E + tl.log(tl.maximum(b_acc, 1e-6))
+
+    o_ptrs = (
+        O
+        + b_idx * stride_ob
+        + q_head_idx[:, None] * stride_oh
+        + pid_t * stride_ot
+        + offs_d[None, :] * stride_od
+    )
+    tl.store(o_ptrs, b_o.to(O.dtype.element_ty), mask=mask_g[:, None] & mask_d[None, :])
+
+    lse_ptrs = LSE + b_idx * stride_lb + q_head_idx * stride_lh + pid_t * stride_lt
+    tl.store(lse_ptrs, b_lse, mask=mask_g)
+
+
+@triton.jit
+def _sel_perq_fwd_packed_kernel(
+    Q,
+    K_PACKED,
+    V_PACKED,
+    O,
+    LSE,
+    PACKED_IDX,
+    CU_PACKED_COUNTS,
+    stride_qb,
+    stride_qh,
+    stride_qt,
+    stride_qd,
+    stride_pkp,
+    stride_pkt,
+    stride_pkd,
+    stride_pvp,
+    stride_pvt,
+    stride_pvd,
+    stride_ob,
+    stride_oh,
+    stride_ot,
+    stride_od,
+    stride_lb,
+    stride_lh,
+    stride_lt,
+    stride_ib,
+    stride_ih,
+    stride_it,
+    stride_in,
+    sm_scale,
+    T: tl.constexpr,
+    D: tl.constexpr,
+    PP: tl.constexpr,
+    TOP_N: tl.constexpr,
+    H_KV: tl.constexpr,
+    G: tl.constexpr,
+    BLOCK_G: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    BLOCK_KV: tl.constexpr,
+    LOG2E: tl.constexpr,
+):
+    """Query-centric packed forward kernel reading contiguous packed K/V patch tables."""
+    pid_t = tl.program_id(0)
+    pid_bh = tl.program_id(1)
+
+    kv_idx = pid_bh % H_KV
+    b_idx = pid_bh // H_KV
+    packed_base = tl.load(CU_PACKED_COUNTS + pid_bh)
+
+    offs_g = tl.arange(0, BLOCK_G)
+    mask_g = offs_g < G
+    offs_d = tl.arange(0, BLOCK_D)
+    mask_d = offs_d < D
+    q_head_idx = kv_idx * G + offs_g
+
+    q_ptrs = (
+        Q
+        + b_idx * stride_qb
+        + q_head_idx[:, None] * stride_qh
+        + pid_t * stride_qt
+        + offs_d[None, :] * stride_qd
+    )
+    b_q = tl.load(q_ptrs, mask=mask_g[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+    b_q = b_q * (LOG2E * sm_scale)
+
+    b_m = tl.full([BLOCK_G], float("-inf"), dtype=tl.float32)
+    b_acc = tl.zeros([BLOCK_G], dtype=tl.float32)
+    b_o = tl.zeros([BLOCK_G, BLOCK_D], dtype=tl.float32)
+
+    offs_pp = tl.arange(0, BLOCK_KV)
+    mask_pp = offs_pp < PP
+
+    for i in range(TOP_N):
+        patch_local = tl.load(
+            PACKED_IDX
+            + b_idx * stride_ib
+            + kv_idx * stride_ih
+            + pid_t * stride_it
+            + i * stride_in
+        )
+        patch_global = packed_base + patch_local
+
+        k_ptrs = (
+            K_PACKED
+            + patch_global * stride_pkp
+            + offs_pp[:, None] * stride_pkt
+            + offs_d[None, :] * stride_pkd
+        )
+        b_k = tl.load(k_ptrs, mask=mask_pp[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+        v_ptrs = (
+            V_PACKED
+            + patch_global * stride_pvp
+            + offs_pp[:, None] * stride_pvt
+            + offs_d[None, :] * stride_pvd
+        )
+        b_v = tl.load(v_ptrs, mask=mask_pp[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+        b_s = tl.dot(b_q, tl.trans(b_k))
+        b_s = tl.where(mask_pp[None, :], b_s, float("-inf"))
+        b_m_new = tl.maximum(b_m, tl.max(b_s, axis=1))
+        b_r = tl.exp2(b_m - b_m_new)
+        b_p = tl.exp2(b_s - b_m_new[:, None])
+        b_p = tl.where(mask_pp[None, :], b_p, 0.0)
 
         b_acc = b_acc * b_r + tl.sum(b_p, axis=1)
         b_o = b_o * b_r[:, None] + tl.dot(b_p.to(tl.float32), b_v)
@@ -962,6 +1138,87 @@ def selection_attn_2d_per_query_forward(
         D=d,
         W_spatial=W,
         P=P,
+        PP=pp,
+        TOP_N=top_n,
+        H_KV=h_kv,
+        G=G,
+        BLOCK_G=BLOCK_G,
+        BLOCK_D=BLOCK_D,
+        BLOCK_KV=BLOCK_KV,
+        LOG2E=LOG2E,
+        num_warps=num_warps,
+    )
+    return o, lse
+
+
+def selection_attn_2d_per_query_forward_packed(
+    q: torch.Tensor,  # [B, h_q, T, d]
+    k: torch.Tensor,  # [B, h_kv, T, d]
+    v: torch.Tensor,  # [B, h_kv, T, d]
+    block_idx: torch.Tensor,  # [B, h_kv, T, top_n] int32
+    H: int,
+    W: int,
+    P: int,
+    scale: float,
+    G: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Forward-only packed selection path for CUDA benchmarking and A/B parity checks."""
+    B, h_q, T, d = q.shape
+    h_kv = k.shape[1]
+    top_n = block_idx.shape[-1]
+    pp = P * P
+
+    assert q.is_cuda and k.is_cuda and v.is_cuda
+    assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous()
+    assert block_idx.is_contiguous()
+    assert block_idx.dtype == torch.int32
+    assert h_q == h_kv * G, f"h_q={h_q} must equal h_kv*G={h_kv}*{G}"
+
+    unique_patch_ids, cu_unique_counts, packed_idx = _build_packed_patch_metadata(block_idx)
+    packed_k, packed_v = _gather_packed_patch_tables(k, v, unique_patch_ids, cu_unique_counts, H, W, P)
+
+    o = torch.empty_like(q)
+    lse = torch.empty(B, h_q, T, dtype=torch.float32, device=q.device)
+
+    BLOCK_D = max(16, _next_power_of_2(d))
+    BLOCK_G = max(16, _next_power_of_2(G))
+    BLOCK_KV = max(16, _next_power_of_2(pp))
+    LOG2E = 1.4426950408889634
+    num_warps = _select_num_warps_per_query(BLOCK_G, BLOCK_KV, BLOCK_D)
+
+    grid = (T, B * h_kv)
+    _sel_perq_fwd_packed_kernel[grid](
+        q,
+        packed_k,
+        packed_v,
+        o,
+        lse,
+        packed_idx,
+        cu_unique_counts,
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
+        q.stride(3),
+        packed_k.stride(0),
+        packed_k.stride(1),
+        packed_k.stride(2),
+        packed_v.stride(0),
+        packed_v.stride(1),
+        packed_v.stride(2),
+        o.stride(0),
+        o.stride(1),
+        o.stride(2),
+        o.stride(3),
+        lse.stride(0),
+        lse.stride(1),
+        lse.stride(2),
+        packed_idx.stride(0),
+        packed_idx.stride(1),
+        packed_idx.stride(2),
+        packed_idx.stride(3),
+        scale,
+        T=T,
+        D=d,
         PP=pp,
         TOP_N=top_n,
         H_KV=h_kv,

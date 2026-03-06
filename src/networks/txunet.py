@@ -1,8 +1,8 @@
 from __future__ import annotations, annotations
 
+import math
 from typing import Sequence
 
-import math
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
@@ -198,6 +198,7 @@ class NSA2DAttention(nn.Module):
         gqa_group_size: int = 1,
         importance_chunk_size: int | None = None,
         importance_use_mem_get_info: bool = True,
+        selection_forward_mode: str = "unpacked",
     ) -> None:
         super().__init__()
         if dim % num_heads != 0:
@@ -225,6 +226,8 @@ class NSA2DAttention(nn.Module):
             raise ValueError("top_n must be > 0")
         if self.importance_chunk_size is not None and self.importance_chunk_size <= 0:
             raise ValueError("importance_chunk_size must be > 0 when provided")
+        if selection_forward_mode not in {"unpacked", "packed"}:
+            raise ValueError("selection_forward_mode must be 'unpacked' or 'packed'")
 
         dim_kv = self.h_kv * self.d  # C_kv = C / G
 
@@ -246,6 +249,7 @@ class NSA2DAttention(nn.Module):
 
         self.proj = nn.Conv2d(dim, dim, kernel_size=1, bias=True)
         self.rope = RotaryEmbedding2D(self.d, base=rope_base) if rope_enabled else None
+        self.selection_forward_mode = selection_forward_mode
 
     @staticmethod
     def _to_bhtd(t: torch.Tensor, B: int, h: int, d: int, H: int, W: int) -> torch.Tensor:
@@ -470,6 +474,48 @@ class NSA2DAttention(nn.Module):
         n = block_idx.shape[-1]
         scale = 1.0 / math.sqrt(d)
         selected_tokens = n * pp
+
+        if q.is_cuda:
+            from src.ops.selection_attention_2d_per_query import (
+                SelectionAttn2DPerQuery,
+                make_patch_starts,
+                selection_attn_2d_per_query_forward_packed,
+            )
+
+            use_packed_forward = (
+                self.selection_forward_mode == "packed"
+                and not torch.is_grad_enabled()
+                and not (q.requires_grad or k.requires_grad or v.requires_grad)
+            )
+
+            if use_packed_forward:
+                o, _ = selection_attn_2d_per_query_forward_packed(
+                    q.contiguous(),
+                    k.contiguous(),
+                    v.contiguous(),
+                    block_idx.contiguous(),
+                    H,
+                    W,
+                    p,
+                    scale,
+                    G,
+                )
+                return o
+
+            patch_starts = make_patch_starts(H, W, p, q.device)
+            return SelectionAttn2DPerQuery.apply(
+                q.contiguous(),
+                k.contiguous(),
+                v.contiguous(),
+                block_idx.contiguous(),
+                patch_starts,
+                pp,
+                H,
+                W,
+                p,
+                scale,
+                G,
+            )
 
         k_patches = self._bhtd_to_patches(k, B, h_kv, H, W, p)  # [B, h_kv, n_patches, pp, d]
         v_patches = self._bhtd_to_patches(v, B, h_kv, H, W, p)
