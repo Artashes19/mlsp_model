@@ -286,6 +286,29 @@ These should not be retried casually without a new structural idea.
 5. FFN and shell changes must be preceded by granular full-layer profiling on A100.
 6. Before any backend pivot, there is still a clear Triton-only forward retuning win to capture in the current selection forward kernel.
 
+## Profiling Arsenal
+
+Selection-path profiling stack we want to maintain:
+
+1. `torch.profiler` for region-level attribution, execution traces, and memory timelines
+2. HTA for trace diff, temporal breakdown, kernel breakdown, and frequent-kernel analysis
+3. Nsight Systems for host/device gap analysis and Python launch attribution
+4. Nsight Compute for kernel-level stall analysis, roofline, and profile-series sweeps
+5. Triton Proton as an optional Triton-native microbenchmark/profiling layer
+
+Environment facts verified on this machine:
+
+- `nsys` is available at `/usr/local/bin/nsys`
+- `ncu` is available at `/usr/local/cuda/bin/ncu`
+- `triton.profiler` and `triton.profiler.proton` import successfully in the `dev` env
+- `HolisticTraceAnalysis` is not installed yet in the `dev` env and should be installed when we execute the profiling-arsenal plan
+
+Tooling decision:
+
+1. Keep scope selection-only for this phase
+2. Build one selection harness that can feed all profiling tools
+3. Use cheap/high-level tools first and low-level kernel tools second
+
 ## Packing Contract
 
 Current packing metadata contract:
