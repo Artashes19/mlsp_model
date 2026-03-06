@@ -60,6 +60,15 @@ def _naive_selection_attention(q, k, v, top_idx, patch_starts, pp, P, W, scale=N
     return torch.nn.functional.scaled_dot_product_attention(q, k_sel, v_sel, scale=scale)
 
 
+def test_select_num_warps_per_query_matches_measured_wide_forward_cases():
+    from src.ops.selection_attention_2d_per_query import _select_num_warps_per_query
+
+    assert _select_num_warps_per_query(16, 64, 64, top_n=8, seq_len=128 * 128) == 2
+    assert _select_num_warps_per_query(16, 64, 64, top_n=8, seq_len=256 * 256) == 4
+    assert _select_num_warps_per_query(16, 64, 64, top_n=16, seq_len=128 * 128) == 2
+    assert _select_num_warps_per_query(16, 64, 64, top_n=16, seq_len=256 * 256) == 2
+
+
 # ─── Forward Tests ──────────────────────────────────────────────────────────
 
 

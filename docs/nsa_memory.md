@@ -187,6 +187,62 @@ Decision from this investigation:
 3. Any next dQ improvement will likely require a structural kernel change, not another small heuristic tweak.
 4. `_select_num_warps_per_query(...)` is a known weak heuristic for the wide-channel selection forward regimes we care about.
 
+### Forward warp retune landed cleanly
+
+Reference artifact:
+
+- `artifacts/nsa_diagnostics/nsa_selection_triton_hotspots_a100_20260307_004533.json`
+
+What changed:
+
+- `_select_num_warps_per_query(...)` now uses `top_n` and `seq_len` so it can distinguish:
+  - `128x128, top_n=8` wide forward cases: `2` warps
+  - `256x256, top_n=8` wide forward cases: `4` warps
+  - `top_n=16` wide forward cases: `2` warps
+
+Selector sanity points:
+
+- `(BLOCK_G=16, BLOCK_KV=64, BLOCK_D=64, top_n=8, seq_len=16384) -> 2`
+- `(BLOCK_G=16, BLOCK_KV=64, BLOCK_D=64, top_n=16, seq_len=16384) -> 2`
+- `(BLOCK_G=16, BLOCK_KV=64, BLOCK_D=64, top_n=8, seq_len=65536) -> 4`
+- `(BLOCK_G=16, BLOCK_KV=64, BLOCK_D=64, top_n=16, seq_len=65536) -> 2`
+
+Parity status:
+
+- focused forward parity: passed
+- broader per-query parity: `22 passed, 33 deselected`
+
+Measured effect on A100 hotspot profile:
+
+- `256x256`, `C=384`, `top_n=8`
+  - forward: `11.93 -> 9.28 ms` (`1.29x`)
+  - dQ: `15.71 -> 15.71 ms` (flat)
+  - total path: `46.36 -> 44.62 ms` (`1.04x`)
+- `256x256`, `C=384`, `top_n=16`
+  - forward: `22.99 -> 17.66 ms` (`1.30x`)
+  - dQ: `30.58 -> 30.47 ms` (flat)
+  - total path: `75.87 -> 71.03 ms` (`1.07x`)
+- `256x256`, `C=512`, `top_n=8`
+  - forward: `11.94 -> 9.29 ms` (`1.29x`)
+  - dQ: `15.81 -> 15.79 ms` (flat)
+  - total path: `50.22 -> 48.41 ms` (`1.04x`)
+- `256x256`, `C=512`, `top_n=16`
+  - forward: `23.01 -> 17.75 ms` (`1.30x`)
+  - dQ: `30.69 -> 30.60 ms` (flat)
+  - total path: `80.68 -> 75.58 ms` (`1.07x`)
+
+Sentinel `128x128` effect:
+
+- total path improved modestly, about `1.05x`
+- forward improved slightly to moderately
+- dQ moved little and sometimes within noise
+
+Decision after the retune:
+
+1. The easy Triton-only forward meta miss is now fixed for the measured wide regimes.
+2. dQ is now the next remaining Triton kernel target.
+3. The next dQ step should be structural, not another small launch-meta tweak.
+
 ## Important Comparisons
 
 ### Tilda comparison

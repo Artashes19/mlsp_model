@@ -23,7 +23,17 @@ def _next_power_of_2(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
 
-def _select_num_warps_per_query(block_g: int, block_kv: int, block_d: int) -> int:
+def _select_num_warps_per_query(block_g: int, block_kv: int, block_d: int, top_n: int, seq_len: int) -> int:
+    # A100 sweep results show the wide forward regimes we care about are
+    # over-warped by the old work-only heuristic. Heavy top-n prefers 2 warps,
+    # while the longest top_n=8 case prefers 4.
+    if block_g >= 16 and block_kv >= 64 and block_d >= 64:
+        if top_n >= 16:
+            return 2
+        if seq_len >= 256 * 256:
+            return 4
+        return 2
+
     work = block_g * block_kv * max(block_d, 8)
     if work <= 1024:
         return 2
@@ -1240,7 +1250,7 @@ def selection_attn_2d_per_query_forward(
     BLOCK_G = max(16, _next_power_of_2(G))
     BLOCK_KV = max(16, _next_power_of_2(pp))
     LOG2E = 1.4426950408889634
-    num_warps = _select_num_warps_per_query(BLOCK_G, BLOCK_KV, BLOCK_D)
+    num_warps = _select_num_warps_per_query(BLOCK_G, BLOCK_KV, BLOCK_D, top_n=top_n, seq_len=T)
 
     grid = (T, B * h_kv)
     _sel_perq_fwd_kernel[grid](
@@ -1325,7 +1335,7 @@ def selection_attn_2d_per_query_forward_packed(
     BLOCK_G = max(16, _next_power_of_2(G))
     BLOCK_KV = max(16, _next_power_of_2(pp))
     LOG2E = 1.4426950408889634
-    num_warps = _select_num_warps_per_query(BLOCK_G, BLOCK_KV, BLOCK_D)
+    num_warps = _select_num_warps_per_query(BLOCK_G, BLOCK_KV, BLOCK_D, top_n=top_n, seq_len=T)
 
     grid = (T, B * h_kv)
     _sel_perq_fwd_packed_kernel[grid](
