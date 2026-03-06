@@ -108,6 +108,85 @@ At `C=384` attention-only:
 
 This means the asymptotic advantage is real, but current implementation overhead delays the crossover.
 
+### Triton-only long-sequence investigation: dQ is large, but forward has the easy win
+
+Reference artifacts:
+
+- `artifacts/nsa_diagnostics/nsa_selection_triton_hotspots_a100_20260306_230704.json`
+- `artifacts/nsa_diagnostics/selection_triton_kernel_sweep_a100_20260306_234808.json`
+- `artifacts/nsa_diagnostics/selection_triton_kernel_sweep_a100_20260307_001149.json`
+
+Hotspot profile on A100 for the current unpacked selection path showed:
+
+- `256x256`, `C=384`, `top_n=8`
+  - scoring `12.95 ms`
+  - forward `11.93 ms`
+  - dQ `15.71 ms`
+  - dK/dV `5.07 ms`
+- `256x256`, `C=384`, `top_n=16`
+  - scoring `12.99 ms`
+  - forward `22.99 ms`
+  - dQ `30.58 ms`
+  - dK/dV `8.68 ms`
+- `256x256`, `C=512`, `top_n=8`
+  - scoring `15.13 ms`
+  - forward `11.94 ms`
+  - dQ `15.81 ms`
+  - dK/dV `6.51 ms`
+- `256x256`, `C=512`, `top_n=16`
+  - scoring `15.21 ms`
+  - forward `23.01 ms`
+  - dQ `30.69 ms`
+  - dK/dV `10.97 ms`
+
+Interpretation:
+
+1. At wide channels and long sequence, `dQ` is the largest single Triton kernel cost.
+2. Forward is the next Triton hotspot.
+3. Scoring is still significant, but it is no longer the only thing that matters in the wide long-sequence regime.
+
+Current-kernel sweep result:
+
+- Forward meta is under-tuned in both the priority `256x256` regime and the `128x128` sentinel regime.
+- dQ current meta is already locally optimal at `256x256`.
+- dQ only shows small `BLOCK_Q=16` wins at `128x128`, not at `256x256`.
+- The direct Triton sweep harness is compile-heavy and should be treated as a one-shot ranking tool, not a fast inner tuning loop.
+
+Measured forward sweep results on A100:
+
+- `256x256`, `C=384`, `top_n=8`
+  - current `num_warps=8`: `15.33 ms`
+  - best `num_warps=4`: `9.29 ms`
+  - forward-only gain: `1.65x`
+- `256x256`, `C=384`, `top_n=16`
+  - current `num_warps=8`: `22.95 ms`
+  - best `num_warps=2`: `17.67 ms`
+  - forward-only gain: `1.30x`
+- `256x256`, `C=512`, `top_n=8`
+  - current `num_warps=8`: `11.92 ms`
+  - best `num_warps=4`: `9.30 ms`
+  - forward-only gain: `1.28x`
+- `256x256`, `C=512`, `top_n=16`
+  - current `num_warps=8`: `22.91 ms`
+  - best `num_warps=2`: `17.66 ms`
+  - forward-only gain: `1.30x`
+
+Measured dQ sweep results on A100:
+
+- `256x256`, `C=384`, `top_n=8/16`: current `BLOCK_Q=32, num_warps=4` is best in the tested neighborhood
+- `256x256`, `C=512`, `top_n=8/16`: current `BLOCK_Q=32, num_warps=4` is best in the tested neighborhood
+- `128x128` sentinel:
+  - `C=384`, `top_n=8/16`: `BLOCK_Q=16, num_warps=4` is modestly better than current
+  - `C=512`, `top_n=8`: current `BLOCK_Q=32, num_warps=4` is best
+  - `C=512`, `top_n=16`: `BLOCK_Q=16, num_warps=4` is only about `1.05x` better
+
+Decision from this investigation:
+
+1. The next Triton-only target should start with forward launch-meta retuning.
+2. dQ still matters more in absolute time, but there is no easy launch-meta win there at `256x256`.
+3. Any next dQ improvement will likely require a structural kernel change, not another small heuristic tweak.
+4. `_select_num_warps_per_query(...)` is a known weak heuristic for the wide-channel selection forward regimes we care about.
+
 ## Important Comparisons
 
 ### Tilda comparison
@@ -149,6 +228,7 @@ These should not be retried casually without a new structural idea.
 3. Best short-term move is selection packing / layout cleanup.
 4. Best medium-term move is a Flash/FlexAttention-style sparse backend for H100.
 5. FFN and shell changes must be preceded by granular full-layer profiling on A100.
+6. Before any backend pivot, there is still a clear Triton-only forward retuning win to capture in the current selection forward kernel.
 
 ## Packing Contract
 
