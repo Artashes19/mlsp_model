@@ -149,6 +149,28 @@ These should not be retried casually without a new structural idea.
 3. Best short-term move is selection packing / layout cleanup.
 4. Best medium-term move is a Flash/FlexAttention-style sparse backend for H100.
 
+## Packing Contract
+
+Current packing metadata contract:
+
+- `unique_patch_ids: [total_unique] int32`
+- `cu_unique_counts: [B*h_kv + 1] int32`
+- `packed_idx: [B, h_kv, T, top_n] int32`
+
+Interpretation:
+
+- each `(batch, kv_head)` row owns one local packed patch table
+- `unique_patch_ids[cu_unique_counts[row]:cu_unique_counts[row+1]]` is that row's sorted patch table
+- `packed_idx` remaps every original selected patch id into the row-local packed table
+
+Why packing is per `(batch, kv_head)` and not per query:
+
+1. Per-query packing would duplicate K/V patches heavily across nearby queries.
+2. Per-head packing lets many queries reuse the same packed K/V tables.
+3. This is the right bridge toward both:
+   - a better current Triton path
+   - a future H100 block-sparse / FlexAttention-style backend
+
 ## Current Priority Order
 
 1. Packing-first selection path

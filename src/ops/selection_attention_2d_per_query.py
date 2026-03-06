@@ -84,6 +84,36 @@ def _build_active_query_index_per_patch(
     return query_idx_sorted, cu_counts.contiguous()
 
 
+def _build_packed_patch_metadata(
+    block_idx: torch.Tensor,  # [B, h_kv, T, top_n] int32
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Build per-(batch, kv-head) packed patch tables for selection packing.
+
+    Returns:
+      unique_patch_ids: [total_unique] int32, concatenated per-head sorted patch ids
+      cu_unique_counts: [B*h_kv + 1] int32, prefix sums into unique_patch_ids
+      packed_idx: [B, h_kv, T, top_n] int32, local remap into each head's patch table
+    """
+    B, h_kv, T, top_n = block_idx.shape
+    rows = block_idx.view(B * h_kv, T * top_n)
+
+    unique_chunks: list[torch.Tensor] = []
+    inverse_chunks: list[torch.Tensor] = []
+    counts = [0]
+
+    for row in rows:
+        unique_ids, inverse = torch.unique(row, sorted=True, return_inverse=True)
+        unique_chunks.append(unique_ids.to(torch.int32))
+        inverse_chunks.append(inverse.to(torch.int32))
+        counts.append(counts[-1] + int(unique_ids.numel()))
+
+    unique_patch_ids = torch.cat(unique_chunks, dim=0).contiguous()
+    cu_unique_counts = torch.tensor(counts, device=block_idx.device, dtype=torch.int32)
+    packed_idx = torch.stack(inverse_chunks, dim=0).view(B, h_kv, T, top_n).contiguous()
+    return unique_patch_ids, cu_unique_counts, packed_idx
+
+
 def make_patch_starts(H: int, W: int, patch_size: int, device: torch.device) -> torch.Tensor:
     """Return flat start offsets (row-major) for each patch top-left token."""
     p = patch_size
