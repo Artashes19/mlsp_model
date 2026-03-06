@@ -612,3 +612,202 @@ Priority update:
 4. Revisit FFN after either:
    - higher-channel regimes show larger FFN share
    - or selection stops dominating
+
+## Profiling Arsenal Findings
+
+Reference artifacts:
+
+- Torch profiler trace:
+  - `artifacts/nsa_diagnostics/C384_h6_g3_256x256_top8_trace.json`
+  - `artifacts/nsa_diagnostics/C384_h6_g3_256x256_top8_execution_trace.json`
+  - `artifacts/nsa_diagnostics/C384_h6_g3_256x256_top8_memory_timeline.html`
+- HTA summary:
+  - `artifacts/nsa_diagnostics/selection_trace_hta_summary_20260307_012823.json`
+  - `artifacts/nsa_diagnostics/selection_trace_hta_summary_20260307_012823.txt`
+- Nsight Systems capture:
+  - `artifacts/nsa_diagnostics/selection_nsys_gpu3_C384_6_3_S256_top8_20260307_013109.nsys-rep`
+  - `artifacts/nsa_diagnostics/selection_nsys_gpu3_C384_6_3_S256_top8_20260307_013109_stats.txt`
+- Proton profile:
+  - `artifacts/nsa_diagnostics/selection_proton_gpu3_C384_h6_g3_256_top8_20260307_013503.hatchet.hatchet`
+
+### Torch profiler is the base layer and now exports the right artifacts
+
+Harness:
+
+- `artifacts/nsa_diagnostics/profile_nsa_selection_triton_hotspots.py`
+
+What it adds:
+
+- standard Kineto trace
+- optional execution trace JSON
+- optional memory timeline HTML
+- explicit `record_function` regions for:
+  - selection scoring
+  - selection forward
+  - selection dQ
+  - selection dK/dV
+
+Useful caveat:
+
+- `ExecutionTraceObserver` emits callback-registration warnings in this environment, but the artifacts are still written.
+
+Decision:
+
+- Keep this as the default first profiler for selection work.
+
+### HTA works, but only for the high-level Kineto summaries
+
+Script:
+
+- `artifacts/nsa_diagnostics/analyze_selection_trace_with_hta.py`
+
+What worked on the saved selection trace:
+
+- temporal breakdown
+- GPU kernel type breakdown
+- GPU kernel breakdown
+
+What HTA reported for `C=384, h=6, G=3, 256x256, top_n=8`:
+
+- idle time `~9.11 ms`
+- compute time `~42.32 ms`
+- non-compute time negligible
+- top kernels:
+  - `_sel_perq_bwd_dq_kernel ~15.60 ms`
+  - `_sel_perq_fwd_kernel ~9.21 ms`
+  - `_sel_perq_bwd_dkv_compact_kernel ~3.64 ms`
+
+Useful limitation:
+
+- `get_frequent_cuda_kernel_sequences(...)` crashes on this Kineto trace shape with:
+  - `ValueError: Unexpected case: [296.0, -1.0, 1.0, 78.0] [295.0, 0.0, -1.0, 78.0]`
+- The wrapper now records this as a tool limitation instead of failing the whole analysis.
+- HTA also warns:
+  - missing `distributedInfo.rank` in the trace JSON, so it defaults to rank `0`
+  - missing `ProfilerStep`, so some analysis may be less accurate
+
+Decision:
+
+- Use HTA for compact temporal/kernel summaries and trace diff later.
+- Do not rely on HTA frequent-kernel-sequence analysis for our current Kineto traces.
+
+### Nsight Systems adds the host/API side that Kineto does not show clearly
+
+Wrapper:
+
+- `artifacts/nsa_diagnostics/run_selection_nsys.sh`
+
+What it adds:
+
+- GPU kernel summary from a single capture
+- CUDA API summary
+- NVTX range summary
+- `.nsys-rep` for deeper UI inspection later
+
+Most useful results from the `256x256, C=384, top_n=8` selection capture:
+
+- GPU kernel total time is dominated by:
+  - `_sel_perq_bwd_dq_kernel` at `~208.0 ms` aggregated over `12` instances
+  - `_sel_perq_fwd_kernel` at `~141.8 ms` aggregated over `13` instances
+  - `_sel_perq_bwd_dkv_compact_kernel` at `~47.0 ms` aggregated over `12` instances
+- CUDA API time is dominated by:
+  - `cudaDeviceSynchronize`
+  - `cudaLaunchKernel`
+  - `cudaMemcpyAsync`
+- NVTX ranges show the top-k path leaning heavily on:
+  - `CCCL:cub::DeviceRadixSort`
+  - `CCCL:cub::DeviceScan::InclusiveScan`
+
+Important environment limitation on DGX:
+
+- `nsys status --environment` reports:
+  - `perf_event_open`: fail
+  - CPU profiling environment: fail
+  - Linux paranoid level `4`
+- Result:
+  - CPU sampling is disabled
+  - Python backtrace collection is disabled
+  - CPU context-switch tracing is disabled
+
+Decision:
+
+- Nsight Systems is still useful for GPU kernel/API/NVTX summaries.
+- Do not expect Python-backtrace or CPU-sampling features on this DGX setup unless the host configuration changes.
+
+### Nsight Compute is prepared, but blocked by GPU counter permissions
+
+Wrapper:
+
+- `artifacts/nsa_diagnostics/run_selection_ncu.sh`
+
+What happened on the first A100 run:
+
+- the wrapper launched correctly
+- Nsight Compute failed before collecting metrics with:
+  - `ERR_NVGPUCTRPERM`
+
+Meaning:
+
+- current DGX user session does not have permission to access NVIDIA GPU performance counters
+- this is an environment blocker, not a script bug
+
+Decision:
+
+- Keep the wrapper; it is ready for use on hosts where GPU counter permissions are enabled
+- Do not spend time debugging the wrapper unless the machine permissions change
+
+### Proton works and gives scoped tree attribution, but not low-level stall data
+
+Script:
+
+- `artifacts/nsa_diagnostics/profile_selection_with_proton.py`
+
+Viewer:
+
+- `/auto/home/artashes/miniconda3/envs/dev/bin/python -m triton.profiler.viewer`
+
+Dependency added:
+
+- `llnl-hatchet`
+
+What Proton adds:
+
+- a scoped hierarchy over our manually named regions:
+  - `selection_scoring`
+  - `selection_forward`
+  - `selection_dq`
+  - `selection_dkv`
+- Triton-kernel attribution inside each scope when `hook="triton"` is enabled
+
+Observed on `C=384, h=6, G=3, 256x256, top_n=8`:
+
+- `selection_scoring ~26.13 ms`
+- `selection_forward ~18.40 ms`
+- `selection_dq ~31.26 ms`
+- `selection_dkv ~9.14 ms`
+- inside `selection_scoring`, Proton exposes the internal `topk` stack clearly:
+  - `radixFindKthValues`
+  - `computeBlockwiseWithinKCounts`
+  - `softmax_warp_forward`
+  - bf16 GEMM
+- inside `selection_dkv`, Proton exposes the compact kernel plus its sorting/reduction helpers
+
+Useful quirks:
+
+- Proton appends `.hatchet` to the path, so if the supplied name already ends with `.hatchet`, the final file ends with `.hatchet.hatchet`
+- Proton is useful for scope hierarchy and Triton-kernel attribution, but it does not replace Nsight Compute for stall/roofline/source-counter analysis
+
+Decision:
+
+- Keep Proton as a good middle layer between Kineto and Nsight:
+  - better hierarchy than Kineto tables
+  - easier scoped attribution than Nsight Systems
+  - not a substitute for Nsight Compute
+
+### Current tool stack order
+
+1. `torch.profiler` first for selection-region timing and saved traces
+2. HTA second for compact temporal/kernel summaries and future trace diffs
+3. Proton third for scoped tree attribution inside the selection path
+4. Nsight Systems fourth for API/NVTX/host-side correlation
+5. Nsight Compute only when GPU counter permissions are available
