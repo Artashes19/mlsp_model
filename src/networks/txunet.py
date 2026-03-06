@@ -199,6 +199,7 @@ class NSA2DAttention(nn.Module):
         importance_chunk_size: int | None = None,
         importance_use_mem_get_info: bool = True,
         selection_forward_mode: str = "unpacked",
+        selection_dq_mode: str = "auto",
     ) -> None:
         super().__init__()
         if dim % num_heads != 0:
@@ -228,6 +229,8 @@ class NSA2DAttention(nn.Module):
             raise ValueError("importance_chunk_size must be > 0 when provided")
         if selection_forward_mode not in {"unpacked", "packed"}:
             raise ValueError("selection_forward_mode must be 'unpacked' or 'packed'")
+        if selection_dq_mode not in {"unpacked", "packed", "auto"}:
+            raise ValueError("selection_dq_mode must be 'unpacked', 'packed', or 'auto'")
 
         dim_kv = self.h_kv * self.d  # C_kv = C / G
 
@@ -250,6 +253,7 @@ class NSA2DAttention(nn.Module):
         self.proj = nn.Conv2d(dim, dim, kernel_size=1, bias=True)
         self.rope = RotaryEmbedding2D(self.d, base=rope_base) if rope_enabled else None
         self.selection_forward_mode = selection_forward_mode
+        self.selection_dq_mode = selection_dq_mode
 
     @staticmethod
     def _to_bhtd(t: torch.Tensor, B: int, h: int, d: int, H: int, W: int) -> torch.Tensor:
