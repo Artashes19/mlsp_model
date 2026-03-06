@@ -287,7 +287,7 @@ def launch_dq_candidate(
     BLOCK_G = max(16, _next_power_of_2(G))
     BLOCK_KV = max(16, _next_power_of_2(pp))
     LOG2E = 1.4426950408889634
-    grid = (B * h_kv, torch.div(torch.tensor(T + block_q - 1), block_q, rounding_mode="floor").item())
+    grid = (B * h_kv, (T + block_q - 1) // block_q)
 
     launch_kwargs = {"num_warps": num_warps}
     if num_stages is not None:
@@ -364,6 +364,10 @@ def dedupe_tuples(values: list[tuple[int | None, ...]]) -> list[tuple[int | None
     return out
 
 
+def sorted_unique_ints(values: list[int]) -> list[int]:
+    return sorted(set(values))
+
+
 def current_block_q(T: int) -> int:
     if T >= 4096:
         return 32
@@ -402,14 +406,27 @@ def run_case(
     current_fwd_warps = _select_num_warps_per_query(BLOCK_G, BLOCK_KV, BLOCK_D)
     current_dq_block_q = current_block_q(T)
     current_dq_warps = _select_num_warps_per_query_dkv(BLOCK_G, BLOCK_KV, BLOCK_D, current_dq_block_q)
+    stage_choices = [None, 2, 4] if args.include_num_stages else [None]
+    fwd_warp_choices = sorted_unique_ints([2, 4, 8, current_fwd_warps])
+    dq_warp_choices = sorted_unique_ints(
+        [max(2, current_dq_warps // 2), current_dq_warps, min(8, current_dq_warps * 2)]
+    )
+    dq_block_q_choices = sorted_unique_ints(
+        [max(16, current_dq_block_q // 2), current_dq_block_q, min(64, current_dq_block_q * 2)]
+    )
 
     fwd_candidates = dedupe_tuples(
         [(current_fwd_warps, None)]
-        + [(warps, stages) for warps in (2, 4, 8) for stages in (None, 2, 4)]
+        + [(warps, stages) for warps in fwd_warp_choices for stages in stage_choices]
     )
     dq_candidates = dedupe_tuples(
         [(current_dq_block_q, current_dq_warps, None)]
-        + [(block_q, warps, stages) for block_q in (16, 32, 64) for warps in (2, 4, 8) for stages in (None, 2, 4)]
+        + [
+            (block_q, warps, stages)
+            for block_q in dq_block_q_choices
+            for warps in dq_warp_choices
+            for stages in stage_choices
+        ]
     )
 
     fwd_results = []
@@ -470,6 +487,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-ns", type=int, nargs="+", default=[8, 16])
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iters", type=int, default=5)
+    parser.add_argument("--include-num-stages", action="store_true")
     parser.add_argument("--configs", nargs="*", default=["384:6:3", "512:8:4"])
     parser.add_argument("--out-dir", type=Path, default=PROJECT_ROOT / "artifacts" / "nsa_diagnostics")
     return parser.parse_args()
