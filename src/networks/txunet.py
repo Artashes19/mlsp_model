@@ -482,6 +482,7 @@ class NSA2DAttention(nn.Module):
         if q.is_cuda:
             from src.ops.selection_attention_2d_per_query import (
                 SelectionAttn2DPerQuery,
+                SelectionAttn2DPerQueryDQMode,
                 make_patch_starts,
                 selection_attn_2d_per_query_forward_packed,
             )
@@ -507,7 +508,24 @@ class NSA2DAttention(nn.Module):
                 return o
 
             patch_starts = make_patch_starts(H, W, p, q.device)
-            return SelectionAttn2DPerQuery.apply(
+            dq_mode = self.selection_dq_mode
+            if dq_mode == "auto":
+                dq_mode = "unpacked"
+            if dq_mode == "unpacked":
+                return SelectionAttn2DPerQuery.apply(
+                    q.contiguous(),
+                    k.contiguous(),
+                    v.contiguous(),
+                    block_idx.contiguous(),
+                    patch_starts,
+                    pp,
+                    H,
+                    W,
+                    p,
+                    scale,
+                    G,
+                )
+            return SelectionAttn2DPerQueryDQMode.apply(
                 q.contiguous(),
                 k.contiguous(),
                 v.contiguous(),
@@ -519,6 +537,7 @@ class NSA2DAttention(nn.Module):
                 p,
                 scale,
                 G,
+                dq_mode,
             )
 
         k_patches = self._bhtd_to_patches(k, B, h_kv, H, W, p)  # [B, h_kv, n_patches, pp, d]

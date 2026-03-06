@@ -763,6 +763,45 @@ class TestPerQuerySelectionForward:
 
 class TestPerQuerySelectionBackward:
     @pytest.mark.per_query_parity
+    def test_packed_per_query_backward_dq_avoids_unpacked_dispatch_mha(self, monkeypatch):
+        """Packed dQ mode must not fall back to the unpacked dQ helper in MHA mode."""
+        import src.ops.selection_attention_2d_per_query as perq_ops
+        from src.networks.txunet import NSA2DAttention
+
+        def _raise_if_called(*args, **kwargs):
+            raise AssertionError("packed dQ fell back to unpacked dispatch")
+
+        monkeypatch.setattr(perq_ops, "selection_per_query_bwd_dq", _raise_if_called)
+
+        B, h, d = 1, 2, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        C = h * d
+        n_patches = (H // P) * (W // P)
+
+        torch.manual_seed(6050)
+        attn_packed = NSA2DAttention(
+            dim=C,
+            num_heads=h,
+            patch_size=P,
+            top_n=top_n,
+            window_size=2,
+            rope_enabled=False,
+            gqa_group_size=1,
+            selection_forward_mode="unpacked",
+            selection_dq_mode="packed",
+        ).to(device=DEVICE, dtype=torch.float32)
+
+        q = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32, requires_grad=True)
+        k = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        v = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h, T, top_n), device=DEVICE, dtype=torch.int32)
+
+        o = attn_packed._selection_from_block_idx(q, k, v, block_idx, H, W)
+        o.sum().backward()
+
+    @pytest.mark.per_query_parity
     def test_packed_per_query_backward_dq_matches_unpacked_mha(self):
         """Packed per-query dQ should match unpacked dQ in MHA mode."""
         from src.networks.txunet import NSA2DAttention

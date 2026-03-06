@@ -593,6 +593,147 @@ def _sel_perq_bwd_dq_kernel(
 
 
 @triton.jit
+def _sel_perq_bwd_dq_packed_kernel(
+    Q,
+    K_PACKED,
+    V_PACKED,
+    DO,
+    LSE,
+    DELTA,
+    DQ,
+    PACKED_IDX,
+    CU_PACKED_COUNTS,
+    stride_qb,
+    stride_qh,
+    stride_qt,
+    stride_qd,
+    stride_pkp,
+    stride_pkt,
+    stride_pkd,
+    stride_pvp,
+    stride_pvt,
+    stride_pvd,
+    stride_db,
+    stride_dh,
+    stride_dt,
+    stride_dd,
+    stride_lb,
+    stride_lh,
+    stride_lt,
+    stride_ib,
+    stride_ih,
+    stride_it,
+    stride_in,
+    sm_scale,
+    T: tl.constexpr,
+    D: tl.constexpr,
+    PP: tl.constexpr,
+    TOP_N: tl.constexpr,
+    H_KV: tl.constexpr,
+    G: tl.constexpr,
+    BLOCK_G: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    BLOCK_KV: tl.constexpr,
+    BLOCK_Q: tl.constexpr,
+    LOG2E: tl.constexpr,
+):
+    """Query-block-centric packed per-query dQ kernel."""
+    pid_bh = tl.program_id(0)
+    pid_qblk = tl.program_id(1)
+
+    kv_idx = pid_bh % H_KV
+    b_idx = pid_bh // H_KV
+    packed_base = tl.load(CU_PACKED_COUNTS + pid_bh)
+
+    offs_g = tl.arange(0, BLOCK_G)
+    mask_g = offs_g < G
+    offs_d = tl.arange(0, BLOCK_D)
+    mask_d = offs_d < D
+    q_head_idx = kv_idx * G + offs_g
+
+    offs_pp = tl.arange(0, BLOCK_KV)
+    mask_pp = offs_pp < PP
+
+    q_start = pid_qblk * BLOCK_Q
+    for q_off in tl.static_range(0, BLOCK_Q):
+        pid_t = q_start + q_off
+        mask_t = pid_t < T
+
+        q_ptrs = (
+            Q
+            + b_idx * stride_qb
+            + q_head_idx[:, None] * stride_qh
+            + pid_t * stride_qt
+            + offs_d[None, :] * stride_qd
+        )
+        b_q = tl.load(q_ptrs, mask=mask_t & mask_g[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+        b_q_scaled = b_q * (LOG2E * sm_scale)
+
+        do_ptrs = (
+            DO
+            + b_idx * stride_qb
+            + q_head_idx[:, None] * stride_qh
+            + pid_t * stride_qt
+            + offs_d[None, :] * stride_qd
+        )
+        b_do = tl.load(do_ptrs, mask=mask_t & mask_g[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+        lse_ptrs = LSE + b_idx * stride_lb + q_head_idx * stride_lh + pid_t * stride_lt
+        b_lse = tl.load(lse_ptrs, mask=mask_t & mask_g, other=0.0)
+        delta_ptrs = DELTA + b_idx * stride_lb + q_head_idx * stride_lh + pid_t * stride_lt
+        b_delta = tl.load(delta_ptrs, mask=mask_t & mask_g, other=0.0)
+
+        b_dq = tl.zeros([BLOCK_G, BLOCK_D], dtype=tl.float32)
+
+        for i in range(TOP_N):
+            patch_local = tl.load(
+                PACKED_IDX
+                + b_idx * stride_ib
+                + kv_idx * stride_ih
+                + pid_t * stride_it
+                + i * stride_in,
+                mask=mask_t,
+                other=0,
+            )
+            patch_global = packed_base + patch_local
+            valid = mask_t & mask_pp
+
+            k_ptrs = (
+                K_PACKED
+                + patch_global * stride_pkp
+                + offs_pp[:, None] * stride_pkt
+                + offs_d[None, :] * stride_pkd
+            )
+            b_k = tl.load(k_ptrs, mask=valid[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+            v_ptrs = (
+                V_PACKED
+                + patch_global * stride_pvp
+                + offs_pp[:, None] * stride_pvt
+                + offs_d[None, :] * stride_pvd
+            )
+            b_v = tl.load(v_ptrs, mask=valid[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+            b_s = tl.dot(b_q_scaled, tl.trans(b_k))
+            b_s = tl.where(mask_pp[None, :], b_s, float("-inf"))
+            b_p = tl.exp2(b_s - b_lse[:, None] * LOG2E)
+            b_p = tl.where(mask_t & mask_pp[None, :], b_p, 0.0)
+
+            b_dp = tl.dot(b_do, tl.trans(b_v))
+            b_ds = b_p * (b_dp - b_delta[:, None])
+            b_dq += tl.dot(b_ds.to(tl.float32), b_k) * sm_scale
+
+        dq_ptrs = (
+            DQ
+            + b_idx * stride_db
+            + q_head_idx[:, None] * stride_dh
+            + pid_t * stride_dt
+            + offs_d[None, :] * stride_dd
+        )
+        tl.store(dq_ptrs, b_dq.to(DQ.dtype.element_ty), mask=mask_t & mask_g[:, None] & mask_d[None, :])
+
+
+@triton.jit
 def _sel_perq_bwd_dkv_kernel(
     Q,
     K,
@@ -1319,6 +1460,91 @@ def selection_per_query_bwd_dq(
     return dq
 
 
+def selection_per_query_bwd_dq_packed(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    do: torch.Tensor,
+    lse: torch.Tensor,
+    delta: torch.Tensor,
+    block_idx: torch.Tensor,
+    pp: int,
+    H: int,
+    W: int,
+    P: int,
+    scale: float,
+    G: int,
+) -> torch.Tensor:
+    """Compute dQ with Triton per-query kernel over packed contiguous K/V patch tables."""
+    B, h_q, T, d = q.shape
+    h_kv = k.shape[1]
+    top_n = block_idx.shape[-1]
+
+    unique_patch_ids, cu_unique_counts, packed_idx = _build_packed_patch_metadata(block_idx)
+    packed_k, packed_v = _gather_packed_patch_tables(k, v, unique_patch_ids, cu_unique_counts, H, W, P)
+
+    dq = torch.zeros_like(q)
+    BLOCK_D = max(16, _next_power_of_2(d))
+    BLOCK_G = max(16, _next_power_of_2(G))
+    BLOCK_KV = max(16, _next_power_of_2(pp))
+    LOG2E = 1.4426950408889634
+    if T >= 4096:
+        BLOCK_Q = 32
+    elif T >= 512:
+        BLOCK_Q = 16
+    else:
+        BLOCK_Q = 4
+    num_warps = _select_num_warps_per_query_dkv(BLOCK_G, BLOCK_KV, BLOCK_D, BLOCK_Q)
+
+    grid = (B * h_kv, triton.cdiv(T, BLOCK_Q))
+    _sel_perq_bwd_dq_packed_kernel[grid](
+        q,
+        packed_k,
+        packed_v,
+        do,
+        lse,
+        delta,
+        dq,
+        packed_idx,
+        cu_unique_counts,
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
+        q.stride(3),
+        packed_k.stride(0),
+        packed_k.stride(1),
+        packed_k.stride(2),
+        packed_v.stride(0),
+        packed_v.stride(1),
+        packed_v.stride(2),
+        dq.stride(0),
+        dq.stride(1),
+        dq.stride(2),
+        dq.stride(3),
+        lse.stride(0),
+        lse.stride(1),
+        lse.stride(2),
+        packed_idx.stride(0),
+        packed_idx.stride(1),
+        packed_idx.stride(2),
+        packed_idx.stride(3),
+        scale,
+        T=T,
+        D=d,
+        PP=pp,
+        TOP_N=top_n,
+        H_KV=h_kv,
+        G=G,
+        BLOCK_G=BLOCK_G,
+        BLOCK_D=BLOCK_D,
+        BLOCK_KV=BLOCK_KV,
+        BLOCK_Q=BLOCK_Q,
+        LOG2E=LOG2E,
+        num_warps=num_warps,
+    )
+    return dq
+
+
 def selection_per_query_bwd_dkv(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -1569,3 +1795,101 @@ class SelectionAttn2DPerQuery(torch.autograd.Function):
                 dv = dv_ref
 
         return dq, dk, dv, None, None, None, None, None, None, None, None
+
+
+class SelectionAttn2DPerQueryDQMode(torch.autograd.Function):
+    """
+    Per-query custom autograd with explicit dQ runtime control.
+
+    Behavior:
+      - forward: Triton
+      - dQ: Triton unpacked or packed
+      - dK/dV: Triton
+    """
+
+    @staticmethod
+    def forward(ctx, q, k, v, block_idx, patch_starts, pp, H, W, P, scale, G, dq_mode):
+        o, lse = selection_attn_2d_per_query_forward(q, k, v, block_idx, patch_starts, pp, H, W, P, scale, G)
+        ctx.save_for_backward(q, k, v, o, lse, block_idx, patch_starts)
+        ctx.pp = pp
+        ctx.H = H
+        ctx.W = W
+        ctx.P = P
+        ctx.scale = scale
+        ctx.G = G
+        ctx.dq_mode = dq_mode
+        return o
+
+    @staticmethod
+    def backward(ctx, do):
+        q, k, v, o, lse, block_idx, patch_starts = ctx.saved_tensors
+        do = do.contiguous()
+
+        needs_q, needs_k, needs_v = ctx.needs_input_grad[:3]
+        needs_any = needs_q or needs_k or needs_v
+
+        delta = None
+        if needs_any:
+            delta = (o.float() * do.float()).sum(dim=-1)
+
+        dq = None
+        if needs_q:
+            if ctx.dq_mode == "packed":
+                dq = selection_per_query_bwd_dq_packed(
+                    q,
+                    k,
+                    v,
+                    do,
+                    lse,
+                    delta,
+                    block_idx,
+                    ctx.pp,
+                    ctx.H,
+                    ctx.W,
+                    ctx.P,
+                    ctx.scale,
+                    ctx.G,
+                )
+            else:
+                dq = selection_per_query_bwd_dq(
+                    q,
+                    k,
+                    v,
+                    do,
+                    lse,
+                    delta,
+                    block_idx,
+                    patch_starts,
+                    ctx.pp,
+                    ctx.H,
+                    ctx.W,
+                    ctx.P,
+                    ctx.scale,
+                    ctx.G,
+                )
+
+        dk = None
+        dv = None
+        if needs_k or needs_v:
+            dk_ref, dv_ref = selection_per_query_bwd_dkv(
+                q,
+                k,
+                v,
+                do,
+                lse,
+                delta,
+                block_idx,
+                patch_starts,
+                ctx.pp,
+                ctx.H,
+                ctx.W,
+                ctx.P,
+                ctx.scale,
+                ctx.G,
+            )
+            if needs_k:
+                dk = dk_ref
+            if needs_v:
+                dv = dv_ref
+
+        return dq, dk, dv, None, None, None, None, None, None, None, None, None
