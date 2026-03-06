@@ -242,13 +242,34 @@ Interpretation:
 2. At `128x128`, the win is not robust; it only appears for the heavier `k=16` case.
 3. The total-attention gain is much smaller than the selection-only gain because compression and window were already cheap.
 
+## Packing Decision Gate
+
+Decision:
+
+- proceed to packed `dQ`
+- do not start packed `dK/dV`
+
+Why:
+
+1. The forward data shows packing is a real locality improvement at `256x256`, so the idea is not a dead end.
+2. The gain is still modest at total-attention level:
+   - `256x256, k=8`: about `1.022x`
+   - `256x256, k=16`: about `1.077x`
+3. `dK/dV` is already not the main bottleneck after the earlier compact redesign.
+4. `dQ` remains one of the main hotspots, so it is the only backward path where packing still has a clear chance to matter.
+5. `128x128` evidence is too mixed to justify a full packed-backward expansion right now.
+
+Meaning:
+
+- Next packing work, if any, should target `dQ` only.
+- If packed `dQ` does not produce a clear long-sequence gain, stop packing work and pivot to FFN / shell.
+
 ## Current Priority Order
 
-1. Packing-first selection path
-2. Full-block breakdown harness
-3. FFN runtime redesign
-4. Attention shell optimization
-5. H100 sparse backend prototype
+1. Packed `dQ` for the selection path
+2. FFN runtime redesign
+3. Attention shell optimization
+4. H100 sparse backend prototype
 
 ## Update Protocol
 
