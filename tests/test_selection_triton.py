@@ -763,6 +763,99 @@ class TestPerQuerySelectionForward:
 
 class TestPerQuerySelectionBackward:
     @pytest.mark.per_query_parity
+    def test_packed_per_query_backward_dq_matches_unpacked_mha(self):
+        """Packed per-query dQ should match unpacked dQ in MHA mode."""
+        from src.networks.txunet import NSA2DAttention
+
+        B, h, d = 1, 4, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        C = h * d
+        n_patches = (H // P) * (W // P)
+
+        torch.manual_seed(6060)
+        attn_unpacked = NSA2DAttention(
+            dim=C,
+            num_heads=h,
+            patch_size=P,
+            top_n=top_n,
+            window_size=2,
+            rope_enabled=False,
+            gqa_group_size=1,
+            selection_forward_mode="unpacked",
+            selection_dq_mode="unpacked",
+        ).to(device=DEVICE, dtype=torch.float32)
+        attn_packed = NSA2DAttention(
+            dim=C,
+            num_heads=h,
+            patch_size=P,
+            top_n=top_n,
+            window_size=2,
+            rope_enabled=False,
+            gqa_group_size=1,
+            selection_forward_mode="unpacked",
+            selection_dq_mode="packed",
+        ).to(device=DEVICE, dtype=torch.float32)
+
+        q = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32, requires_grad=True)
+        k = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        v = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h, T, top_n), device=DEVICE, dtype=torch.int32)
+
+        o_unpacked = attn_unpacked._selection_from_block_idx(q, k, v, block_idx, H, W)
+        o_unpacked.sum().backward()
+        dq_unpacked = q.grad.detach().clone()
+
+        q2 = q.detach().clone().requires_grad_(True)
+        o_packed = attn_packed._selection_from_block_idx(q2, k, v, block_idx, H, W)
+        o_packed.sum().backward()
+        dq_packed = q2.grad.detach().clone()
+
+        torch.testing.assert_close(dq_packed, dq_unpacked, atol=5e-2, rtol=5e-2)
+
+    @pytest.mark.per_query_parity
+    def test_packed_per_query_backward_dq_matches_naive_mha(self):
+        """Packed per-query dQ should match naive autograd dQ in MHA mode."""
+        from src.networks.txunet import NSA2DAttention
+
+        B, h, d = 1, 2, 8
+        H, W, P = 4, 4, 2
+        T = H * W
+        top_n = 2
+        C = h * d
+        n_patches = (H // P) * (W // P)
+        scale = 1.0 / d**0.5
+
+        torch.manual_seed(6161)
+        attn_packed = NSA2DAttention(
+            dim=C,
+            num_heads=h,
+            patch_size=P,
+            top_n=top_n,
+            window_size=2,
+            rope_enabled=False,
+            gqa_group_size=1,
+            selection_forward_mode="unpacked",
+            selection_dq_mode="packed",
+        ).to(device=DEVICE, dtype=torch.float32)
+
+        q = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32, requires_grad=True)
+        k = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        v = torch.randn(B, h, T, d, device=DEVICE, dtype=torch.float32)
+        block_idx = torch.randint(0, n_patches, (B, h, T, top_n), device=DEVICE, dtype=torch.int32)
+
+        o_packed = attn_packed._selection_from_block_idx(q, k, v, block_idx, H, W)
+        o_packed.sum().backward()
+        dq_packed = q.grad.detach().clone()
+
+        q2 = q.detach().clone().requires_grad_(True)
+        patch_starts = _make_patch_starts(H, W, P, DEVICE)
+        o_naive = _naive_selection_attention_per_query(q2, k, v, block_idx, patch_starts, P, W, scale=scale)
+        o_naive.sum().backward()
+        torch.testing.assert_close(dq_packed, q2.grad, atol=5e-2, rtol=5e-2)
+
+    @pytest.mark.per_query_parity
     def test_per_query_backward_dq_matches_naive_mha(self):
         """Per-query Triton dQ should match naive autograd dQ."""
         from src.ops.selection_attention_2d_per_query import SelectionAttn2DPerQuery, make_patch_starts
