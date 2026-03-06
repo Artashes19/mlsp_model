@@ -301,7 +301,8 @@ Environment facts verified on this machine:
 - `nsys` is available at `/usr/local/bin/nsys`
 - `ncu` is available at `/usr/local/cuda/bin/ncu`
 - `triton.profiler` and `triton.profiler.proton` import successfully in the `dev` env
-- `HolisticTraceAnalysis` is not installed yet in the `dev` env and should be installed when we execute the profiling-arsenal plan
+- `HolisticTraceAnalysis` is installed in the `dev` env and `hta` imports successfully
+- HTA installation pulled in a substantial Jupyter stack (`jupyterlab`, `jupyter-server`, `nbconvert`, etc.); this is normal for the package but should be remembered as env churn
 
 Tooling decision:
 
