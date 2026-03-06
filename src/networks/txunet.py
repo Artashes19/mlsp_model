@@ -229,8 +229,8 @@ class NSA2DAttention(nn.Module):
             raise ValueError("importance_chunk_size must be > 0 when provided")
         if selection_forward_mode not in {"unpacked", "packed"}:
             raise ValueError("selection_forward_mode must be 'unpacked' or 'packed'")
-        if selection_dq_mode not in {"unpacked", "packed", "auto"}:
-            raise ValueError("selection_dq_mode must be 'unpacked', 'packed', or 'auto'")
+        if selection_dq_mode not in {"unpacked", "packed", "compact", "auto"}:
+            raise ValueError("selection_dq_mode must be 'unpacked', 'packed', 'compact', or 'auto'")
 
         dim_kv = self.h_kv * self.d  # C_kv = C / G
 

@@ -851,3 +851,79 @@ Decision:
 1. next `dQ` implementation target is a compact reverse-mapped patch-centric kernel
 2. do not spend more time on packing-only `dQ`
 3. do not spend more time on minor `dQ` launch-meta tuning at `256x256`
+
+## Compact dQ Implementation Result
+
+Reference artifacts:
+
+- `artifacts/nsa_diagnostics/compact_dq_vs_unpacked_a100_20260307_015858.json`
+- `artifacts/nsa_diagnostics/compact_dq_selection_qonly_a100_20260307_015949.json`
+
+Verification:
+
+- `pytest tests/test_selection_triton.py tests/test_selection_triton_gqa.py -v`
+- result: `61 passed`
+
+What landed:
+
+1. explicit `selection_dq_mode="compact"`
+2. compact reverse-mapped patch-centric `dQ` kernel
+3. float32 atomic accumulation into `dQ`
+4. `auto` is still conservative and remains `unpacked`
+
+Direct `dQ` helper benchmark on A100:
+
+- `C=384, h=6, G=3, 128x128, top_n=8`
+  - unpacked `5.446 ms`
+  - compact `3.140 ms`
+  - `1.74x`
+- `C=384, h=6, G=3, 256x256, top_n=8`
+  - unpacked `15.743 ms`
+  - compact `8.229 ms`
+  - `1.91x`
+- `C=384, h=6, G=3, 256x256, top_n=16`
+  - unpacked `30.448 ms`
+  - compact `14.929 ms`
+  - `2.04x`
+- `C=512, h=8, G=4, 256x256, top_n=8`
+  - unpacked `15.790 ms`
+  - compact `10.660 ms`
+  - `1.48x`
+- `C=512, h=8, G=4, 256x256, top_n=16`
+  - unpacked `30.563 ms`
+  - compact `19.362 ms`
+  - `1.58x`
+
+Real selection-op `q`-backward benchmark on A100:
+
+- `C=384, h=6, G=3, 256x256, top_n=8`
+  - unpacked `26.321 ms`
+  - compact `18.296 ms`
+  - `1.44x`
+- `C=384, h=6, G=3, 256x256, top_n=16`
+  - unpacked `48.996 ms`
+  - compact `33.371 ms`
+  - `1.47x`
+- `C=512, h=8, G=4, 256x256, top_n=8`
+  - unpacked `26.190 ms`
+  - compact `21.233 ms`
+  - `1.23x`
+- `C=512, h=8, G=4, 256x256, top_n=16`
+  - unpacked `49.355 ms`
+  - compact `38.375 ms`
+  - `1.29x`
+
+Numerical alignment from the bf16 A100 benchmark:
+
+- max abs diff stayed around `6.1e-05` to `1.22e-04`
+
+Interpretation:
+
+1. the structural compact `dQ` rewrite is a real runtime win, not just a parity-clean refactor
+2. the gain survives the real autograd selection path, not only a direct helper microbenchmark
+3. this is the first meaningful `dQ` improvement after the forward warp retune
+
+Current policy:
+
+1. keep `selection_dq_mode="auto"` on unpacked until we decide exact rollout gates
+2. compact `dQ` is now the preferred explicit benchmarking path

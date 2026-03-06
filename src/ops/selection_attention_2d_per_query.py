@@ -744,6 +744,162 @@ def _sel_perq_bwd_dq_packed_kernel(
 
 
 @triton.jit
+def _sel_perq_bwd_dq_compact_kernel(
+    Q,
+    K,
+    V,
+    DO,
+    LSE,
+    DELTA,
+    DQ_ACCUM,
+    QUERY_IDX,
+    CU_COUNTS,
+    PATCH_STARTS,
+    stride_qb,
+    stride_qh,
+    stride_qt,
+    stride_qd,
+    stride_kb,
+    stride_kh,
+    stride_kt,
+    stride_kd,
+    stride_vb,
+    stride_vh,
+    stride_vt,
+    stride_vd,
+    stride_dob,
+    stride_doh,
+    stride_dot,
+    stride_dod,
+    stride_dqb,
+    stride_dqh,
+    stride_dqt,
+    stride_dqd,
+    stride_lb,
+    stride_lh,
+    stride_lt,
+    sm_scale,
+    T: tl.constexpr,
+    D: tl.constexpr,
+    W_spatial: tl.constexpr,
+    P: tl.constexpr,
+    PP: tl.constexpr,
+    N_PATCHES: tl.constexpr,
+    H_KV: tl.constexpr,
+    G: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    BLOCK_KV: tl.constexpr,
+    BLOCK_Q: tl.constexpr,
+    LOG2E: tl.constexpr,
+):
+    """
+    Compact block-centric dQ backward kernel.
+
+    Grid: (B * h_kv * n_patches, G)
+      pid_group: one (batch, kv_head, patch_id) group
+      pid_g: one grouped query head (share-head lane)
+
+    Each program loads one patch K/V table once, then iterates only the
+    queries that selected that patch and atomically accumulates their dQ
+    contributions into a float32 accumulation buffer.
+    """
+    pid_group = tl.program_id(0)
+    pid_g = tl.program_id(1)
+
+    off_bh = pid_group // N_PATCHES
+    patch_id = pid_group % N_PATCHES
+
+    kv_idx = off_bh % H_KV
+    b_idx = off_bh // H_KV
+    if pid_g >= G:
+        return
+
+    act_q_start = tl.load(CU_COUNTS + pid_group)
+    act_q_end = tl.load(CU_COUNTS + pid_group + 1)
+    act_q_len = act_q_end - act_q_start
+    if act_q_len <= 0:
+        return
+
+    q_head_idx = kv_idx * G + pid_g
+
+    offs_d = tl.arange(0, BLOCK_D)
+    mask_d = offs_d < D
+    offs_q = tl.arange(0, BLOCK_Q)
+    offs_local = tl.arange(0, BLOCK_KV)
+    local_row = offs_local // P
+    local_col = offs_local % P
+    mask_pp = offs_local < PP
+
+    kv_base = tl.load(PATCH_STARTS + patch_id)
+    flat_indices = kv_base + local_row * W_spatial + local_col
+    valid = mask_pp & (flat_indices < T)
+
+    k_ptrs = (
+        K
+        + b_idx * stride_kb
+        + kv_idx * stride_kh
+        + flat_indices[:, None] * stride_kt
+        + offs_d[None, :] * stride_kd
+    )
+    b_k = tl.load(k_ptrs, mask=valid[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+    v_ptrs = (
+        V
+        + b_idx * stride_vb
+        + kv_idx * stride_vh
+        + flat_indices[:, None] * stride_vt
+        + offs_d[None, :] * stride_vd
+    )
+    b_v = tl.load(v_ptrs, mask=valid[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+    for i in range(0, act_q_len, BLOCK_Q):
+        q_mask = offs_q < act_q_len - i
+        q_idx = tl.load(QUERY_IDX + act_q_start + i + offs_q, mask=q_mask, other=0).to(tl.int32)
+
+        q_ptrs = (
+            Q
+            + b_idx * stride_qb
+            + q_head_idx * stride_qh
+            + q_idx[:, None] * stride_qt
+            + offs_d[None, :] * stride_qd
+        )
+        b_q = tl.load(q_ptrs, mask=q_mask[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+        b_q_scaled = b_q * (LOG2E * sm_scale)
+
+        do_ptrs = (
+            DO
+            + b_idx * stride_dob
+            + q_head_idx * stride_doh
+            + q_idx[:, None] * stride_dot
+            + offs_d[None, :] * stride_dod
+        )
+        b_do = tl.load(do_ptrs, mask=q_mask[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+
+        lse_ptrs = LSE + b_idx * stride_lb + q_head_idx * stride_lh + q_idx * stride_lt
+        b_lse = tl.load(lse_ptrs, mask=q_mask, other=0.0)
+        delta_ptrs = DELTA + b_idx * stride_lb + q_head_idx * stride_lh + q_idx * stride_lt
+        b_delta = tl.load(delta_ptrs, mask=q_mask, other=0.0)
+
+        b_s = tl.dot(b_q_scaled, tl.trans(b_k))
+        b_s = tl.where(valid[None, :], b_s, float("-inf"))
+        b_p = tl.exp2(b_s - b_lse[:, None] * LOG2E)
+        b_p = tl.where(q_mask[:, None] & valid[None, :], b_p, 0.0)
+
+        b_dp = tl.dot(b_do, tl.trans(b_v))
+        b_ds = b_p * (b_dp - b_delta[:, None])
+        b_dq = tl.dot(b_ds.to(tl.float32), b_k) * sm_scale
+
+        dq_ptrs = (
+            DQ_ACCUM
+            + b_idx * stride_dqb
+            + q_head_idx * stride_dqh
+            + q_idx[:, None] * stride_dqt
+            + offs_d[None, :] * stride_dqd
+        )
+        tl.atomic_add(dq_ptrs, b_dq, mask=q_mask[:, None] & mask_d[None, :])
+
+
+@triton.jit
 def _sel_perq_bwd_dkv_kernel(
     Q,
     K,
@@ -1555,6 +1711,94 @@ def selection_per_query_bwd_dq_packed(
     return dq
 
 
+def selection_per_query_bwd_dq_compact(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    do: torch.Tensor,
+    lse: torch.Tensor,
+    delta: torch.Tensor,
+    block_idx: torch.Tensor,
+    patch_starts: torch.Tensor,
+    pp: int,
+    H: int,
+    W: int,
+    P: int,
+    scale: float,
+    G: int,
+) -> torch.Tensor:
+    """Compute dQ with compact reverse-mapped per-query kernel."""
+    B, h_q, T, d = q.shape
+    h_kv = k.shape[1]
+    n_patches = (H // P) * (W // P)
+
+    query_idx_sorted, cu_counts = _build_active_query_index_per_patch(block_idx, n_patches)
+
+    dq_accum = torch.zeros(B, h_q, T, d, dtype=torch.float32, device=q.device)
+    BLOCK_D = max(16, _next_power_of_2(d))
+    BLOCK_KV = max(16, _next_power_of_2(pp))
+    LOG2E = 1.4426950408889634
+    if T >= 4096:
+        BLOCK_Q = 32
+    else:
+        BLOCK_Q = 16
+    num_warps = _select_num_warps_per_query_dkv(1, BLOCK_KV, BLOCK_D, BLOCK_Q)
+
+    grid = (B * h_kv * n_patches, G)
+    _sel_perq_bwd_dq_compact_kernel[grid](
+        q,
+        k,
+        v,
+        do,
+        lse,
+        delta,
+        dq_accum,
+        query_idx_sorted,
+        cu_counts,
+        patch_starts,
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
+        q.stride(3),
+        k.stride(0),
+        k.stride(1),
+        k.stride(2),
+        k.stride(3),
+        v.stride(0),
+        v.stride(1),
+        v.stride(2),
+        v.stride(3),
+        do.stride(0),
+        do.stride(1),
+        do.stride(2),
+        do.stride(3),
+        dq_accum.stride(0),
+        dq_accum.stride(1),
+        dq_accum.stride(2),
+        dq_accum.stride(3),
+        lse.stride(0),
+        lse.stride(1),
+        lse.stride(2),
+        scale,
+        T=T,
+        D=d,
+        W_spatial=W,
+        P=P,
+        PP=pp,
+        N_PATCHES=n_patches,
+        H_KV=h_kv,
+        G=G,
+        BLOCK_D=BLOCK_D,
+        BLOCK_KV=BLOCK_KV,
+        BLOCK_Q=BLOCK_Q,
+        LOG2E=LOG2E,
+        num_warps=num_warps,
+    )
+    if dq_accum.dtype != q.dtype:
+        return dq_accum.to(q.dtype)
+    return dq_accum
+
+
 def selection_per_query_bwd_dkv(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -1813,7 +2057,7 @@ class SelectionAttn2DPerQueryDQMode(torch.autograd.Function):
 
     Behavior:
       - forward: Triton
-      - dQ: Triton unpacked or packed
+      - dQ: Triton unpacked, packed, or compact
       - dK/dV: Triton
     """
 
@@ -1853,6 +2097,23 @@ class SelectionAttn2DPerQueryDQMode(torch.autograd.Function):
                     lse,
                     delta,
                     block_idx,
+                    ctx.pp,
+                    ctx.H,
+                    ctx.W,
+                    ctx.P,
+                    ctx.scale,
+                    ctx.G,
+                )
+            elif ctx.dq_mode == "compact":
+                dq = selection_per_query_bwd_dq_compact(
+                    q,
+                    k,
+                    v,
+                    do,
+                    lse,
+                    delta,
+                    block_idx,
+                    patch_starts,
                     ctx.pp,
                     ctx.H,
                     ctx.W,
