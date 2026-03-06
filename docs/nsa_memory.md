@@ -307,19 +307,17 @@ Why:
 
 ## Current Priority Order
 
-1. Build a granular A100 profiling baseline for the full NSA layer:
-   - attention shell
-   - attention core branches
-   - FFN
-2. Choose the next optimization target from the measured block share, not intuition.
-3. Keep packed forward as a narrow locality improvement.
-4. Keep `selection_dq_mode="auto"` on unpacked unless new data proves otherwise.
-5. Revisit H100 sparse backend work after the A100 full-layer baseline is in place.
+1. Keep the next optimization target on the selection path or its backend.
+2. Keep packed forward as a narrow locality improvement; do not expand packing work blindly.
+3. Keep `selection_dq_mode="auto"` on unpacked unless new data proves otherwise.
+4. Treat attention-shell work as secondary, because it is bounded and much smaller than selection at `256x256`.
+5. Keep FFN redesign blocked for the current `C=64` regime until either channel count or profiler share says otherwise.
+6. Revisit H100 sparse backend work after the current A100 selection bottleneck is pushed further.
 
 Meaning:
 
 - Next packing work, if any, should target `dQ` only.
-- If packed `dQ` does not produce a clear long-sequence gain, stop packing work and pivot to FFN / shell.
+- If packed `dQ` does not produce a clear long-sequence gain, stop packing work and return to selection-path or backend work.
 
 ## Update Protocol
 
@@ -329,3 +327,113 @@ Every meaningful NSA experiment or implementation should update this file with:
 2. Exact artifact path or test command
 3. What the result means
 4. Whether it changes the priority order
+
+## Granular Layer Profiling Baseline
+
+Reference artifacts:
+
+- `artifacts/nsa_diagnostics/nsa_layer_granular_profile_a100_20260306_182020.json`
+- `artifacts/nsa_diagnostics/nsa_layer_granular_profile_a100_20260306_182020.txt`
+- Harness: `artifacts/nsa_diagnostics/profile_nsa_layer_granular.py`
+
+Setup:
+
+- A100
+- `B=1, C=64, heads=4, G=4, p=8, w=16, bf16`
+- sizes: `128x128`, `256x256`
+- `top_n=8`, `16`
+- `5` warmup iterations before benchmark
+
+Validation:
+
+- manual attention reconstruction vs real `NSA2DAttention.forward`: exact match
+- manual FFN reconstruction vs real `GatedDepthwiseFFN.forward`: exact match
+- profiler wrapper vs real `TransformerBlock.forward`: exact match
+
+Measured block split:
+
+- `128x128, top_n=8`
+  - block forward: `5.95 ms`
+  - block forward+backward: `11.47 ms`
+  - attention forward inside block: `5.56 ms`
+  - FFN forward inside block: `0.35 ms`
+
+- `128x128, top_n=16`
+  - block forward: `7.26 ms`
+  - block forward+backward: `14.67 ms`
+  - attention forward inside block: `7.02 ms`
+  - FFN forward inside block: `0.44 ms`
+
+- `256x256, top_n=8`
+  - block forward: `18.66 ms`
+  - block forward+backward: `30.97 ms`
+  - attention forward inside block: `17.59 ms`
+  - FFN forward inside block: `0.65 ms`
+
+- `256x256, top_n=16`
+  - block forward: `24.71 ms`
+  - block forward+backward: `39.75 ms`
+  - attention forward inside block: `24.07 ms`
+  - FFN forward inside block: `0.66 ms`
+
+Measured attention split:
+
+- `128x128, top_n=8`
+  - selection total: `3.51 ms`
+  - compression: `1.00 ms`
+  - window: `0.18 ms`
+  - shell total: `1.93 ms`
+
+- `128x128, top_n=16`
+  - selection total: `4.41 ms`
+  - compression: `1.11 ms`
+  - window: `0.21 ms`
+  - shell total: `2.25 ms`
+
+- `256x256, top_n=8`
+  - selection total: `14.71 ms`
+  - compression: `1.41 ms`
+  - window: `0.28 ms`
+  - shell total: `2.23 ms`
+
+- `256x256, top_n=16`
+  - selection total: `20.96 ms`
+  - compression: `1.41 ms`
+  - window: `0.28 ms`
+  - shell total: `2.24 ms`
+
+Shell details:
+
+- q/k/v blocks together stay around `0.32-0.38 ms` at `128x128` and `256x256`
+- RoPE stays around `1.10-1.28 ms`
+- gate pool + gate MLP stay around `0.18-0.21 ms`
+- output proj stays around `0.09-0.10 ms`
+
+FFN details:
+
+- FFN is small at `C=64`
+- the two FFN `DConvBlock` branches dominate FFN time:
+  - `128x128`: about `0.31-0.33 ms`
+  - `256x256`: about `0.51 ms`
+- FFN projection is only about `0.07-0.11 ms`
+
+Interpretation:
+
+1. For the current `C=64, G=4` block, FFN is not the next high-impact optimization target.
+2. The attention shell is not free, but it is bounded and much smaller than selection at `256x256`.
+3. Selection remains the dominant runtime problem:
+   - about `63%` of attention forward at `128x128, top_n=8`
+   - about `84-87%` of attention forward at `256x256`
+4. Compression and window are already small enough that they should not be prioritized.
+5. For the current practical regime, the next predictable win is still in the selection path or its backend, not FFN.
+
+Priority update:
+
+1. Keep FFN redesign blocked for this `C=64` regime.
+2. Keep shell optimization as secondary work, not the next main target.
+3. Return to selection-path work:
+   - better selection forward/dQ implementation
+   - or backend/layout work that reduces selection cost structurally
+4. Revisit FFN after either:
+   - higher-channel regimes show larger FFN share
+   - or selection stops dominating
