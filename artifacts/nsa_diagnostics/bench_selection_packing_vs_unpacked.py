@@ -145,7 +145,7 @@ def _gather_packed_patch_tables(
 
 def _run_case(case: Case, device: torch.device) -> dict[str, object]:
     dtype = _dtype_from_name(case.dtype)
-    attn = NSA2DAttention(
+    attn_unpacked = NSA2DAttention(
         dim=case.channels,
         num_heads=case.num_heads,
         patch_size=case.patch_size,
@@ -153,7 +153,19 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
         window_size=case.window_size,
         rope_enabled=False,
         gqa_group_size=case.gqa_group_size,
+        selection_forward_mode="unpacked",
     ).to(device=device, dtype=dtype).eval()
+    attn_packed = NSA2DAttention(
+        dim=case.channels,
+        num_heads=case.num_heads,
+        patch_size=case.patch_size,
+        top_n=case.top_n,
+        window_size=case.window_size,
+        rope_enabled=False,
+        gqa_group_size=case.gqa_group_size,
+        selection_forward_mode="packed",
+    ).to(device=device, dtype=dtype).eval()
+    attn_packed.load_state_dict(attn_unpacked.state_dict())
 
     tensors, d = _make_case_tensors(case, device)
     q = tensors["q"]
@@ -166,8 +178,8 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
     T = H * W
 
     with torch.no_grad():
-        _, k_cmp = attn._compression_branch(q, k, v, H, W)
-        block_idx = attn._compute_selection_block_idx(q, k_cmp)
+        _, k_cmp = attn_unpacked._compression_branch(q, k, v, H, W)
+        block_idx = attn_unpacked._compute_selection_block_idx(q, k_cmp)
         unique_patch_ids, cu_unique_counts, _ = _build_packed_patch_metadata(block_idx)
 
     total_slots = B * h_kv * T * case.top_n
@@ -178,29 +190,46 @@ def _run_case(case: Case, device: torch.device) -> dict[str, object]:
         _ = _build_packed_patch_metadata(block_idx)
 
     def packed_kv_gather():
-        _ = _gather_packed_patch_tables(attn, k, v, unique_patch_ids, cu_unique_counts, H, W)
+        _ = _gather_packed_patch_tables(attn_unpacked, k, v, unique_patch_ids, cu_unique_counts, H, W)
 
     def unpacked_selection_forward():
-        _ = attn._selection_from_block_idx(q, k, v, block_idx, H, W)
+        with torch.no_grad():
+            _ = attn_unpacked._selection_from_block_idx(q, k, v, block_idx, H, W)
 
-    def attention_total_baseline():
-        o_cmp, k_cmp_local = attn._compression_branch(q, k, v, H, W)
-        o_slc = attn._selection_branch(q, k, v, k_cmp_local, H, W)
-        o_win = attn._window_branch(q, k, v, H, W)
-        _ = o_cmp + o_slc + o_win
+    def packed_selection_forward():
+        with torch.no_grad():
+            _ = attn_packed._selection_from_block_idx(q, k, v, block_idx, H, W)
+
+    def unpacked_attention_total_forward():
+        with torch.no_grad():
+            o_cmp, k_cmp_local = attn_unpacked._compression_branch(q, k, v, H, W)
+            o_slc = attn_unpacked._selection_branch(q, k, v, k_cmp_local, H, W)
+            o_win = attn_unpacked._window_branch(q, k, v, H, W)
+            _ = o_cmp + o_slc + o_win
+
+    def packed_attention_total_forward():
+        with torch.no_grad():
+            o_cmp, k_cmp_local = attn_packed._compression_branch(q, k, v, H, W)
+            o_slc = attn_packed._selection_branch(q, k, v, k_cmp_local, H, W)
+            o_win = attn_packed._window_branch(q, k, v, H, W)
+            _ = o_cmp + o_slc + o_win
 
     results = {
         "packing_metadata_build": _timed_cuda(packing_metadata_build, warmup=WARMUP, iters=ITERS),
         "packed_kv_gather": _timed_cuda(packed_kv_gather, warmup=WARMUP, iters=ITERS),
         "unpacked_selection_forward": _timed_cuda(unpacked_selection_forward, warmup=WARMUP, iters=ITERS),
-        "attention_total_baseline": _timed_cuda(attention_total_baseline, warmup=WARMUP, iters=ITERS),
+        "packed_selection_forward": _timed_cuda(packed_selection_forward, warmup=WARMUP, iters=ITERS),
+        "unpacked_attention_total_forward": _timed_cuda(unpacked_attention_total_forward, warmup=WARMUP, iters=ITERS),
+        "packed_attention_total_forward": _timed_cuda(packed_attention_total_forward, warmup=WARMUP, iters=ITERS),
     }
 
     for key, fn in {
         "packing_metadata_build": packing_metadata_build,
         "packed_kv_gather": packed_kv_gather,
         "unpacked_selection_forward": unpacked_selection_forward,
-        "attention_total_baseline": attention_total_baseline,
+        "packed_selection_forward": packed_selection_forward,
+        "unpacked_attention_total_forward": unpacked_attention_total_forward,
+        "packed_attention_total_forward": packed_attention_total_forward,
     }.items():
         results[key]["peak_alloc_mb"] = _peak_alloc_mb(fn)
 

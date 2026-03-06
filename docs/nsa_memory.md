@@ -207,6 +207,41 @@ Interpretation:
 2. Reuse of selected patches across queries is very high, so per-head packing has a strong structural basis.
 3. This is promising for `256x256`, somewhat promising for `128x128`, and less compelling for `64x64`.
 
+## Packed Forward Benchmark Snapshot
+
+Reference artifact:
+
+- `artifacts/nsa_diagnostics/selection_packing_vs_unpacked_a100_20260306_133937.json`
+
+What changed:
+
+- Added a real packed forward path behind `selection_forward_mode="packed"`.
+- Benchmarked packed vs unpacked forward on the same A100 shapes as Task 3.
+
+Results:
+
+- `128x128`
+  - `k=8`: packed selection is essentially tied, but packed total attention is slower
+    - selection: `2.390 ms` packed vs `2.386 ms` unpacked
+    - total: `4.016 ms` packed vs `3.651 ms` unpacked
+  - `k=16`: packed wins modestly
+    - selection: `3.203 ms` packed vs `3.419 ms` unpacked
+    - total: `4.505 ms` packed vs `4.753 ms` unpacked
+
+- `256x256`
+  - `k=8`: packed wins modestly
+    - selection: `6.243 ms` packed vs `6.833 ms` unpacked
+    - total: `14.859 ms` packed vs `15.191 ms` unpacked
+  - `k=16`: packed wins clearly but not dramatically
+    - selection: `11.226 ms` packed vs `13.053 ms` unpacked
+    - total: `19.852 ms` packed vs `21.389 ms` unpacked
+
+Interpretation:
+
+1. Packing gives a real forward win at `256x256`, stronger when the selected-token budget is larger.
+2. At `128x128`, the win is not robust; it only appears for the heavier `k=16` case.
+3. The total-attention gain is much smaller than the selection-only gain because compression and window were already cheap.
+
 ## Current Priority Order
 
 1. Packing-first selection path
