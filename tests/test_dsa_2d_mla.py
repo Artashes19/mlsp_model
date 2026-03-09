@@ -1,5 +1,26 @@
+import pytest
 
-def test_dsa_test_scaffold_exists():
-    from tests.helpers import dsa_reference
+from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 
-    assert hasattr(dsa_reference, "__file__")
+
+def test_mla_config_rejects_non_gqa_shape():
+    with pytest.raises(ValueError):
+        DSA2DMLAConfig(dim=512, n_heads=6, n_kv_heads=4)
+
+
+def test_mla_projection_splits_have_expected_sizes():
+    cfg = DSA2DMLAConfig(
+        dim=1536,
+        n_heads=16,
+        n_kv_heads=4,
+        q_lora_rank=512,
+        kv_lora_rank=256,
+        qk_nope_head_dim=128,
+        qk_rope_head_dim=64,
+        v_head_dim=128,
+        index_n_heads=4,
+        index_head_dim=128,
+        index_topk=64,
+    )
+    mod = DSA2DMLAAttention(cfg)
+    assert mod.qk_head_dim == 192
