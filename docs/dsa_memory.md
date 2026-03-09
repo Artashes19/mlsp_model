@@ -270,6 +270,35 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `21 passed`
 
+### 2026-03-10: Sparse gather and topk=T equivalence gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `gather_sparse_mla_tokens()` in [src/ops/dsa_sparse_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/ops/dsa_sparse_mla.py)
+2. `gather_tokens_reference()` in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py)
+3. `DSA2DMLAAttention.forward_sparse_with_forced_topk(..., topk_equals_t=True)` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+4. sparse gather and `topk=T` equivalence tests in [tests/test_dsa_2d_sparse_attention.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_sparse_attention.py)
+
+Locked behavior:
+
+1. sparse token gather currently expects:
+   - `tokens[B, heads, T, D]`
+   - `idx[B, Q, K]`
+   - output `[B, heads, Q, K, D]`
+2. the only sparse-forward path implemented at this stage is the correctness gate where every query selects all `T` tokens in row-major order
+3. in that forced regime, sparse MLA output must equal `forward_dense_reference()` within test tolerance
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_sparse_attention.py -v`
+   - result: `3 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `23 passed`
+
 ## Update Policy
 
 After every meaningful DSA change, update this file with:

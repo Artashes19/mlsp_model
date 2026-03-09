@@ -222,3 +222,20 @@ def compare_dense_mla_backward(mod, x: torch.Tensor) -> None:
     assert ref_params.keys() == out_params.keys()
     for name in ref_params:
         torch.testing.assert_close(out_params[name].grad, ref_params[name].grad)
+
+
+def gather_tokens_reference(tokens: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+    if tokens.ndim != 4:
+        raise ValueError(f"Expected tokens as [B, heads, T, D], got shape={tuple(tokens.shape)}")
+    if idx.ndim != 3:
+        raise ValueError(f"Expected idx as [B, Q, K], got shape={tuple(idx.shape)}")
+
+    batch, heads, _, dim = tokens.shape
+    _, query_tokens, topk = idx.shape
+    gathered = torch.empty(batch, heads, query_tokens, topk, dim, dtype=tokens.dtype, device=tokens.device)
+    for b in range(batch):
+        for h in range(heads):
+            for q in range(query_tokens):
+                for k_idx in range(topk):
+                    gathered[b, h, q, k_idx] = tokens[b, h, idx[b, q, k_idx]]
+    return gathered
