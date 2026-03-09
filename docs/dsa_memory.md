@@ -172,6 +172,42 @@ Strict TDD is mandatory.
 4. implement the correctness-first indexer path
 5. unlock sparse MLA only after dense-equivalence tests exist
 
+## Implemented Gates
+
+### 2026-03-10: Dense MLA reference gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `DSA2DMLAAttention.forward_dense_reference(x)` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+2. dense MLA reference helpers in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py)
+3. forward and backward parity tests in [tests/test_dsa_2d_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_mla.py)
+
+Locked behavior:
+
+1. dense MLA path uses current DeepSeek-style split contracts:
+   - `wq_a -> q_norm -> wq_b`
+   - `wkv_a -> [latent_kv | k_pe]`
+   - `kv_norm -> wkv_b -> [k_nope | v]`
+2. MLA RoPE is applied only to the `q_pe` / `k_pe` slices with the existing interleaved 2D helper
+3. `k_pe` is shared across KV heads in the current MLA reference path and then broadcast to `n_kv_heads`
+4. dense attention is fully non-causal and expands KV heads to query heads through `G = n_heads / n_kv_heads`
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_mla.py -k "dense_mla" -v`
+   - result: `2 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `16 passed`
+
+Notes:
+
+1. `forward()` remains intentionally unimplemented; only `forward_dense_reference()` is live at this gate
+2. PyTorch emitted a CUDA initialization warning during the CPU-side backward test run, but all assertions passed
+
 ## Update Policy
 
 After every meaningful DSA change, update this file with:

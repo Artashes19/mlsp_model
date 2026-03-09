@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
 from torch import nn
+
+from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,64 @@ class DSA2DMLAAttention(nn.Module):
         self.wkv_b = nn.Linear(self.kv_lora_rank, self.kv_proj_out_dim, bias=False)
 
         self.proj = nn.Linear(self.attn_out_dim, self.dim, bias=False)
+        self.softmax_scale = self.qk_head_dim ** -0.5
+
+    def _flatten_tokens(self, x: torch.Tensor) -> tuple[torch.Tensor, int, int]:
+        if x.ndim != 4:
+            raise ValueError(f"Expected [B, C, H, W] input, got shape={tuple(x.shape)}")
+        batch, channels, height, width = x.shape
+        if channels != self.dim:
+            raise ValueError(f"Expected channel dim {self.dim}, got C={channels}")
+        tokens = x.flatten(start_dim=2).transpose(1, 2)
+        return tokens, height, width
+
+    def _dense_mla_qkv(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
+        tokens, height, width = self._flatten_tokens(x)
+        batch, seq_len, _ = tokens.shape
+
+        q_latent = self.q_norm(self.wq_a(tokens))
+        q = self.wq_b(q_latent).view(batch, seq_len, self.n_heads, self.qk_head_dim).permute(0, 2, 1, 3)
+        q_nope = q[..., :self.qk_nope_head_dim]
+        q_pe = apply_partial_rope_2d_interleaved(
+            q[..., self.qk_nope_head_dim:],
+            H=height,
+            W=width,
+            rope_dim=self.qk_rope_head_dim,
+        )
+        q = torch.cat([q_nope, q_pe], dim=-1)
+
+        kv_latent_and_pe = self.wkv_a(tokens)
+        kv_latent = self.kv_norm(kv_latent_and_pe[..., :self.kv_lora_rank])
+        k_pe_shared = kv_latent_and_pe[..., self.kv_lora_rank:].view(batch, 1, seq_len, self.qk_rope_head_dim)
+        k_pe_shared = apply_partial_rope_2d_interleaved(
+            k_pe_shared,
+            H=height,
+            W=width,
+            rope_dim=self.qk_rope_head_dim,
+        )
+
+        kv = self.wkv_b(kv_latent).view(
+            batch,
+            seq_len,
+            self.n_kv_heads,
+            self.qk_nope_head_dim + self.v_head_dim,
+        ).permute(0, 2, 1, 3)
+        k_nope = kv[..., :self.qk_nope_head_dim]
+        v = kv[..., self.qk_nope_head_dim:]
+        k = torch.cat([k_nope, k_pe_shared.expand(-1, self.n_kv_heads, -1, -1)], dim=-1)
+        return q, k, v, height, width
+
+    def forward_dense_reference(self, x: torch.Tensor) -> torch.Tensor:
+        q, k, v, height, width = self._dense_mla_qkv(x)
+        k = k.repeat_interleave(self.gqa_group_size, dim=1)
+        v = v.repeat_interleave(self.gqa_group_size, dim=1)
+
+        attn_scores = torch.matmul(q * self.softmax_scale, k.transpose(-1, -2))
+        attn = torch.softmax(attn_scores, dim=-1)
+        out = torch.matmul(attn, v)
+        out = out.permute(0, 2, 1, 3).reshape(x.shape[0], height * width, self.attn_out_dim)
+        out = self.proj(out)
+        return out.transpose(1, 2).reshape(x.shape[0], self.dim, height, width)
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError("Dense MLA math is intentionally deferred to later tasks.")

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import copy
 import math
 
 import torch
+
+from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
 
 ROPE_BASE = 10000.0
 
@@ -142,3 +145,80 @@ def naive_partial_rope_2d_interleaved(
         base=base,
         rotate_half=_rotate_interleaved,
     )
+
+
+def dense_mla_reference(mod, x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 4:
+        raise ValueError(f"Expected [B, C, H, W] input, got shape={tuple(x.shape)}")
+
+    batch, channels, height, width = x.shape
+    if channels != mod.dim:
+        raise ValueError(f"Expected channel dim {mod.dim}, got C={channels}")
+
+    seq_len = height * width
+    tokens = x.flatten(start_dim=2).transpose(1, 2)
+
+    q_latent = mod.q_norm(mod.wq_a(tokens))
+    q = mod.wq_b(q_latent).view(batch, seq_len, mod.n_heads, mod.qk_head_dim).permute(0, 2, 1, 3)
+    q_nope = q[..., :mod.qk_nope_head_dim]
+    q_pe = apply_partial_rope_2d_interleaved(
+        q[..., mod.qk_nope_head_dim:],
+        H=height,
+        W=width,
+        rope_dim=mod.qk_rope_head_dim,
+    )
+    q = torch.cat([q_nope, q_pe], dim=-1)
+
+    kv_latent_and_pe = mod.wkv_a(tokens)
+    kv_latent = mod.kv_norm(kv_latent_and_pe[..., :mod.kv_lora_rank])
+    k_pe_shared = kv_latent_and_pe[..., mod.kv_lora_rank:].view(batch, 1, seq_len, mod.qk_rope_head_dim)
+    k_pe_shared = apply_partial_rope_2d_interleaved(
+        k_pe_shared,
+        H=height,
+        W=width,
+        rope_dim=mod.qk_rope_head_dim,
+    )
+
+    kv = mod.wkv_b(kv_latent).view(
+        batch,
+        seq_len,
+        mod.n_kv_heads,
+        mod.qk_nope_head_dim + mod.v_head_dim,
+    ).permute(0, 2, 1, 3)
+    k_nope = kv[..., :mod.qk_nope_head_dim]
+    v = kv[..., mod.qk_nope_head_dim:]
+    k = torch.cat([k_nope, k_pe_shared.expand(-1, mod.n_kv_heads, -1, -1)], dim=-1)
+    k = k.repeat_interleave(mod.gqa_group_size, dim=1)
+    v = v.repeat_interleave(mod.gqa_group_size, dim=1)
+
+    attn_scores = torch.matmul(q * mod.softmax_scale, k.transpose(-1, -2))
+    attn = torch.softmax(attn_scores, dim=-1)
+    out = torch.matmul(attn, v)
+    out = out.permute(0, 2, 1, 3).reshape(batch, seq_len, mod.attn_out_dim)
+    out = mod.proj(out)
+    return out.transpose(1, 2).reshape(batch, mod.dim, height, width)
+
+
+def compare_dense_mla_backward(mod, x: torch.Tensor) -> None:
+    if not x.requires_grad:
+        raise ValueError("Expected x.requires_grad=True for backward comparison")
+
+    mod_ref = copy.deepcopy(mod).float()
+    mod_out = copy.deepcopy(mod).float()
+    x_ref = x.detach().clone().requires_grad_(True)
+    x_out = x.detach().clone().requires_grad_(True)
+    grad_out = torch.randn_like(x_ref)
+
+    ref = dense_mla_reference(mod_ref, x_ref)
+    out = mod_out.forward_dense_reference(x_out)
+    ref.backward(grad_out)
+    out.backward(grad_out)
+
+    torch.testing.assert_close(out, ref)
+    torch.testing.assert_close(x_out.grad, x_ref.grad)
+
+    ref_params = dict(mod_ref.named_parameters())
+    out_params = dict(mod_out.named_parameters())
+    assert ref_params.keys() == out_params.keys()
+    for name in ref_params:
+        torch.testing.assert_close(out_params[name].grad, ref_params[name].grad)
