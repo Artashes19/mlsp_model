@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import torch
 
+FP8_DTYPE = torch.float8_e4m3fn
+FP8_MAX = torch.finfo(FP8_DTYPE).max
+
 
 def _validate_power_of_two_last_dim(x: torch.Tensor) -> None:
     if x.shape[-1] <= 0 or x.shape[-1] & (x.shape[-1] - 1):
@@ -39,3 +42,15 @@ def weighted_relu_index_score(q: torch.Tensor, k: torch.Tensor, w: torch.Tensor)
     logits = torch.einsum("bjtd,bjsd->bjts", q.to(dtype=torch.float32), k.to(dtype=torch.float32))
     scores = torch.relu(logits)
     return torch.einsum("bjts,btj->bts", scores, w.to(dtype=torch.float32)).to(dtype=q.dtype)
+
+
+def act_quant_reference_safe(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    scale = x.to(dtype=torch.float32).abs().amax(dim=-1, keepdim=True).clamp_min(1e-12) / FP8_MAX
+    quantized = (x.to(dtype=torch.float32) / scale).clamp(min=-FP8_MAX, max=FP8_MAX).to(FP8_DTYPE)
+    return quantized, scale
+
+
+def stable_topk(scores: torch.Tensor, k: int) -> torch.Tensor:
+    if k <= 0 or k > scores.shape[-1]:
+        raise ValueError(f"Expected 0 < k <= {scores.shape[-1]}, got k={k}")
+    return torch.argsort(scores, dim=-1, descending=True, stable=True)[..., :k]

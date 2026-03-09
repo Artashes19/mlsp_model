@@ -238,6 +238,38 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `18 passed`
 
+### 2026-03-10: Correctness-first FP8 indexer gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `act_quant_reference_safe()` in [src/ops/dsa_indexer.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/ops/dsa_indexer.py)
+2. `stable_topk()` in [src/ops/dsa_indexer.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/ops/dsa_indexer.py)
+3. `DSA2DIndexer` skeleton in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+4. FP8 quant reference helper in [tests/helpers/fp8_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/fp8_reference.py)
+5. FP8/top-k/indexer shape tests in [tests/test_dsa_2d_indexer.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_indexer.py)
+
+Locked behavior:
+
+1. correctness-first FP8 quant path uses real `torch.float8_e4m3fn`
+2. scales are computed per last-dimension vector and kept as explicit float32 tensors
+3. `stable_topk()` is deterministic for ties via stable descending sort and currently prefers lower indices first
+4. `DSA2DIndexer.forward(q, k, w)` currently:
+   - quantizes `q` and `k`
+   - dequantizes them via explicit scales
+   - computes weighted-ReLU logits
+   - returns `(logits, topk_indices)`
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_indexer.py -v`
+   - result: `7 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `21 passed`
+
 ## Update Policy
 
 After every meaningful DSA change, update this file with:

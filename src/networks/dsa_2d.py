@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
+from src.ops.dsa_indexer import act_quant_reference_safe, stable_topk, weighted_relu_index_score
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
 
 
@@ -54,6 +55,25 @@ class DSA2DMLAConfig:
             raise ValueError("index rope-active dim must be divisible by 4 for 2D partial RoPE")
 
 
+class DSA2DIndexer(nn.Module):
+    def __init__(self, cfg: DSA2DMLAConfig) -> None:
+        super().__init__()
+        self.index_n_heads = cfg.index_n_heads
+        self.index_head_dim = cfg.index_head_dim
+        self.index_topk = cfg.index_topk
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        q_q, q_scale = act_quant_reference_safe(q)
+        k_q, k_scale = act_quant_reference_safe(k)
+        logits = weighted_relu_index_score(
+            q_q.to(dtype=torch.float32) * q_scale,
+            k_q.to(dtype=torch.float32) * k_scale,
+            w,
+        )
+        idx = stable_topk(logits, k=self.index_topk)
+        return logits, idx
+
+
 class DSA2DMLAAttention(nn.Module):
     def __init__(self, cfg: DSA2DMLAConfig) -> None:
         super().__init__()
@@ -76,6 +96,7 @@ class DSA2DMLAAttention(nn.Module):
         self.index_rope_head_dim = self.index_head_dim // 2
         self.index_nope_head_dim = self.index_head_dim - self.index_rope_head_dim
         self.index_topk = cfg.index_topk
+        self.indexer = DSA2DIndexer(cfg)
 
         self.q_proj_out_dim = self.n_heads * self.qk_head_dim
         self.kv_a_out_dim = self.kv_lora_rank + self.qk_rope_head_dim
