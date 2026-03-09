@@ -23,7 +23,7 @@ def apply_partial_rope_2d_non_interleaved(
 ) -> torch.Tensor:
     """Placeholder until the real non-interleaved 2D RoPE math lands."""
     _validate_partial_rope_input(x, H=H, W=W, rope_dim=rope_dim)
-    return x.clone()
+    return x
 
 
 def apply_partial_rope_2d_interleaved(
@@ -35,7 +35,7 @@ def apply_partial_rope_2d_interleaved(
 ) -> torch.Tensor:
     """Placeholder until the real interleaved 2D RoPE math lands."""
     _validate_partial_rope_input(x, H=H, W=W, rope_dim=rope_dim)
-    return x.clone()
+    return x
 
 
 def maybe_apply_rope_to_v(v: torch.Tensor) -> torch.Tensor:

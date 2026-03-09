@@ -6,13 +6,25 @@ import torch
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.ops.dsa_rope import apply_partial_rope_2d_non_interleaved, maybe_apply_rope_to_v
+from src.ops.dsa_rope import (
+    apply_partial_rope_2d_interleaved,
+    apply_partial_rope_2d_non_interleaved,
+    maybe_apply_rope_to_v,
+)
 
 
 def test_partial_rope_leaves_nope_slice_unchanged():
     q = torch.randn(1, 2, 4, 128)
     q_out = apply_partial_rope_2d_non_interleaved(q, H=2, W=2, rope_dim=64)
+    assert q_out is q
     assert torch.equal(q[..., :64], q_out[..., :64])
+
+
+def test_partial_rope_interleaved_smoke_noop():
+    q = torch.randn(1, 2, 4, 128)
+    q_out = apply_partial_rope_2d_interleaved(q, H=2, W=2, rope_dim=64)
+    assert q_out is q
+    assert torch.equal(q, q_out)
 
 
 def test_partial_rope_does_not_touch_v():
