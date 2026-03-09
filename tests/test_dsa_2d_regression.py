@@ -1,5 +1,7 @@
 
 import torch
+import runpy
+from pathlib import Path
 
 from src.networks.dsa_2d import DSA2DMLAConfig
 from tests.helpers import dsa_reference
@@ -28,3 +30,11 @@ def test_sparse_mla_handles_repeated_and_unsorted_indices():
     idx = torch.tensor([[[3, 1, 3, 0]]], dtype=torch.int64)
 
     dsa_reference.run_sparse_index_regression_case(cfg, idx)
+
+
+def test_dsa_benchmark_harness_smoke(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "artifacts" / "dsa_diagnostics" / "bench_dsa_2d_vs_dense_mla.py"
+    namespace = runpy.run_path(str(script))
+    result = namespace["run_benchmark_smoke"](output_dir=tmp_path)
+
+    assert "cases" in result

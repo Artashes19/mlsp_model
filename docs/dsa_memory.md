@@ -413,6 +413,41 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `32 passed`
 
+### 2026-03-10: Diagnostics harness gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. benchmark smoke harness in [bench_dsa_2d_vs_dense_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/bench_dsa_2d_vs_dense_mla.py)
+2. profile smoke harness in [profile_dsa_2d_module.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/profile_dsa_2d_module.py)
+3. benchmark smoke regression test in [tests/test_dsa_2d_regression.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_regression.py)
+
+Artifacts:
+
+1. benchmark smoke JSON:
+   - [dsa_benchmark_smoke.json](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_benchmark_smoke.json)
+2. profile smoke summary:
+   - [dsa_profile_smoke.txt](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_profile_smoke.txt)
+
+Smoke numbers:
+
+1. `smoke_4x4_topk_equals_t`
+   - dense `3.77 ms`
+   - sparse `3.71 ms`
+   - integrated `3.16 ms`
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_regression.py -k "benchmark_harness_smoke" -v`
+   - result: `1 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python artifacts/dsa_diagnostics/bench_dsa_2d_vs_dense_mla.py --smoke --output-dir artifacts/dsa_diagnostics`
+   - result: JSON artifact written
+3. `/auto/home/artashes/miniconda3/envs/dev/bin/python artifacts/dsa_diagnostics/profile_dsa_2d_module.py --output-dir artifacts/dsa_diagnostics`
+   - result: profile summary artifact written
+
 ## Update Policy
 
 After every meaningful DSA change, update this file with:
