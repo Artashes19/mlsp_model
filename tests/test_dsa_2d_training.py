@@ -2,6 +2,7 @@
 import torch
 
 from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+from tests.helpers import dsa_reference
 
 
 def test_dsa_test_scaffold_exists():
@@ -52,3 +53,16 @@ def test_indexer_alignment_kl_loss_is_scalar_and_finite():
 
     assert loss.ndim == 0
     assert torch.isfinite(loss)
+
+
+def test_dense_warmup_reduces_kl_on_tiny_problem():
+    history = dsa_reference.run_tiny_indexer_warmup_steps(num_steps=5)
+
+    assert history[-1] < history[0]
+
+
+def test_warmup_updates_indexer_but_not_frozen_main_model():
+    grads = dsa_reference.run_warmup_and_collect_grad_flags()
+
+    assert grads["indexer"] is True
+    assert grads["main_model"] is False

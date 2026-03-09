@@ -7,7 +7,7 @@ import math
 import torch
 
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
-from src.networks.dsa_2d import DSA2DMLAAttention
+from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 
 ROPE_BASE = 10000.0
 
@@ -293,3 +293,72 @@ def run_sparse_index_regression_case(cfg, idx: torch.Tensor) -> None:
     ref = sparse_mla_reference_from_indices(mod, x, idx)
     out = mod.forward_sparse_from_indices(x, idx)
     torch.testing.assert_close(out, ref)
+
+
+def _make_training_cfg():
+    return DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=8,
+    )
+
+
+def _split_indexer_and_main_params(mod):
+    indexer_params = []
+    main_params = []
+    for name, param in mod.named_parameters():
+        if name.startswith("index_"):
+            indexer_params.append(param)
+        else:
+            main_params.append(param)
+    return indexer_params, main_params
+
+
+def run_tiny_indexer_warmup_steps(num_steps: int) -> list[float]:
+    torch.manual_seed(0)
+    cfg = _make_training_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 4, 4, dtype=torch.float32)
+    teacher = mod.build_dense_teacher_distribution(x)
+    indexer_params, main_params = _split_indexer_and_main_params(mod)
+    for param in main_params:
+        param.requires_grad_(False)
+
+    opt = torch.optim.Adam(indexer_params, lr=1e-2)
+    history = []
+    for _ in range(num_steps):
+        opt.zero_grad(set_to_none=True)
+        logits, _ = mod.build_indexer_logits(x, detach_inputs=True)
+        loss = mod.indexer_alignment_kl_loss(logits, teacher)
+        loss.backward()
+        opt.step()
+        history.append(loss.item())
+    return history
+
+
+def run_warmup_and_collect_grad_flags() -> dict[str, bool]:
+    torch.manual_seed(0)
+    cfg = _make_training_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 4, 4, dtype=torch.float32, requires_grad=True)
+    teacher = mod.build_dense_teacher_distribution(x)
+    indexer_params, main_params = _split_indexer_and_main_params(mod)
+    for param in main_params:
+        param.requires_grad_(False)
+
+    mod.zero_grad(set_to_none=True)
+    logits, _ = mod.build_indexer_logits(x, detach_inputs=True)
+    loss = mod.indexer_alignment_kl_loss(logits, teacher)
+    loss.backward()
+
+    indexer_has_grad = any(param.grad is not None and param.grad.abs().sum().item() > 0 for param in indexer_params)
+    main_has_grad = any(param.grad is not None and param.grad.abs().sum().item() > 0 for param in main_params)
+    return {"indexer": indexer_has_grad, "main_model": main_has_grad}

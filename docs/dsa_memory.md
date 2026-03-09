@@ -355,6 +355,36 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `28 passed`
 
+### 2026-03-10: Warm-up behavior gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. trainable indexer projections in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py):
+   - `index_q_proj`
+   - `index_k_proj`
+   - `index_w_proj`
+2. `build_indexer_logits(..., detach_inputs=...)` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+3. tiny warm-up helpers in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py)
+4. warm-up behavior tests in [tests/test_dsa_2d_training.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_training.py)
+
+Locked behavior:
+
+1. the first warm-up loop now optimizes trainable indexer projection weights, not the main MLA path
+2. warm-up builds dense teacher probabilities from the dense MLA reference path
+3. indexer logits are built from detached flattened tokens, so gradients reach indexer projection weights but not the input image tensor or frozen main-model parameters
+4. `DSA2DIndexer.forward()` now caps runtime `topk` to the available sequence length for tiny regression/training cases
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_training.py -v`
+   - result: `6 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `30 passed`
+
 ## Update Policy
 
 After every meaningful DSA change, update this file with:

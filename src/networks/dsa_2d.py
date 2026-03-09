@@ -72,7 +72,8 @@ class DSA2DIndexer(nn.Module):
             k_q.to(dtype=torch.float32) * k_scale,
             w,
         )
-        idx = stable_topk(logits, k=self.index_topk)
+        topk = min(self.index_topk, logits.shape[-1])
+        idx = stable_topk(logits, k=topk)
         return logits, idx
 
 
@@ -99,6 +100,9 @@ class DSA2DMLAAttention(nn.Module):
         self.index_nope_head_dim = self.index_head_dim - self.index_rope_head_dim
         self.index_topk = cfg.index_topk
         self.indexer = DSA2DIndexer(cfg)
+        self.index_q_proj = nn.Linear(self.dim, self.index_n_heads * self.index_head_dim, bias=False)
+        self.index_k_proj = nn.Linear(self.dim, self.index_n_heads * self.index_head_dim, bias=False)
+        self.index_w_proj = nn.Linear(self.dim, self.index_n_heads, bias=False)
 
         self.q_proj_out_dim = self.n_heads * self.qk_head_dim
         self.kv_a_out_dim = self.kv_lora_rank + self.qk_rope_head_dim
@@ -208,11 +212,22 @@ class DSA2DMLAAttention(nn.Module):
             teacher = attn.sum(dim=1)
             return teacher / teacher.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
+    def build_indexer_logits(self, x: torch.Tensor, *, detach_inputs: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+        tokens, _, _ = self._flatten_tokens(x)
+        if detach_inputs:
+            tokens = tokens.detach()
+        batch, seq_len, _ = tokens.shape
+        q = self.index_q_proj(tokens).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
+        k = self.index_k_proj(tokens).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
+        w = self.index_w_proj(tokens)
+        return self.indexer(q, k, w)
+
     def prepare_warmup_indexer_inputs(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         tokens, _, _ = self._flatten_tokens(x)
         return {"tokens": tokens.detach()}
 
     def assert_warmup_detach_contract(self) -> None:
+        self.zero_grad(set_to_none=True)
         x = torch.randn(
             1,
             self.dim,
@@ -222,10 +237,15 @@ class DSA2DMLAAttention(nn.Module):
             device=self.proj.weight.device,
             requires_grad=True,
         )
-        warmup_inputs = self.prepare_warmup_indexer_inputs(x)
-        for value in warmup_inputs.values():
-            if value.requires_grad or value.grad_fn is not None:
-                raise AssertionError("Warm-up indexer inputs must be detached from the main model graph")
+        teacher = self.build_dense_teacher_distribution(x)
+        logits, _ = self.build_indexer_logits(x, detach_inputs=True)
+        loss = self.indexer_alignment_kl_loss(logits, teacher)
+        loss.backward()
+
+        if x.grad is not None:
+            raise AssertionError("Warm-up indexer inputs must be detached from the main model graph")
+        if not any(param.grad is not None for name, param in self.named_parameters() if name.startswith("index_")):
+            raise AssertionError("Warm-up step should still produce gradients for indexer parameters")
 
     def indexer_alignment_kl_loss(self, logits: torch.Tensor, teacher_probs: torch.Tensor) -> torch.Tensor:
         return F.kl_div(
