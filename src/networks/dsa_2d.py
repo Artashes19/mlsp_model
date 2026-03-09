@@ -40,8 +40,15 @@ class DSA2DMLAConfig:
         if self.n_heads % self.n_kv_heads != 0:
             raise ValueError("n_heads must be divisible by n_kv_heads for GQA")
 
+        if self.qk_rope_head_dim % 4 != 0:
+            raise ValueError("qk_rope_head_dim must be divisible by 4 for 2D partial RoPE")
+
         if self.index_head_dim % 2 != 0:
-            raise ValueError("index_head_dim must be even for a 64/64 rope split")
+            raise ValueError("index_head_dim must be even for a balanced rope/nope split")
+
+        index_rope_head_dim = self.index_head_dim // 2
+        if index_rope_head_dim % 4 != 0:
+            raise ValueError("index rope-active dim must be divisible by 4 for 2D partial RoPE")
 
 
 class DSA2DMLAAttention(nn.Module):
