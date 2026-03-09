@@ -328,6 +328,33 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `25 passed`
 
+### 2026-03-10: Dense-teacher and KL helper gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `build_dense_teacher_distribution()` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+2. `prepare_warmup_indexer_inputs()` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+3. `assert_warmup_detach_contract()` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+4. `indexer_alignment_kl_loss()` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+5. teacher/detach/KL tests in [tests/test_dsa_2d_training.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_training.py)
+
+Locked behavior:
+
+1. dense teacher distribution is built from dense MLA attention scores, summed across heads and renormalized over keys
+2. current warm-up detach plumbing explicitly detaches flattened token inputs before they are handed to the future indexer path
+3. indexer alignment loss is currently KL divergence between `log_softmax(indexer_logits)` and normalized teacher probabilities
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_training.py -v`
+   - result: `4 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `28 passed`
+
 ## Update Policy
 
 After every meaningful DSA change, update this file with:

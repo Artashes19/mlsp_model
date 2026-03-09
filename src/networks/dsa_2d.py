@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from src.ops.dsa_indexer import act_quant_reference_safe, stable_topk, weighted_relu_index_score
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
@@ -197,6 +198,41 @@ class DSA2DMLAAttention(nn.Module):
         full_idx = torch.arange(seq_len, device=x.device, dtype=torch.int64).view(1, 1, seq_len)
         full_idx = full_idx.expand(batch, seq_len, seq_len)
         return self.forward_sparse_from_indices(x, full_idx)
+
+    def build_dense_teacher_distribution(self, x: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            q, k, _, _, _ = self._dense_mla_qkv(x)
+            k = k.repeat_interleave(self.gqa_group_size, dim=1)
+            attn_scores = torch.matmul(q * self.softmax_scale, k.transpose(-1, -2))
+            attn = torch.softmax(attn_scores, dim=-1)
+            teacher = attn.sum(dim=1)
+            return teacher / teacher.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+    def prepare_warmup_indexer_inputs(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        tokens, _, _ = self._flatten_tokens(x)
+        return {"tokens": tokens.detach()}
+
+    def assert_warmup_detach_contract(self) -> None:
+        x = torch.randn(
+            1,
+            self.dim,
+            2,
+            2,
+            dtype=self.proj.weight.dtype,
+            device=self.proj.weight.device,
+            requires_grad=True,
+        )
+        warmup_inputs = self.prepare_warmup_indexer_inputs(x)
+        for value in warmup_inputs.values():
+            if value.requires_grad or value.grad_fn is not None:
+                raise AssertionError("Warm-up indexer inputs must be detached from the main model graph")
+
+    def indexer_alignment_kl_loss(self, logits: torch.Tensor, teacher_probs: torch.Tensor) -> torch.Tensor:
+        return F.kl_div(
+            F.log_softmax(logits, dim=-1),
+            teacher_probs,
+            reduction="batchmean",
+        )
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError("Dense MLA math is intentionally deferred to later tasks.")
