@@ -254,5 +254,6 @@ class DSA2DMLAAttention(nn.Module):
             reduction="batchmean",
         )
 
-    def forward(self, *args, **kwargs):
-        raise NotImplementedError("Dense MLA math is intentionally deferred to later tasks.")
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _, idx = self.build_indexer_logits(x, detach_inputs=True)
+        return self.forward_sparse_from_indices(x, idx)
