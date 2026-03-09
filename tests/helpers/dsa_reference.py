@@ -7,6 +7,7 @@ import math
 import torch
 
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
+from src.networks.dsa_2d import DSA2DMLAAttention
 
 ROPE_BASE = 10000.0
 
@@ -239,3 +240,56 @@ def gather_tokens_reference(tokens: torch.Tensor, idx: torch.Tensor) -> torch.Te
                 for k_idx in range(topk):
                     gathered[b, h, q, k_idx] = tokens[b, h, idx[b, q, k_idx]]
     return gathered
+
+
+def sparse_mla_reference_from_indices(mod, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+    q, k, v, height, width = mod._dense_mla_qkv(x)
+    k = k.repeat_interleave(mod.gqa_group_size, dim=1)
+    v = v.repeat_interleave(mod.gqa_group_size, dim=1)
+    k_selected = gather_tokens_reference(k, idx)
+    v_selected = gather_tokens_reference(v, idx)
+
+    attn_scores = torch.einsum("bhtd,bhtkd->bhtk", q * mod.softmax_scale, k_selected)
+    attn = torch.softmax(attn_scores, dim=-1)
+    out = torch.einsum("bhtk,bhtkd->bhtd", attn, v_selected)
+    out = out.permute(0, 2, 1, 3).reshape(x.shape[0], height * width, mod.attn_out_dim)
+    out = mod.proj(out)
+    return out.transpose(1, 2).reshape(x.shape[0], mod.dim, height, width)
+
+
+def compare_sparse_and_dense_backward(cfg, *, H: int, W: int) -> None:
+    torch.manual_seed(0)
+    mod_dense = DSA2DMLAAttention(cfg).float()
+    mod_sparse = copy.deepcopy(mod_dense).float()
+    x_dense = torch.randn(1, cfg.dim, H, W, dtype=torch.float32, requires_grad=True)
+    x_sparse = x_dense.detach().clone().requires_grad_(True)
+    grad_out = torch.randn_like(x_dense)
+
+    dense = mod_dense.forward_dense_reference(x_dense)
+    sparse = mod_sparse.forward_sparse_with_forced_topk(x_sparse, topk_equals_t=True)
+    dense.backward(grad_out)
+    sparse.backward(grad_out)
+
+    torch.testing.assert_close(sparse, dense)
+    torch.testing.assert_close(x_sparse.grad, x_dense.grad)
+
+    dense_params = dict(mod_dense.named_parameters())
+    sparse_params = dict(mod_sparse.named_parameters())
+    assert dense_params.keys() == sparse_params.keys()
+    for name in dense_params:
+        torch.testing.assert_close(sparse_params[name].grad, dense_params[name].grad)
+
+
+def run_sparse_index_regression_case(cfg, idx: torch.Tensor) -> None:
+    mod = DSA2DMLAAttention(cfg).float()
+    seq_len = int(idx.max().item()) + 1
+    side = int(math.isqrt(seq_len))
+    if side * side != seq_len:
+        raise ValueError(f"Expected square token grid, got Q={seq_len}")
+    if idx.shape[1] == 1:
+        idx = idx.expand(idx.shape[0], seq_len, idx.shape[2]).clone()
+
+    x = torch.randn(1, cfg.dim, side, side, dtype=torch.float32, requires_grad=True)
+    ref = sparse_mla_reference_from_indices(mod, x, idx)
+    out = mod.forward_sparse_from_indices(x, idx)
+    torch.testing.assert_close(out, ref)

@@ -172,26 +172,31 @@ class DSA2DMLAAttention(nn.Module):
         out = self.proj(out)
         return out.transpose(1, 2).reshape(x.shape[0], self.dim, height, width)
 
+    def forward_sparse_from_indices(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        q, k, v, height, width = self._dense_mla_qkv(x)
+        batch = x.shape[0]
+        k = k.repeat_interleave(self.gqa_group_size, dim=1)
+        v = v.repeat_interleave(self.gqa_group_size, dim=1)
+
+        k_selected = gather_sparse_mla_tokens(k, idx)
+        v_selected = gather_sparse_mla_tokens(v, idx)
+
+        attn_scores = torch.einsum("bhtd,bhtkd->bhtk", q * self.softmax_scale, k_selected)
+        attn = torch.softmax(attn_scores, dim=-1)
+        out = torch.einsum("bhtk,bhtkd->bhtd", attn, v_selected)
+        out = out.permute(0, 2, 1, 3).reshape(batch, height * width, self.attn_out_dim)
+        out = self.proj(out)
+        return out.transpose(1, 2).reshape(batch, self.dim, height, width)
+
     def forward_sparse_with_forced_topk(self, x: torch.Tensor, *, topk_equals_t: bool = False) -> torch.Tensor:
         if not topk_equals_t:
             raise NotImplementedError("Only the topk=T sparse-equivalence path is implemented at this stage.")
 
-        q, k, v, height, width = self._dense_mla_qkv(x)
-        batch, _, seq_len, _ = q.shape
-        k = k.repeat_interleave(self.gqa_group_size, dim=1)
-        v = v.repeat_interleave(self.gqa_group_size, dim=1)
-
+        batch = x.shape[0]
+        seq_len = x.shape[-2] * x.shape[-1]
         full_idx = torch.arange(seq_len, device=x.device, dtype=torch.int64).view(1, 1, seq_len)
         full_idx = full_idx.expand(batch, seq_len, seq_len)
-        k_selected = gather_sparse_mla_tokens(k, full_idx)
-        v_selected = gather_sparse_mla_tokens(v, full_idx)
-
-        attn_scores = torch.einsum("bhtd,bhtsd->bhts", q * self.softmax_scale, k_selected)
-        attn = torch.softmax(attn_scores, dim=-1)
-        out = torch.einsum("bhts,bhtsd->bhtd", attn, v_selected)
-        out = out.permute(0, 2, 1, 3).reshape(batch, height * width, self.attn_out_dim)
-        out = self.proj(out)
-        return out.transpose(1, 2).reshape(batch, self.dim, height, width)
+        return self.forward_sparse_from_indices(x, full_idx)
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError("Dense MLA math is intentionally deferred to later tasks.")

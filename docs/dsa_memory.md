@@ -299,6 +299,35 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `23 passed`
 
+### 2026-03-10: Sparse backward and regression gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `DSA2DMLAAttention.forward_sparse_from_indices()` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+2. sparse backward parity helper in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py)
+3. repeated/unsorted index regression helper in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py)
+4. sparse backward and regression tests in:
+   - [tests/test_dsa_2d_sparse_attention.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_sparse_attention.py)
+   - [tests/test_dsa_2d_regression.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_regression.py)
+
+Locked behavior:
+
+1. `forward_sparse_from_indices(x, idx)` is the first general sparse-by-indices MLA reference path
+2. sparse backward matches dense backward when `idx` enumerates all `T` tokens for every query
+3. repeated and unsorted indices are currently supported in the sparse gather/reference path
+4. sparse gather now rejects out-of-range indices explicitly
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_regression.py -v`
+   - result: `6 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `25 passed`
+
 ## Update Policy
 
 After every meaningful DSA change, update this file with:

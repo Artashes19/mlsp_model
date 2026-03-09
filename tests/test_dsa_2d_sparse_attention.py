@@ -49,3 +49,8 @@ def test_sparse_mla_matches_dense_when_topk_equals_t():
     sparse = mod.forward_sparse_with_forced_topk(x, topk_equals_t=True)
 
     torch.testing.assert_close(sparse, dense)
+
+
+def test_sparse_mla_backward_matches_dense_when_topk_equals_t():
+    cfg = make_small_cfg(index_topk=16)
+    dsa_reference.compare_sparse_and_dense_backward(cfg, H=4, W=4)
