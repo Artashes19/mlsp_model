@@ -110,7 +110,7 @@ class DSA2DMLAAttention(nn.Module):
         self.indexer = DSA2DIndexer(cfg)
         self.index_wq_b = nn.Linear(self.q_lora_rank, self.index_n_heads * self.index_head_dim, bias=False)
         self.index_wk = nn.Linear(self.dim, self.index_head_dim, bias=False)
-        self.index_k_norm = nn.LayerNorm(self.index_head_dim)
+        self.index_k_norm = nn.RMSNorm(self.index_head_dim, eps=1e-5)
         self.index_weights_proj = nn.Linear(self.dim, self.index_n_heads, bias=False)
 
         self.q_proj_out_dim = self.n_heads * self.qk_head_dim
@@ -119,11 +119,11 @@ class DSA2DMLAAttention(nn.Module):
         self.attn_out_dim = self.n_heads * self.v_head_dim
 
         self.wq_a = nn.Linear(self.dim, self.q_lora_rank, bias=False)
-        self.q_norm = nn.LayerNorm(self.q_lora_rank)
+        self.q_norm = nn.RMSNorm(self.q_lora_rank, eps=1e-5)
         self.wq_b = nn.Linear(self.q_lora_rank, self.q_proj_out_dim, bias=False)
 
         self.wkv_a = nn.Linear(self.dim, self.kv_a_out_dim, bias=False)
-        self.kv_norm = nn.LayerNorm(self.kv_lora_rank)
+        self.kv_norm = nn.RMSNorm(self.kv_lora_rank, eps=1e-5)
         self.wkv_b = nn.Linear(self.kv_lora_rank, self.kv_proj_out_dim, bias=False)
 
         self.proj = nn.Linear(self.attn_out_dim, self.dim, bias=False)

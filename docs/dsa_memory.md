@@ -247,6 +247,30 @@ Verification:
 3. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `36 passed, 1 warning`
 
+### 2026-03-10: RMSNorm alignment gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `q_norm`, `kv_norm`, and `index_k_norm` now use `torch.nn.RMSNorm` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+2. norm-type coverage landed in [tests/test_dsa_2d_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_mla.py)
+
+Locked behavior:
+
+1. MLA query latent normalization is now RMSNorm, matching DeepSeek more closely than the previous LayerNorm placeholder
+2. MLA KV latent normalization is now RMSNorm
+3. indexer key normalization is now RMSNorm
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_mla.py -k "norms_use_rmsnorm" -v`
+   - result: `1 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `37 passed, 1 warning`
+
 ### 2026-03-10: Dense MLA reference gate
 
 Status:

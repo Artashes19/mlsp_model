@@ -1,5 +1,6 @@
 import pytest
 import torch
+from torch import nn
 
 from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 from tests.helpers import dsa_reference
@@ -72,6 +73,15 @@ def test_indexer_projection_shapes_follow_deepseek_style_contract():
     assert mod.index_wk.weight.shape == (cfg.index_head_dim, cfg.dim)
     assert mod.index_weights_proj.weight.shape == (cfg.index_n_heads, cfg.dim)
     assert mod.index_k_norm.normalized_shape == (cfg.index_head_dim,)
+
+
+def test_mla_and_indexer_norms_use_rmsnorm():
+    cfg = make_small_cfg()
+    mod = DSA2DMLAAttention(cfg)
+
+    assert isinstance(mod.q_norm, nn.RMSNorm)
+    assert isinstance(mod.kv_norm, nn.RMSNorm)
+    assert isinstance(mod.index_k_norm, nn.RMSNorm)
 
 
 def test_dense_mla_forward_matches_reference_small_case():
