@@ -150,6 +150,206 @@ def test_build_indexer_logits_matches_reference_preprocessing_path():
     torch.testing.assert_close(idx, ref_idx)
 
 
+def test_build_indexer_logits_uses_dense_path_even_in_streaming_mode(monkeypatch):
+    import src.networks.dsa_2d as dsa_2d_module
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_mode="streaming",
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+    sentinel_logits = torch.full((1, 4, 4), 7.0, dtype=torch.float32)
+    sentinel_idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
+
+    def _dense_forward(q, k, w):
+        return sentinel_logits, sentinel_idx
+
+    def _streaming_fail(*args, **kwargs):
+        raise AssertionError("streaming helper should not run in build_indexer_logits")
+
+    monkeypatch.setattr(mod.indexer, "forward", _dense_forward)
+    monkeypatch.setattr(dsa_2d_module, "streaming_weighted_relu_topk", _streaming_fail)
+
+    logits, idx = mod.build_indexer_logits(x)
+
+    torch.testing.assert_close(logits, sentinel_logits)
+    torch.testing.assert_close(idx, sentinel_idx)
+
+
+def test_runtime_selection_dense_uses_dense_path(monkeypatch):
+    import src.networks.dsa_2d as dsa_2d_module
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_mode="dense",
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+    sentinel_logits = torch.full((1, 4, 4), 5.0, dtype=torch.float32)
+    sentinel_idx = torch.tensor([[[3, 1, 0]]], dtype=torch.int64).expand(1, 4, 3).clone()
+
+    def _dense_forward(*args, **kwargs):
+        return sentinel_logits, sentinel_idx
+
+    def _streaming_fail(*args, **kwargs):
+        raise AssertionError("streaming helper should not run in dense runtime mode")
+
+    monkeypatch.setattr(mod.indexer, "forward", _dense_forward)
+    monkeypatch.setattr(dsa_2d_module, "streaming_weighted_relu_topk", _streaming_fail)
+
+    scores, idx = mod.build_indexer_selection(x)
+    expected_scores = torch.gather(sentinel_logits, dim=-1, index=sentinel_idx)
+
+    torch.testing.assert_close(scores, expected_scores)
+    torch.testing.assert_close(idx, sentinel_idx)
+
+
+def test_runtime_selection_streaming_uses_streaming_helper(monkeypatch):
+    import src.networks.dsa_2d as dsa_2d_module
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_mode="streaming",
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+    sentinel_scores = torch.full((1, 4, 3), 5.0, dtype=torch.float32)
+    sentinel_idx = torch.tensor([[[3, 1, 0]]], dtype=torch.int64).expand(1, 4, 3).clone()
+
+    def _dense_fail(*args, **kwargs):
+        raise AssertionError("dense indexer should not run in streaming runtime mode")
+
+    def _streaming(*args, **kwargs):
+        return sentinel_scores, sentinel_idx
+
+    monkeypatch.setattr(mod.indexer, "forward", _dense_fail)
+    monkeypatch.setattr(dsa_2d_module, "streaming_weighted_relu_topk", _streaming)
+
+    scores, idx = mod.build_indexer_selection(x)
+
+    torch.testing.assert_close(scores, sentinel_scores)
+    torch.testing.assert_close(idx, sentinel_idx)
+
+
+def test_runtime_selection_dense_and_streaming_match_indices():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    torch.manual_seed(3)
+    dense_cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_mode="dense",
+    )
+    streaming_cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_mode="streaming",
+    )
+    dense_mod = DSA2DMLAAttention(dense_cfg).float()
+    streaming_mod = DSA2DMLAAttention(streaming_cfg).float()
+    streaming_mod.load_state_dict(dense_mod.state_dict())
+    x = torch.randn(1, dense_cfg.dim, 2, 2, dtype=torch.float32)
+
+    dense_scores, dense_idx = dense_mod.build_indexer_selection(x)
+    streaming_scores, streaming_idx = streaming_mod.build_indexer_selection(x)
+
+    torch.testing.assert_close(streaming_scores, dense_scores)
+    torch.testing.assert_close(streaming_idx, dense_idx)
+
+
+def test_forward_uses_runtime_selection_path(monkeypatch):
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_mode="streaming",
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+    sentinel_idx = torch.tensor([[[3, 1, 0]]], dtype=torch.int64).expand(1, 4, 3).clone()
+    sentinel_out = torch.randn_like(x)
+
+    def _logits_fail(*args, **kwargs):
+        raise AssertionError("forward should not call build_indexer_logits")
+
+    def _selection(*args, **kwargs):
+        return torch.zeros(1, 4, 3, dtype=torch.float32), sentinel_idx
+
+    def _forward_sparse(_x, idx):
+        torch.testing.assert_close(idx, sentinel_idx)
+        return sentinel_out
+
+    monkeypatch.setattr(mod, "build_indexer_logits", _logits_fail)
+    monkeypatch.setattr(mod, "build_indexer_selection", _selection)
+    monkeypatch.setattr(mod, "forward_sparse_from_indices", _forward_sparse)
+
+    out = mod(x)
+
+    torch.testing.assert_close(out, sentinel_out)
+
+
 def test_streaming_reference_matches_dense_reference_path():
     from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
     from tests.helpers import dsa_reference

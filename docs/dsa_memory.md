@@ -238,6 +238,115 @@ Locked behavior:
    - weighted-ReLU score
    - stable top-k
 
+### 2026-03-10: Warm-up isolation and benchmark trustworthiness gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `build_indexer_logits(..., detach_inputs=True)` now detaches the shared MLA query latent before `index_wq_b` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+2. `indexer_alignment_kl_loss()` now averages per-query KL instead of scaling with sequence length in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+3. DSA benchmark timing now runs under `torch.inference_mode()` and puts compared modules in eval mode in [artifacts/dsa_diagnostics/bench_dsa_2d_vs_dense_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/bench_dsa_2d_vs_dense_mla.py)
+4. reference helper parity for detached warm-up path was updated in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py)
+5. regression tests landed in:
+   - [tests/test_dsa_2d_training.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_training.py)
+   - [tests/test_dsa_2d_regression.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_regression.py)
+
+Locked behavior:
+
+1. dense warm-up no longer backpropagates through `wq_a` or `q_norm`; only indexer parameters are supposed to receive gradients from the KL path
+2. the alignment KL is invariant to duplicating the same per-query distribution across more query tokens
+3. forward benchmark numbers are now inference-only timings rather than forward-with-autograd timings
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_training.py -k "shared_query_path_params or averaged_per_query" -v`
+   - result: `2 passed, 1 warning`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_regression.py -k "grad_disabled" -v`
+   - result: `1 passed`
+3. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `42 passed, 1 warning`
+
+### 2026-03-10: Corrected A100 DSA four-way benchmark rerun
+
+Status:
+
+1. complete
+
+Why it was rerun:
+
+1. the earlier DSA benchmark harness was timing forward with autograd enabled
+2. after the fix, benchmark timing now runs under `torch.inference_mode()` with modules in eval mode
+3. earlier forward numbers should therefore be treated as stale
+
+Command:
+
+1. `ssh artashes@dgx.yc2.io "cd /auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation && CUDA_VISIBLE_DEVICES=7 /auto/home/artashes/miniconda3/envs/dev/bin/python artifacts/dsa_diagnostics/bench_dsa_2d_vs_dense_mla.py --device cuda --dtype bfloat16 --warmup 1 --iters 1"`
+
+Artifact:
+
+1. [artifacts/dsa_diagnostics/dsa_benchmark_cuda_bfloat16.json](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_benchmark_cuda_bfloat16.json)
+
+Updated A100 bf16 results:
+
+1. `128x128, C=384, heads=6, n_kv_heads=2, topk=256`
+   - dense MLA: `14.33 ms`
+   - DSA sparse: `80.22 ms`
+   - NSA: `10.62 ms`
+   - Flash MHA: `3.37 ms`
+2. `256x256, C=384, heads=6, n_kv_heads=2, topk=256`
+   - dense MLA: `oom`
+   - DSA sparse: `oom`
+   - NSA: `71.33 ms`
+   - Flash MHA: `38.57 ms`
+3. `128x128, C=512, heads=8, n_kv_heads=2, topk=256`
+   - dense MLA: `15.58 ms`
+   - DSA sparse: `84.43 ms`
+   - NSA: `11.12 ms`
+   - Flash MHA: `4.25 ms`
+4. `256x256, C=512, heads=8, n_kv_heads=2, topk=256`
+   - dense MLA: `oom`
+   - DSA sparse: `oom`
+   - NSA: `81.74 ms`
+   - Flash MHA: `54.69 ms`
+
+Locked takeaway:
+
+1. correcting the harness did not change the qualitative conclusion
+2. current correctness-first DSA is still far slower than NSA and dense baselines at `128x128`
+3. current DSA and dense MLA still OOM at `256x256`
+4. the next DSA runtime work still has to remove dense `T x T` score materialization and explicit gathered sparse `K/V` materialization
+
+### 2026-03-10: Streaming indexer runtime contract split
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `build_indexer_logits(...)` remains the dense training path in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+2. runtime dispatch moved to `build_indexer_selection(...)` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+3. `forward(...)` now consumes `build_indexer_selection(...)`, not `build_indexer_logits(...)`
+4. `indexer_mode` was added with conservative default `dense`
+5. in both runtime modes, `build_indexer_selection(...)` now returns top-k scores and top-k indices with aligned semantics
+
+Locked behavior:
+
+1. dense warm-up and KL supervision continue to see full dense logits
+2. runtime selection is allowed to use exact streaming top-k without changing the training API
+3. runtime callers should treat `build_indexer_selection(...)` as a top-k interface, not a dense-logit interface
+4. default behavior stays conservative until streaming is benchmarked on A100
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_indexer.py -k "runtime_selection_dense_uses_dense_path or runtime_selection_dense_and_streaming_match_indices or build_indexer_logits_uses_dense_path_even_in_streaming_mode or runtime_selection_streaming_uses_streaming_helper or forward_uses_runtime_selection_path" -v`
+   - result: `5 passed, 15 deselected`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `54 passed, 1 warning`
+
 Verification:
 
 1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_mla.py -k "indexer_projection_shapes_follow_deepseek_style_contract" -v`

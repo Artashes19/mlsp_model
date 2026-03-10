@@ -63,3 +63,39 @@ def test_dsa_benchmark_harness_marks_oom_result():
 
     assert result["status"] == "oom"
     assert result["ms"] is None
+
+
+def test_dsa_benchmark_timing_runs_with_grad_disabled():
+    script = Path(__file__).resolve().parents[1] / "artifacts" / "dsa_diagnostics" / "bench_dsa_2d_vs_dense_mla.py"
+    namespace = runpy.run_path(str(script))
+    seen = []
+
+    def _fn():
+        seen.append(torch.is_grad_enabled())
+
+    namespace["_time_ms"](_fn, device=torch.device("cpu"), warmup=1, iters=2)
+
+    assert seen
+    assert all(flag is False for flag in seen)
+
+
+def test_dsa_indexer_mode_defaults_to_dense():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+
+    mod = DSA2DMLAAttention(cfg).float()
+
+    assert mod.indexer_mode == "dense"

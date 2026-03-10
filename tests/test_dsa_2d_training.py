@@ -43,6 +43,23 @@ def test_indexer_warmup_detaches_main_model_inputs():
     mod.assert_warmup_detach_contract()
 
 
+def test_indexer_warmup_detaches_shared_query_path_params():
+    cfg = make_small_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 4, 4, dtype=torch.float32, requires_grad=True)
+    teacher = mod.build_dense_teacher_distribution(x)
+
+    mod.zero_grad(set_to_none=True)
+    logits, _ = mod.build_indexer_logits(x, detach_inputs=True)
+    loss = mod.indexer_alignment_kl_loss(logits, teacher)
+    loss.backward()
+
+    assert x.grad is None
+    assert mod.wq_a.weight.grad is None
+    assert mod.q_norm.weight.grad is None
+    assert mod.index_wq_b.weight.grad is not None
+
+
 def test_indexer_alignment_kl_loss_is_scalar_and_finite():
     cfg = make_small_cfg()
     mod = DSA2DMLAAttention(cfg).float()
@@ -53,6 +70,20 @@ def test_indexer_alignment_kl_loss_is_scalar_and_finite():
 
     assert loss.ndim == 0
     assert torch.isfinite(loss)
+
+
+def test_indexer_alignment_kl_loss_is_averaged_per_query():
+    cfg = make_small_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    logits_small = torch.tensor([[[0.2, -0.1, 0.4, 0.0]]], dtype=torch.float32)
+    teacher_small = torch.tensor([[[0.1, 0.2, 0.6, 0.1]]], dtype=torch.float32)
+    logits_large = logits_small.expand(1, 8, 4).clone()
+    teacher_large = teacher_small.expand(1, 8, 4).clone()
+
+    loss_small = mod.indexer_alignment_kl_loss(logits_small, teacher_small)
+    loss_large = mod.indexer_alignment_kl_loss(logits_large, teacher_large)
+
+    torch.testing.assert_close(loss_large, loss_small)
 
 
 def test_dense_warmup_reduces_kl_on_tiny_problem():

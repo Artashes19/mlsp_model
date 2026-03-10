@@ -10,6 +10,7 @@ from src.ops.dsa_indexer import (
     act_quant_reference_safe,
     fwht_last_dim,
     stable_topk,
+    streaming_weighted_relu_topk,
     weighted_relu_index_score,
 )
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved, apply_partial_rope_2d_non_interleaved
@@ -29,6 +30,7 @@ class DSA2DMLAConfig:
     index_n_heads: int = 4
     index_head_dim: int = 128
     index_topk: int = 64
+    indexer_mode: str = "dense"
 
     def __post_init__(self) -> None:
         positive_fields = {
@@ -62,6 +64,9 @@ class DSA2DMLAConfig:
             raise ValueError("index rope-active dim must be divisible by 4 for 2D partial RoPE")
         if self.index_head_dim & (self.index_head_dim - 1):
             raise ValueError("index_head_dim must be a power of two for FWHT")
+
+        if self.indexer_mode not in {"dense", "streaming"}:
+            raise ValueError(f"Unsupported indexer_mode={self.indexer_mode!r}")
 
 
 class DSA2DIndexer(nn.Module):
@@ -106,6 +111,7 @@ class DSA2DMLAAttention(nn.Module):
         self.index_rope_head_dim = self.index_head_dim // 2
         self.index_nope_head_dim = self.index_head_dim - self.index_rope_head_dim
         self.index_topk = cfg.index_topk
+        self.indexer_mode = cfg.indexer_mode
         self.index_softmax_scale = self.index_head_dim ** -0.5
         self.indexer = DSA2DIndexer(cfg)
         self.index_wq_b = nn.Linear(self.q_lora_rank, self.index_n_heads * self.index_head_dim, bias=False)
@@ -221,12 +227,19 @@ class DSA2DMLAAttention(nn.Module):
             teacher = attn.sum(dim=1)
             return teacher / teacher.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
-    def build_indexer_logits(self, x: torch.Tensor, *, detach_inputs: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+    def _prepare_indexer_qkw(
+        self,
+        x: torch.Tensor,
+        *,
+        detach_inputs: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         tokens, height, width = self._flatten_tokens(x)
         if detach_inputs:
             tokens = tokens.detach()
         batch, seq_len, _ = tokens.shape
         q_latent = self.q_norm(self.wq_a(tokens))
+        if detach_inputs:
+            q_latent = q_latent.detach()
         q = self.index_wq_b(q_latent).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
         k = self.index_wk(tokens)
         k = self.index_k_norm(k).view(batch, 1, seq_len, self.index_head_dim)
@@ -246,7 +259,28 @@ class DSA2DMLAAttention(nn.Module):
         k = fwht_last_dim(k).expand(-1, self.index_n_heads, -1, -1)
         w = self.index_weights_proj(tokens).to(dtype=torch.float32)
         w = w * (self.index_n_heads ** -0.5) * self.index_softmax_scale
+        return q, k, w
+
+    def build_indexer_logits(self, x: torch.Tensor, *, detach_inputs: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+        q, k, w = self._prepare_indexer_qkw(x, detach_inputs=detach_inputs)
         return self.indexer(q, k, w)
+
+    def build_indexer_selection(self, x: torch.Tensor, *, detach_inputs: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.indexer_mode == "dense":
+            logits, idx = self.build_indexer_logits(x, detach_inputs=detach_inputs)
+            scores = torch.gather(logits, dim=-1, index=idx)
+            return scores, idx
+
+        q, k, w = self._prepare_indexer_qkw(x, detach_inputs=detach_inputs)
+        q_q, q_scale = act_quant_reference_safe(q)
+        k_q, k_scale = act_quant_reference_safe(k)
+        return streaming_weighted_relu_topk(
+            q_q.to(dtype=torch.float32) * q_scale,
+            k_q.to(dtype=torch.float32) * k_scale,
+            w,
+            topk=self.index_topk,
+            block_s=self.index_topk,
+        )
 
     def prepare_warmup_indexer_inputs(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         tokens, _, _ = self._flatten_tokens(x)
@@ -270,16 +304,19 @@ class DSA2DMLAAttention(nn.Module):
 
         if x.grad is not None:
             raise AssertionError("Warm-up indexer inputs must be detached from the main model graph")
+        if self.wq_a.weight.grad is not None or self.q_norm.weight.grad is not None:
+            raise AssertionError("Warm-up should not backpropagate through the shared MLA query path")
         if not any(param.grad is not None for name, param in self.named_parameters() if name.startswith("index_")):
             raise AssertionError("Warm-up step should still produce gradients for indexer parameters")
 
     def indexer_alignment_kl_loss(self, logits: torch.Tensor, teacher_probs: torch.Tensor) -> torch.Tensor:
-        return F.kl_div(
+        per_token_kl = F.kl_div(
             F.log_softmax(logits, dim=-1),
             teacher_probs,
-            reduction="batchmean",
+            reduction="none",
         )
+        return per_token_kl.sum(dim=-1).mean()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        _, idx = self.build_indexer_logits(x, detach_inputs=True)
+        _, idx = self.build_indexer_selection(x, detach_inputs=True)
         return self.forward_sparse_from_indices(x, idx)

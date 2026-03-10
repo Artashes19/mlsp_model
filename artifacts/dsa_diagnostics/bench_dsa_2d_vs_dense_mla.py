@@ -94,13 +94,14 @@ def _maybe_sync(device: torch.device) -> None:
 
 
 def _time_ms(fn, *, device: torch.device, warmup: int = 1, iters: int = 3) -> float:
-    for _ in range(warmup):
-        fn()
-    _maybe_sync(device)
-    start = time.perf_counter()
-    for _ in range(iters):
-        fn()
-    _maybe_sync(device)
+    with torch.inference_mode():
+        for _ in range(warmup):
+            fn()
+        _maybe_sync(device)
+        start = time.perf_counter()
+        for _ in range(iters):
+            fn()
+        _maybe_sync(device)
     return (time.perf_counter() - start) * 1000.0 / iters
 
 
@@ -143,6 +144,9 @@ def _benchmark_case(
     dsa: DSA2DMLAAttention = modules["dsa"]
     nsa: NSA2DAttention = modules["nsa"]
     flash: EfficientGlobalAttention = modules["flash"]
+    dsa.eval()
+    nsa.eval()
+    flash.eval()
     x = torch.randn(batch, dim, spatial, spatial, dtype=dtype, device=device)
 
     dense_mla = _time_ms_or_error(lambda: dsa.forward_dense_reference(x), device=device, warmup=warmup, iters=iters)
