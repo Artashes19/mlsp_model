@@ -150,6 +150,96 @@ def test_build_indexer_logits_matches_reference_preprocessing_path():
     torch.testing.assert_close(idx, ref_idx)
 
 
+def test_streaming_reference_matches_dense_reference_path():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+    from tests.helpers import dsa_reference
+
+    torch.manual_seed(0)
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+
+    dense_logits, dense_idx = dsa_reference.indexer_logits_reference(mod, x)
+    dense_top_scores = torch.gather(dense_logits, dim=-1, index=dense_idx)
+    stream_scores, stream_idx = dsa_reference.streaming_indexer_reference(mod, x, block_s=2)
+
+    torch.testing.assert_close(stream_scores, dense_top_scores)
+    torch.testing.assert_close(stream_idx, dense_idx)
+
+
+def test_streaming_reference_is_block_size_invariant():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+    from tests.helpers import dsa_reference
+
+    torch.manual_seed(1)
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+
+    scores_block_1, idx_block_1 = dsa_reference.streaming_indexer_reference(mod, x, block_s=1)
+    scores_block_3, idx_block_3 = dsa_reference.streaming_indexer_reference(mod, x, block_s=3)
+
+    torch.testing.assert_close(scores_block_1, scores_block_3)
+    torch.testing.assert_close(idx_block_1, idx_block_3)
+
+
+def test_streaming_reference_does_not_call_production_helper(monkeypatch):
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+    from src.ops import dsa_indexer
+    from tests.helpers import dsa_reference
+
+    torch.manual_seed(2)
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("production streaming helper should not be called by the reference helper")
+
+    monkeypatch.setattr(dsa_indexer, "streaming_weighted_relu_topk", _boom)
+
+    scores, idx = dsa_reference.streaming_indexer_reference(mod, x, block_s=2)
+
+    assert scores.shape == (1, 4, cfg.index_topk)
+    assert idx.shape == (1, 4, cfg.index_topk)
+
+
 def test_build_indexer_logits_supports_bfloat16_module_dtype():
     from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 

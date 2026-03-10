@@ -243,17 +243,19 @@ def gather_tokens_reference(tokens: torch.Tensor, idx: torch.Tensor) -> torch.Te
     return gathered
 
 
-def indexer_logits_reference(
+def _indexer_preprocessed_reference_inputs(
     mod: DSA2DMLAAttention,
     x: torch.Tensor,
     *,
     detach_inputs: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     tokens, height, width = mod._flatten_tokens(x)
     if detach_inputs:
         tokens = tokens.detach()
     batch, seq_len, _ = tokens.shape
     q_latent = mod.q_norm(mod.wq_a(tokens))
+    if detach_inputs:
+        q_latent = q_latent.detach()
     q = mod.index_wq_b(q_latent).view(batch, seq_len, mod.index_n_heads, mod.index_head_dim).permute(0, 2, 1, 3)
     k = mod.index_wk(tokens)
     k = mod.index_k_norm(k).view(batch, 1, seq_len, mod.index_head_dim)
@@ -264,14 +266,70 @@ def indexer_logits_reference(
     k = naive_fwht(k).expand(-1, mod.index_n_heads, -1, -1)
     q_q, q_scale = reference_fp8_quant(q)
     k_q, k_scale = reference_fp8_quant(k)
+    q_ref = q_q.to(dtype=torch.float32) * q_scale
+    k_ref = k_q.to(dtype=torch.float32) * k_scale
+    return q_ref, k_ref, w
+
+
+def indexer_logits_reference(
+    mod: DSA2DMLAAttention,
+    x: torch.Tensor,
+    *,
+    detach_inputs: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    q_ref, k_ref, w = _indexer_preprocessed_reference_inputs(mod, x, detach_inputs=detach_inputs)
     logits = naive_weighted_relu_index(
-        q_q.to(dtype=torch.float32) * q_scale,
-        k_q.to(dtype=torch.float32) * k_scale,
+        q_ref,
+        k_ref,
         w,
     )
     topk = min(mod.index_topk, logits.shape[-1])
     idx = torch.argsort(logits, dim=-1, descending=True, stable=True)[..., :topk]
     return logits, idx
+
+
+def _stable_reference_topk_order(scores: torch.Tensor, idx: torch.Tensor, k: int) -> torch.Tensor:
+    if scores.shape != idx.shape:
+        raise ValueError(f"Expected scores/idx to have matching shapes, got {scores.shape}, {idx.shape}")
+    if k <= 0 or k > scores.shape[-1]:
+        raise ValueError(f"Expected 0 < k <= {scores.shape[-1]}, got k={k}")
+
+    idx_order = torch.argsort(idx, dim=-1, descending=False, stable=True)
+    scores_by_idx = torch.gather(scores, dim=-1, index=idx_order)
+    score_order = torch.argsort(scores_by_idx, dim=-1, descending=True, stable=True)[..., :k]
+    return torch.gather(idx_order, dim=-1, index=score_order)
+
+
+def streaming_indexer_reference(
+    mod: DSA2DMLAAttention,
+    x: torch.Tensor,
+    *,
+    block_s: int,
+    detach_inputs: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if block_s <= 0:
+        raise ValueError(f"Expected block_s > 0, got block_s={block_s}")
+    q_ref, k_ref, w = _indexer_preprocessed_reference_inputs(mod, x, detach_inputs=detach_inputs)
+    batch, _, query_tokens, _ = q_ref.shape
+    source_tokens = k_ref.shape[2]
+    keep = min(mod.index_topk, source_tokens)
+
+    best_scores = torch.full((batch, query_tokens, keep), float("-inf"), dtype=q_ref.dtype, device=q_ref.device)
+    best_idx = torch.full((batch, query_tokens, keep), source_tokens, dtype=torch.int64, device=q_ref.device)
+
+    for start in range(0, source_tokens, block_s):
+        stop = min(start + block_s, source_tokens)
+        block_scores = naive_weighted_relu_index(q_ref, k_ref[:, :, start:stop, :], w)
+        block_idx = torch.arange(start, stop, device=q_ref.device, dtype=torch.int64).view(1, 1, stop - start)
+        block_idx = block_idx.expand(batch, query_tokens, stop - start)
+
+        candidate_scores = torch.cat([best_scores, block_scores], dim=-1)
+        candidate_idx = torch.cat([best_idx, block_idx], dim=-1)
+        top_order = _stable_reference_topk_order(candidate_scores, candidate_idx, keep)
+        best_scores = torch.gather(candidate_scores, dim=-1, index=top_order)
+        best_idx = torch.gather(candidate_idx, dim=-1, index=top_order)
+
+    return best_scores, best_idx
 
 
 def sparse_mla_reference_from_indices(mod, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
