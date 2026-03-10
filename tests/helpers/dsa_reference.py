@@ -8,6 +8,7 @@ import torch
 
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
 from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+from tests.helpers.fp8_reference import naive_fwht, naive_weighted_relu_index, reference_fp8_quant
 
 ROPE_BASE = 10000.0
 
@@ -240,6 +241,35 @@ def gather_tokens_reference(tokens: torch.Tensor, idx: torch.Tensor) -> torch.Te
                 for k_idx in range(topk):
                     gathered[b, h, q, k_idx] = tokens[b, h, idx[b, q, k_idx]]
     return gathered
+
+
+def indexer_logits_reference(
+    mod: DSA2DMLAAttention,
+    x: torch.Tensor,
+    *,
+    detach_inputs: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    tokens, height, width = mod._flatten_tokens(x)
+    if detach_inputs:
+        tokens = tokens.detach()
+    batch, seq_len, _ = tokens.shape
+    q = mod.index_q_proj(tokens).view(batch, seq_len, mod.index_n_heads, mod.index_head_dim).permute(0, 2, 1, 3)
+    k = mod.index_k_proj(tokens).view(batch, seq_len, mod.index_n_heads, mod.index_head_dim).permute(0, 2, 1, 3)
+    w = mod.index_w_proj(tokens)
+    q = naive_partial_rope_2d_non_interleaved(q, H=height, W=width, rope_dim=mod.index_rope_head_dim)
+    k = naive_partial_rope_2d_non_interleaved(k, H=height, W=width, rope_dim=mod.index_rope_head_dim)
+    q = naive_fwht(q)
+    k = naive_fwht(k)
+    q_q, q_scale = reference_fp8_quant(q)
+    k_q, k_scale = reference_fp8_quant(k)
+    logits = naive_weighted_relu_index(
+        q_q.to(dtype=torch.float32) * q_scale,
+        k_q.to(dtype=torch.float32) * k_scale,
+        w,
+    )
+    topk = min(mod.index_topk, logits.shape[-1])
+    idx = torch.argsort(logits, dim=-1, descending=True, stable=True)[..., :topk]
+    return logits, idx
 
 
 def sparse_mla_reference_from_indices(mod, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:

@@ -36,6 +36,11 @@ def test_mla_config_rejects_invalid_index_rope_dim():
         DSA2DMLAConfig(dim=512, n_heads=8, n_kv_heads=4, index_head_dim=130)
 
 
+def test_mla_config_rejects_non_power_of_two_index_head_dim():
+    with pytest.raises(ValueError):
+        DSA2DMLAConfig(dim=512, n_heads=8, n_kv_heads=4, index_head_dim=40)
+
+
 def test_mla_projection_splits_have_expected_sizes():
     cfg = DSA2DMLAConfig(
         dim=1536,

@@ -6,8 +6,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from src.ops.dsa_indexer import act_quant_reference_safe, stable_topk, weighted_relu_index_score
-from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
+from src.ops.dsa_indexer import (
+    act_quant_reference_safe,
+    fwht_last_dim,
+    stable_topk,
+    weighted_relu_index_score,
+)
+from src.ops.dsa_rope import apply_partial_rope_2d_interleaved, apply_partial_rope_2d_non_interleaved
 from src.ops.dsa_sparse_mla import gather_sparse_mla_tokens
 
 
@@ -55,6 +60,8 @@ class DSA2DMLAConfig:
         index_rope_head_dim = self.index_head_dim // 2
         if index_rope_head_dim % 4 != 0:
             raise ValueError("index rope-active dim must be divisible by 4 for 2D partial RoPE")
+        if self.index_head_dim & (self.index_head_dim - 1):
+            raise ValueError("index_head_dim must be a power of two for FWHT")
 
 
 class DSA2DIndexer(nn.Module):
@@ -213,12 +220,26 @@ class DSA2DMLAAttention(nn.Module):
             return teacher / teacher.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
     def build_indexer_logits(self, x: torch.Tensor, *, detach_inputs: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
-        tokens, _, _ = self._flatten_tokens(x)
+        tokens, height, width = self._flatten_tokens(x)
         if detach_inputs:
             tokens = tokens.detach()
         batch, seq_len, _ = tokens.shape
         q = self.index_q_proj(tokens).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
         k = self.index_k_proj(tokens).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
+        q = apply_partial_rope_2d_non_interleaved(
+            q,
+            H=height,
+            W=width,
+            rope_dim=self.index_rope_head_dim,
+        )
+        k = apply_partial_rope_2d_non_interleaved(
+            k,
+            H=height,
+            W=width,
+            rope_dim=self.index_rope_head_dim,
+        )
+        q = fwht_last_dim(q)
+        k = fwht_last_dim(k)
         w = self.index_w_proj(tokens)
         return self.indexer(q, k, w)
 

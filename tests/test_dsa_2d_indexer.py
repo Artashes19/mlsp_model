@@ -74,3 +74,31 @@ def test_dsa2d_indexer_returns_logits_and_indices():
 
     assert logits.shape == (1, 4, 4)
     assert idx.shape == (1, 4, cfg.index_topk)
+
+
+def test_build_indexer_logits_matches_reference_preprocessing_path():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+    from tests.helpers import dsa_reference
+
+    torch.manual_seed(0)
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+
+    ref_logits, ref_idx = dsa_reference.indexer_logits_reference(mod, x)
+    logits, idx = mod.build_indexer_logits(x)
+
+    torch.testing.assert_close(logits, ref_logits)
+    torch.testing.assert_close(idx, ref_idx)
