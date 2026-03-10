@@ -243,6 +243,56 @@ def gather_tokens_reference(tokens: torch.Tensor, idx: torch.Tensor) -> torch.Te
     return gathered
 
 
+def gather_sparse_mla_reference(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    idx: torch.Tensor,
+    *,
+    gqa_group_size: int,
+    softmax_scale: float,
+) -> torch.Tensor:
+    if q.shape[1] % gqa_group_size != 0:
+        raise ValueError("q head count must be divisible by gqa_group_size")
+
+    k_expanded = k.repeat_interleave(gqa_group_size, dim=1)
+    v_expanded = v.repeat_interleave(gqa_group_size, dim=1)
+    k_selected = gather_tokens_reference(k_expanded, idx)
+    v_selected = gather_tokens_reference(v_expanded, idx)
+    attn_scores = torch.einsum("bhtd,bhtkd->bhtk", q * softmax_scale, k_selected)
+    attn = torch.softmax(attn_scores, dim=-1)
+    return torch.einsum("bhtk,bhtkd->bhtd", attn, v_selected)
+
+
+def slow_per_head_kv_mapping_reference(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    idx: torch.Tensor,
+    *,
+    gqa_group_size: int,
+    softmax_scale: float,
+) -> torch.Tensor:
+    if q.shape[1] % gqa_group_size != 0:
+        raise ValueError("q head count must be divisible by gqa_group_size")
+    batch, h_q, query_tokens, _ = q.shape
+    out = torch.empty(batch, h_q, query_tokens, v.shape[-1], dtype=v.dtype, device=v.device)
+
+    for b in range(batch):
+        for h in range(h_q):
+            kv_head = h // gqa_group_size
+            for q_idx in range(query_tokens):
+                token_idx = idx[b, q_idx]
+                q_vec = q[b, h, q_idx].to(dtype=torch.float32)
+                k_sel = k[b, kv_head, token_idx].to(dtype=torch.float32)
+                v_sel = v[b, kv_head, token_idx].to(dtype=torch.float32)
+                logits = torch.matmul(k_sel, q_vec) * softmax_scale
+                attn = torch.softmax(logits, dim=0)
+                out[b, h, q_idx] = torch.matmul(attn, v_sel).to(dtype=v.dtype)
+
+    return out
+
+
 def _indexer_preprocessed_reference_inputs(
     mod: DSA2DMLAAttention,
     x: torch.Tensor,

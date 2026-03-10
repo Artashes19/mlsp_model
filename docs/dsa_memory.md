@@ -258,6 +258,64 @@ Locked behavior:
 
 1. dense warm-up no longer backpropagates through `wq_a` or `q_norm`; only indexer parameters are supposed to receive gradients from the KL path
 2. the alignment KL is invariant to duplicating the same per-query distribution across more query tokens
+
+### 2026-03-10: Sparse MLA reference rewrite gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. sparse runtime in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py) no longer calls `repeat_interleave(k/v)` or `gather_sparse_mla_tokens(...)`
+2. new blockwise reference helper `streaming_sparse_mla_reference(...)` landed in [src/ops/dsa_sparse_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/ops/dsa_sparse_mla.py)
+3. reference helpers for old gather behavior and explicit KV-head mapping landed in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py)
+4. sparse-attention guardrail and blockwise parity tests landed in [tests/test_dsa_2d_sparse_attention.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_sparse_attention.py)
+
+Locked behavior:
+
+1. sparse MLA now keeps `k/v` in KV-head space and maps query heads by `kv_head = q_head // gqa_group_size`
+2. sparse MLA now processes query tokens and selected tokens in blocks instead of a per-token Python loop
+3. explicit selected `K/V` tensors shaped like `[B, h_q, T, K, D]` are no longer built in the sparse runtime path
+4. dense-equivalence and backward parity at `topk = T` remain green after the rewrite
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_sparse_attention.py -k "explicit_block_sizes or streaming_sparse_mla_matches_gather_reference_small_case or streaming_sparse_mla_respects_gqa_head_mapping" -v`
+   - result: `3 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_regression.py -k "does_not_call_gather_sparse_mla_tokens or does_not_repeat_interleave_kv or uses_streaming_sparse_helper or matches_old_small_reference or topk_equals_t or duplicate_and_unsorted" -v`
+   - result: `6 passed, 11 deselected, 1 warning`
+3. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `61 passed, 1 warning`
+
+Runtime checkpoint:
+
+1. corrected smoke benchmark still passes via [artifacts/dsa_diagnostics/dsa_benchmark_smoke.json](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_benchmark_smoke.json)
+2. A100 streaming benchmark artifact after sparse-MLA rewrite:
+   - [dsa_benchmark_cuda_bfloat16_streaming.json](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_benchmark_cuda_bfloat16_streaming.json)
+3. key A100 numbers with `warmup=1`, `iters=1`:
+   - `128x128, C=384, h=6, G=3, topk=256`: DSA `490.31 ms`, NSA `10.57 ms`, Flash MHA `3.28 ms`
+   - `256x256, C=384, h=6, G=3, topk=256`: DSA `3999.37 ms`, NSA `73.83 ms`, Flash MHA `41.07 ms`
+   - `128x128, C=512, h=8, G=4, topk=256`: DSA `502.75 ms`, NSA `12.52 ms`, Flash MHA `4.18 ms`
+   - `256x256, C=512, h=8, G=4, topk=256`: DSA `3987.88 ms`, NSA `83.40 ms`, Flash MHA `55.11 ms`
+
+Profiler checkpoint:
+
+1. representative A100 profile on `128x128, C=384, h=6, topk=256` after the rewrite shows the dominant CUDA cost is now selector `sort`, not giant selected-K/V materialization
+2. top CUDA entries from the profile:
+   - `aten::sort ~105.33 ms self CUDA`
+   - `aten::gather ~23.76 ms`
+   - `aten::bmm ~21.08 ms`
+   - `aten::index ~15.75 ms`
+   - `aten::cat ~9.63 ms`
+3. memory-heavy selected-K/V gather still exists in smaller blockwise pieces, but the previous one-shot materialization pattern is no longer the main failure mode
+
+Current interpretation:
+
+1. the sparse MLA reference path is now closer to the paper in structure
+2. the old selected-K/V materialization mismatch has been removed from the runtime path
+3. DSA is still far from competitive because selector `sort` remains dominant and the blockwise sparse MLA path still emits many smaller `index/gather/bmm/cat` operations
+4. the next DSA target should be selector merge/runtime structure, not another semantic rewrite of sparse MLA
 3. forward benchmark numbers are now inference-only timings rather than forward-with-autograd timings
 
 Verification:

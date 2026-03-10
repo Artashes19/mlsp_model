@@ -14,7 +14,7 @@ from src.ops.dsa_indexer import (
     weighted_relu_index_score,
 )
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved, apply_partial_rope_2d_non_interleaved
-from src.ops.dsa_sparse_mla import gather_sparse_mla_tokens
+from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference
 
 
 @dataclass(frozen=True)
@@ -195,15 +195,14 @@ class DSA2DMLAAttention(nn.Module):
     def forward_sparse_from_indices(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
         q, k, v, height, width = self._dense_mla_qkv(x)
         batch = x.shape[0]
-        k = k.repeat_interleave(self.gqa_group_size, dim=1)
-        v = v.repeat_interleave(self.gqa_group_size, dim=1)
-
-        k_selected = gather_sparse_mla_tokens(k, idx)
-        v_selected = gather_sparse_mla_tokens(v, idx)
-
-        attn_scores = torch.einsum("bhtd,bhtkd->bhtk", q * self.softmax_scale, k_selected)
-        attn = torch.softmax(attn_scores, dim=-1)
-        out = torch.einsum("bhtk,bhtkd->bhtd", attn, v_selected)
+        out = streaming_sparse_mla_reference(
+            q,
+            k,
+            v,
+            idx,
+            gqa_group_size=self.gqa_group_size,
+            softmax_scale=self.softmax_scale,
+        )
         out = out.permute(0, 2, 1, 3).reshape(batch, height * width, self.attn_out_dim)
         out = self.proj(out)
         return out.transpose(1, 2).reshape(batch, self.dim, height, width)
