@@ -347,6 +347,50 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `54 passed, 1 warning`
 
+### 2026-03-10: A100 benchmark with streaming indexer
+
+Status:
+
+1. complete
+
+Command:
+
+1. `ssh artashes@dgx.yc2.io "cd /auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation && CUDA_VISIBLE_DEVICES=7 /auto/home/artashes/miniconda3/envs/dev/bin/python artifacts/dsa_diagnostics/bench_dsa_2d_vs_dense_mla.py --device cuda --dtype bfloat16 --indexer-mode streaming --warmup 1 --iters 1"`
+
+Artifact:
+
+1. [artifacts/dsa_diagnostics/dsa_benchmark_cuda_bfloat16_streaming.json](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_benchmark_cuda_bfloat16_streaming.json)
+
+Results:
+
+1. `128x128, C=384, heads=6, n_kv_heads=2, topk=256`
+   - dense MLA: `14.61 ms`
+   - DSA sparse: `201.99 ms`
+   - NSA: `10.73 ms`
+   - Flash MHA: `3.28 ms`
+2. `256x256, C=384, heads=6, n_kv_heads=2, topk=256`
+   - dense MLA: `oom`
+   - DSA sparse: `2803.77 ms`
+   - NSA: `70.68 ms`
+   - Flash MHA: `40.85 ms`
+3. `128x128, C=512, heads=8, n_kv_heads=2, topk=256`
+   - dense MLA: `16.02 ms`
+   - DSA sparse: `208.59 ms`
+   - NSA: `11.06 ms`
+   - Flash MHA: `4.18 ms`
+4. `256x256, C=512, heads=8, n_kv_heads=2, topk=256`
+   - dense MLA: `oom`
+   - DSA sparse: `2831.41 ms`
+   - NSA: `81.57 ms`
+   - Flash MHA: `55.13 ms`
+
+Locked takeaway:
+
+1. the streaming indexer solved the DSA indexer OOM at `256x256`
+2. DSA now reaches long-sequence execution instead of dying in the selector
+3. runtime is still unusably bad because the next bottleneck is sparse MLA gather/materialization, not the indexer anymore
+4. the next DSA runtime task must target sparse MLA token gather and selected `K/V` materialization
+
 Verification:
 
 1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_mla.py -k "indexer_projection_shapes_follow_deepseek_style_contract" -v`

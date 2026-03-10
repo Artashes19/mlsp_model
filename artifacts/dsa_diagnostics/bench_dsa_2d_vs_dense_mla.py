@@ -18,7 +18,7 @@ from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 from src.networks.txunet import EfficientGlobalAttention, NSA2DAttention
 
 
-def _make_cfg(*, dim: int, n_heads: int, n_kv_heads: int, index_topk: int) -> DSA2DMLAConfig:
+def _make_cfg(*, dim: int, n_heads: int, n_kv_heads: int, index_topk: int, indexer_mode: str) -> DSA2DMLAConfig:
     head_dim = dim // n_heads
     if head_dim <= 0:
         raise ValueError(f"Expected positive head_dim, got dim={dim}, n_heads={n_heads}")
@@ -43,6 +43,7 @@ def _make_cfg(*, dim: int, n_heads: int, n_kv_heads: int, index_topk: int) -> DS
         index_n_heads=index_n_heads,
         index_head_dim=index_head_dim,
         index_topk=index_topk,
+        indexer_mode=indexer_mode,
     )
 
 
@@ -77,11 +78,18 @@ def _prepare_case_modules(
     n_heads: int,
     n_kv_heads: int,
     index_topk: int,
+    indexer_mode: str,
     spatial: int,
     dtype: torch.dtype,
     device: torch.device,
 ) -> dict[str, Any]:
-    cfg = _make_cfg(dim=dim, n_heads=n_heads, n_kv_heads=n_kv_heads, index_topk=index_topk)
+    cfg = _make_cfg(
+        dim=dim,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        index_topk=index_topk,
+        indexer_mode=indexer_mode,
+    )
     dsa = DSA2DMLAAttention(cfg).to(device=device, dtype=dtype)
     nsa = _make_nsa(dim, n_heads, n_kv_heads, index_topk, spatial).to(device=device, dtype=dtype)
     flash = _make_flash_mha(dim, n_heads).to(device=device, dtype=dtype)
@@ -125,6 +133,7 @@ def _benchmark_case(
     n_heads: int,
     n_kv_heads: int,
     index_topk: int,
+    indexer_mode: str,
     dtype: torch.dtype,
     device: torch.device,
     warmup: int,
@@ -136,6 +145,7 @@ def _benchmark_case(
         n_heads=n_heads,
         n_kv_heads=n_kv_heads,
         index_topk=index_topk,
+        indexer_mode=indexer_mode,
         spatial=spatial,
         dtype=dtype,
         device=device,
@@ -164,6 +174,7 @@ def _benchmark_case(
         "gqa_group_size": n_heads // n_kv_heads,
         "topk": index_topk,
         "selected_tokens": index_topk,
+        "indexer_mode": cfg.indexer_mode,
         "nsa_patch_size": nsa.patch_size,
         "nsa_top_n": nsa.top_n,
         "dense_mla_ms": dense_mla["ms"],
@@ -180,7 +191,7 @@ def _benchmark_case(
     }
 
 
-def run_benchmark_smoke(output_dir: str | Path) -> dict[str, Any]:
+def run_benchmark_smoke(output_dir: str | Path, *, indexer_mode: str = "dense") -> dict[str, Any]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     case = _benchmark_case(
@@ -191,6 +202,7 @@ def run_benchmark_smoke(output_dir: str | Path) -> dict[str, Any]:
         n_heads=4,
         n_kv_heads=2,
         index_topk=16,
+        indexer_mode=indexer_mode,
         dtype=torch.float32,
         device=torch.device("cpu"),
         warmup=0,
@@ -208,6 +220,7 @@ def run_benchmark_suite(
     output_dir: str | Path,
     device: torch.device,
     dtype: torch.dtype,
+    indexer_mode: str = "dense",
     warmup: int = 5,
     iters: int = 10,
 ) -> dict[str, Any]:
@@ -222,6 +235,7 @@ def run_benchmark_suite(
             n_heads=6,
             n_kv_heads=2,
             index_topk=256,
+            indexer_mode=indexer_mode,
             dtype=dtype,
             device=device,
             warmup=warmup,
@@ -235,6 +249,7 @@ def run_benchmark_suite(
             n_heads=6,
             n_kv_heads=2,
             index_topk=256,
+            indexer_mode=indexer_mode,
             dtype=dtype,
             device=device,
             warmup=warmup,
@@ -248,6 +263,7 @@ def run_benchmark_suite(
             n_heads=8,
             n_kv_heads=2,
             index_topk=256,
+            indexer_mode=indexer_mode,
             dtype=dtype,
             device=device,
             warmup=warmup,
@@ -261,6 +277,7 @@ def run_benchmark_suite(
             n_heads=8,
             n_kv_heads=2,
             index_topk=256,
+            indexer_mode=indexer_mode,
             dtype=dtype,
             device=device,
             warmup=warmup,
@@ -268,7 +285,7 @@ def run_benchmark_suite(
         ),
     ]
     result = {"cases": cases}
-    artifact_path = output_dir / f"dsa_benchmark_{device.type}_{str(dtype).replace('torch.', '')}.json"
+    artifact_path = output_dir / f"dsa_benchmark_{device.type}_{str(dtype).replace('torch.', '')}_{indexer_mode}.json"
     artifact_path.write_text(json.dumps(result, indent=2))
     result["artifact"] = str(artifact_path)
     return result
@@ -280,6 +297,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/dsa_diagnostics"))
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--dtype", type=str, default="float32", choices=["float32", "bfloat16", "float16"])
+    parser.add_argument("--indexer-mode", type=str, default="dense", choices=["dense", "streaming"])
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iters", type=int, default=10)
     args = parser.parse_args()
@@ -287,12 +305,13 @@ def main() -> None:
     dtype = getattr(torch, args.dtype)
     device = torch.device(args.device)
     if args.smoke:
-        result = run_benchmark_smoke(args.output_dir)
+        result = run_benchmark_smoke(args.output_dir, indexer_mode=args.indexer_mode)
     else:
         result = run_benchmark_suite(
             output_dir=args.output_dir,
             device=device,
             dtype=dtype,
+            indexer_mode=args.indexer_mode,
             warmup=args.warmup,
             iters=args.iters,
         )

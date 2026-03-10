@@ -35,7 +35,7 @@ def test_sparse_mla_handles_repeated_and_unsorted_indices():
 def test_dsa_benchmark_harness_smoke(tmp_path):
     script = Path(__file__).resolve().parents[1] / "artifacts" / "dsa_diagnostics" / "bench_dsa_2d_vs_dense_mla.py"
     namespace = runpy.run_path(str(script))
-    result = namespace["run_benchmark_smoke"](output_dir=tmp_path)
+    result = namespace["run_benchmark_smoke"](output_dir=tmp_path, indexer_mode="streaming")
 
     assert "cases" in result
     assert len(result["cases"]) == 1
@@ -48,6 +48,7 @@ def test_dsa_benchmark_harness_smoke(tmp_path):
     assert "flash_mha_ms" in case
     assert "topk" in case
     assert "num_heads" in case
+    assert case["indexer_mode"] == "streaming"
 
 
 def test_dsa_benchmark_harness_marks_oom_result():
