@@ -11,11 +11,16 @@ def test_dsa_test_scaffold_exists():
     assert hasattr(dsa_reference, "__file__")
 
 
-def make_small_cfg(index_topk: int = 8) -> DSA2DMLAConfig:
+def make_small_cfg(
+    index_topk: int = 8,
+    *,
+    sparse_backend: str = "reference",
+    n_kv_heads: int = 2,
+) -> DSA2DMLAConfig:
     return DSA2DMLAConfig(
         dim=32,
         n_heads=4,
-        n_kv_heads=2,
+        n_kv_heads=n_kv_heads,
         q_lora_rank=16,
         kv_lora_rank=12,
         qk_nope_head_dim=8,
@@ -24,6 +29,7 @@ def make_small_cfg(index_topk: int = 8) -> DSA2DMLAConfig:
         index_n_heads=2,
         index_head_dim=16,
         index_topk=index_topk,
+        sparse_backend=sparse_backend,
     )
 
 
@@ -66,6 +72,131 @@ def test_sparse_runtime_does_not_repeat_interleave_kv(monkeypatch):
     monkeypatch.setattr(torch.Tensor, "repeat_interleave", _wrapped)
     mod.forward_sparse_from_indices(x, idx)
     assert not calls
+
+
+def test_flashmla_backend_falls_back_to_reference_on_cpu(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=2, sparse_backend="flashmla", n_kv_heads=1)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+    idx = torch.tensor([[[0, 1]]], dtype=torch.int64).expand(1, 4, 2).clone()
+
+    called = {"reference": False}
+
+    def _reference(*args, **kwargs):
+        called["reference"] = True
+        return torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference", _reference)
+    mod.forward_sparse_from_indices(x, idx)
+
+    assert called["reference"]
+
+
+def test_flashmla_backend_rejects_non_mqa_kernel_path(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=2, sparse_backend="flashmla", n_kv_heads=2)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+    idx = torch.tensor([[[0, 1]]], dtype=torch.int64).expand(1, 4, 2).clone()
+
+    called = {"flash": False, "reference": False}
+
+    def _flash(*args, **kwargs):
+        called["flash"] = True
+        return torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+
+    def _reference(*args, **kwargs):
+        called["reference"] = True
+        return torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+
+    monkeypatch.setattr(
+        "src.networks.dsa_2d.flashmla_sparse_mla_forward",
+        _flash,
+        raising=False,
+    )
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference", _reference)
+    mod.forward_sparse_from_indices(x, idx)
+
+    assert not called["flash"]
+    assert called["reference"]
+
+
+def test_flashmla_support_check_rejects_cpu():
+    from src.ops.dsa_flashmla import flashmla_is_supported
+
+    assert not flashmla_is_supported(device=torch.device("cpu"), n_kv_heads=1)
+
+
+def test_flashmla_support_check_rejects_non_mqa():
+    from src.ops.dsa_flashmla import flashmla_is_supported
+
+    assert not flashmla_is_supported(
+        device=torch.device("cuda"),
+        n_kv_heads=2,
+        sm=(9, 0),
+    )
+
+
+def _make_small_flashmla_mqa_case():
+    batch = 1
+    h_kv = 1
+    gqa_group_size = 4
+    h_q = h_kv * gqa_group_size
+    query_tokens = 4
+    source_tokens = 5
+    dim = 8
+    q = torch.randn(batch, h_q, query_tokens, dim, dtype=torch.float32)
+    k = torch.randn(batch, h_kv, source_tokens, dim, dtype=torch.float32)
+    v = torch.randn(batch, h_kv, source_tokens, dim, dtype=torch.float32)
+    idx = torch.tensor(
+        [[[0, 3, 1], [4, 1, 0], [2, 2, 1], [3, 0, 4]]],
+        dtype=torch.int64,
+    )
+    return q, k, v, idx, gqa_group_size
+
+
+def test_flashmla_adapter_preserves_output_shape_small_case():
+    from src.ops.dsa_flashmla import flashmla_sparse_mla_forward
+
+    q, k, v, idx, g = _make_small_flashmla_mqa_case()
+    out = flashmla_sparse_mla_forward(
+        q,
+        k,
+        v,
+        idx,
+        gqa_group_size=g,
+        softmax_scale=q.shape[-1] ** -0.5,
+        force_reference_kernel=True,
+    )
+
+    assert out.shape == (1, q.shape[1], q.shape[2], v.shape[-1])
+
+
+def test_flashmla_adapter_matches_reference_small_case():
+    from src.ops.dsa_flashmla import flashmla_sparse_mla_forward
+    from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference
+
+    q, k, v, idx, g = _make_small_flashmla_mqa_case()
+    ref = streaming_sparse_mla_reference(
+        q,
+        k,
+        v,
+        idx,
+        gqa_group_size=g,
+        softmax_scale=q.shape[-1] ** -0.5,
+    )
+    out = flashmla_sparse_mla_forward(
+        q,
+        k,
+        v,
+        idx,
+        gqa_group_size=g,
+        softmax_scale=q.shape[-1] ** -0.5,
+        force_reference_kernel=True,
+    )
+
+    torch.testing.assert_close(out, ref)
 
 
 def _make_small_sparse_case(*, gqa_group_size: int = 2):

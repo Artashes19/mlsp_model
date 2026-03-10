@@ -14,6 +14,7 @@ from src.ops.dsa_indexer import (
     weighted_relu_index_score,
 )
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved, apply_partial_rope_2d_non_interleaved
+from src.ops.dsa_flashmla import flashmla_is_supported, flashmla_sparse_mla_forward
 from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference
 
 
@@ -31,6 +32,7 @@ class DSA2DMLAConfig:
     index_head_dim: int = 128
     index_topk: int = 64
     indexer_mode: str = "dense"
+    sparse_backend: str = "reference"
 
     def __post_init__(self) -> None:
         positive_fields = {
@@ -67,6 +69,8 @@ class DSA2DMLAConfig:
 
         if self.indexer_mode not in {"dense", "streaming"}:
             raise ValueError(f"Unsupported indexer_mode={self.indexer_mode!r}")
+        if self.sparse_backend not in {"reference", "flashmla"}:
+            raise ValueError(f"Unsupported sparse_backend={self.sparse_backend!r}")
 
 
 class DSA2DIndexer(nn.Module):
@@ -112,6 +116,7 @@ class DSA2DMLAAttention(nn.Module):
         self.index_nope_head_dim = self.index_head_dim - self.index_rope_head_dim
         self.index_topk = cfg.index_topk
         self.indexer_mode = cfg.indexer_mode
+        self.sparse_backend = cfg.sparse_backend
         self.index_softmax_scale = self.index_head_dim ** -0.5
         self.indexer = DSA2DIndexer(cfg)
         self.index_wq_b = nn.Linear(self.q_lora_rank, self.index_n_heads * self.index_head_dim, bias=False)
@@ -195,14 +200,27 @@ class DSA2DMLAAttention(nn.Module):
     def forward_sparse_from_indices(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
         q, k, v, height, width = self._dense_mla_qkv(x)
         batch = x.shape[0]
-        out = streaming_sparse_mla_reference(
-            q,
-            k,
-            v,
-            idx,
-            gqa_group_size=self.gqa_group_size,
-            softmax_scale=self.softmax_scale,
-        )
+        if self.sparse_backend == "flashmla" and flashmla_is_supported(
+            device=x.device,
+            n_kv_heads=self.n_kv_heads,
+        ):
+            out = flashmla_sparse_mla_forward(
+                q,
+                k,
+                v,
+                idx,
+                gqa_group_size=self.gqa_group_size,
+                softmax_scale=self.softmax_scale,
+            )
+        else:
+            out = streaming_sparse_mla_reference(
+                q,
+                k,
+                v,
+                idx,
+                gqa_group_size=self.gqa_group_size,
+                softmax_scale=self.softmax_scale,
+            )
         out = out.permute(0, 2, 1, 3).reshape(batch, height * width, self.attn_out_dim)
         out = self.proj(out)
         return out.transpose(1, 2).reshape(batch, self.dim, height, width)

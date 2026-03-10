@@ -1,4 +1,5 @@
 
+import pytest
 import torch
 import runpy
 from pathlib import Path
@@ -100,3 +101,64 @@ def test_dsa_indexer_mode_defaults_to_dense():
     mod = DSA2DMLAAttention(cfg).float()
 
     assert mod.indexer_mode == "dense"
+
+
+def test_dsa_sparse_backend_defaults_to_reference():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+
+    mod = DSA2DMLAAttention(cfg).float()
+
+    assert mod.sparse_backend == "reference"
+
+
+def test_dsa_sparse_backend_rejects_unknown_value():
+    with pytest.raises(ValueError, match="Unsupported sparse_backend"):
+        DSA2DMLAConfig(
+            dim=32,
+            n_heads=4,
+            n_kv_heads=2,
+            q_lora_rank=16,
+            kv_lora_rank=12,
+            qk_nope_head_dim=8,
+            qk_rope_head_dim=8,
+            v_head_dim=8,
+            index_n_heads=2,
+            index_head_dim=16,
+            index_topk=3,
+            sparse_backend="unknown",
+        )
+
+
+def test_flashmla_import_or_none_is_safe():
+    from src.ops.dsa_flashmla import flashmla_import_or_none
+
+    result = flashmla_import_or_none()
+
+    assert result is None or callable(result)
+
+
+def test_dsa_benchmark_harness_records_sparse_backend(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "artifacts" / "dsa_diagnostics" / "bench_dsa_2d_vs_dense_mla.py"
+    namespace = runpy.run_path(str(script))
+    result = namespace["run_benchmark_smoke"](
+        output_dir=tmp_path,
+        indexer_mode="streaming",
+        sparse_backend="flashmla",
+    )
+
+    case = result["cases"][0]
+    assert case["sparse_backend"] == "flashmla"
