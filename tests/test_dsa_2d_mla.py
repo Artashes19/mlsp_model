@@ -64,6 +64,16 @@ def test_mla_projection_splits_have_expected_sizes():
     assert mod.index_nope_head_dim == 64
 
 
+def test_indexer_projection_shapes_follow_deepseek_style_contract():
+    cfg = make_small_cfg()
+    mod = DSA2DMLAAttention(cfg)
+
+    assert mod.index_wq_b.weight.shape == (cfg.index_n_heads * cfg.index_head_dim, cfg.q_lora_rank)
+    assert mod.index_wk.weight.shape == (cfg.index_head_dim, cfg.dim)
+    assert mod.index_weights_proj.weight.shape == (cfg.index_n_heads, cfg.dim)
+    assert mod.index_k_norm.normalized_shape == (cfg.index_head_dim,)
+
+
 def test_dense_mla_forward_matches_reference_small_case():
     torch.manual_seed(0)
     cfg = make_small_cfg()

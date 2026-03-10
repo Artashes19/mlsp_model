@@ -210,6 +210,43 @@ Verification:
 3. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `35 passed, 1 warning`
 
+### 2026-03-10: DeepSeek-style indexer projection contract gate
+
+Status:
+
+1. complete
+
+What landed:
+
+1. the indexer query path now reuses MLA query latent activations via `wq_a -> q_norm -> index_wq_b` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+2. the indexer key path now uses a shared-key projection plus normalization via `index_wk -> index_k_norm` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+3. the indexer weight path now uses `index_weights_proj` with static scaling by `index_n_heads**-0.5 * index_head_dim**-0.5`
+4. the reference path in [tests/helpers/dsa_reference.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/helpers/dsa_reference.py) now matches this DeepSeek-style contract
+5. new shape and reference-path tests landed in:
+   - [tests/test_dsa_2d_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_mla.py)
+   - [tests/test_dsa_2d_indexer.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_indexer.py)
+
+Locked behavior:
+
+1. indexer `q` is no longer built from a direct token projection; it now comes from the MLA query latent path
+2. indexer `k` is shared across indexer heads and expanded only after normalized projection, RoPE, and FWHT
+3. current correctness-first score path remains:
+   - DeepSeek-style query/key/weight projections
+   - non-interleaved 2D partial RoPE
+   - FWHT
+   - FP8 quantization
+   - weighted-ReLU score
+   - stable top-k
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_mla.py -k "indexer_projection_shapes_follow_deepseek_style_contract" -v`
+   - result: `1 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_indexer.py -k "reference_preprocessing_path" -v`
+   - result: `1 passed`
+3. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `36 passed, 1 warning`
+
 ### 2026-03-10: Dense MLA reference gate
 
 Status:

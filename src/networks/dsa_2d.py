@@ -106,10 +106,12 @@ class DSA2DMLAAttention(nn.Module):
         self.index_rope_head_dim = self.index_head_dim // 2
         self.index_nope_head_dim = self.index_head_dim - self.index_rope_head_dim
         self.index_topk = cfg.index_topk
+        self.index_softmax_scale = self.index_head_dim ** -0.5
         self.indexer = DSA2DIndexer(cfg)
-        self.index_q_proj = nn.Linear(self.dim, self.index_n_heads * self.index_head_dim, bias=False)
-        self.index_k_proj = nn.Linear(self.dim, self.index_n_heads * self.index_head_dim, bias=False)
-        self.index_w_proj = nn.Linear(self.dim, self.index_n_heads, bias=False)
+        self.index_wq_b = nn.Linear(self.q_lora_rank, self.index_n_heads * self.index_head_dim, bias=False)
+        self.index_wk = nn.Linear(self.dim, self.index_head_dim, bias=False)
+        self.index_k_norm = nn.LayerNorm(self.index_head_dim)
+        self.index_weights_proj = nn.Linear(self.dim, self.index_n_heads, bias=False)
 
         self.q_proj_out_dim = self.n_heads * self.qk_head_dim
         self.kv_a_out_dim = self.kv_lora_rank + self.qk_rope_head_dim
@@ -224,8 +226,10 @@ class DSA2DMLAAttention(nn.Module):
         if detach_inputs:
             tokens = tokens.detach()
         batch, seq_len, _ = tokens.shape
-        q = self.index_q_proj(tokens).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
-        k = self.index_k_proj(tokens).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
+        q_latent = self.q_norm(self.wq_a(tokens))
+        q = self.index_wq_b(q_latent).view(batch, seq_len, self.index_n_heads, self.index_head_dim).permute(0, 2, 1, 3)
+        k = self.index_wk(tokens)
+        k = self.index_k_norm(k).view(batch, 1, seq_len, self.index_head_dim)
         q = apply_partial_rope_2d_non_interleaved(
             q,
             H=height,
@@ -239,8 +243,9 @@ class DSA2DMLAAttention(nn.Module):
             rope_dim=self.index_rope_head_dim,
         )
         q = fwht_last_dim(q)
-        k = fwht_last_dim(k)
-        w = self.index_w_proj(tokens)
+        k = fwht_last_dim(k).expand(-1, self.index_n_heads, -1, -1)
+        w = self.index_weights_proj(tokens.to(dtype=torch.float32))
+        w = w * (self.index_n_heads ** -0.5) * self.index_softmax_scale
         return self.indexer(q, k, w)
 
     def prepare_warmup_indexer_inputs(self, x: torch.Tensor) -> dict[str, torch.Tensor]:

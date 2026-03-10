@@ -253,13 +253,15 @@ def indexer_logits_reference(
     if detach_inputs:
         tokens = tokens.detach()
     batch, seq_len, _ = tokens.shape
-    q = mod.index_q_proj(tokens).view(batch, seq_len, mod.index_n_heads, mod.index_head_dim).permute(0, 2, 1, 3)
-    k = mod.index_k_proj(tokens).view(batch, seq_len, mod.index_n_heads, mod.index_head_dim).permute(0, 2, 1, 3)
-    w = mod.index_w_proj(tokens)
+    q_latent = mod.q_norm(mod.wq_a(tokens))
+    q = mod.index_wq_b(q_latent).view(batch, seq_len, mod.index_n_heads, mod.index_head_dim).permute(0, 2, 1, 3)
+    k = mod.index_wk(tokens)
+    k = mod.index_k_norm(k).view(batch, 1, seq_len, mod.index_head_dim)
+    w = mod.index_weights_proj(tokens.to(dtype=torch.float32)) * (mod.index_n_heads ** -0.5) * mod.index_softmax_scale
     q = naive_partial_rope_2d_non_interleaved(q, H=height, W=width, rope_dim=mod.index_rope_head_dim)
     k = naive_partial_rope_2d_non_interleaved(k, H=height, W=width, rope_dim=mod.index_rope_head_dim)
     q = naive_fwht(q)
-    k = naive_fwht(k)
+    k = naive_fwht(k).expand(-1, mod.index_n_heads, -1, -1)
     q_q, q_scale = reference_fp8_quant(q)
     k_q, k_scale = reference_fp8_quant(k)
     logits = naive_weighted_relu_index(
