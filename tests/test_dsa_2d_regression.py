@@ -38,3 +38,28 @@ def test_dsa_benchmark_harness_smoke(tmp_path):
     result = namespace["run_benchmark_smoke"](output_dir=tmp_path)
 
     assert "cases" in result
+    assert len(result["cases"]) == 1
+    case = result["cases"][0]
+    assert case["name"] == "smoke_4x4_topk_equals_t"
+    assert case["shape"] == [1, 32, 4, 4]
+    assert "dsa_sparse_ms" in case
+    assert "dense_mla_ms" in case
+    assert "nsa_ms" in case
+    assert "flash_mha_ms" in case
+    assert "topk" in case
+    assert "num_heads" in case
+
+
+def test_dsa_benchmark_harness_marks_oom_result():
+    script = Path(__file__).resolve().parents[1] / "artifacts" / "dsa_diagnostics" / "bench_dsa_2d_vs_dense_mla.py"
+    namespace = runpy.run_path(str(script))
+
+    result = namespace["_time_ms_or_error"](
+        lambda: (_ for _ in ()).throw(RuntimeError("CUDA out of memory. Tried to allocate 1.00 GiB")),
+        device=torch.device("cpu"),
+        warmup=0,
+        iters=1,
+    )
+
+    assert result["status"] == "oom"
+    assert result["ms"] is None

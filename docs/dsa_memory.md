@@ -271,6 +271,78 @@ Verification:
 2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
    - result: `37 passed, 1 warning`
 
+### 2026-03-10: DSA benchmark harness expansion and A100 baseline
+
+Status:
+
+1. complete
+
+What landed:
+
+1. [bench_dsa_2d_vs_dense_mla.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/bench_dsa_2d_vs_dense_mla.py) now compares four paths on the same `x[B,C,H,W]` contract:
+   - `DSA2DMLAAttention`
+   - dense MLA reference
+   - current NSA module
+   - dense MHA via [EfficientGlobalAttention](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/txunet.py)
+2. the harness now records structured per-baseline statuses (`ok` or `oom`) instead of crashing on long-sequence dense baselines
+3. smoke/schema coverage expanded in [tests/test_dsa_2d_regression.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_regression.py)
+
+Mixed-precision bug fixed during this work:
+
+1. `build_indexer_logits()` no longer feeds float32 activations into bf16 indexer weights
+2. the indexer weight projection now runs in module dtype and is cast to float32 only after projection
+3. bf16 regression coverage added in [tests/test_dsa_2d_indexer.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_indexer.py)
+
+Artifacts:
+
+1. smoke benchmark:
+   - [dsa_benchmark_smoke.json](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_benchmark_smoke.json)
+2. A100 bf16 suite:
+   - [dsa_benchmark_cuda_bfloat16.json](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_benchmark_cuda_bfloat16.json)
+3. A100 DSA hotspot profile:
+   - [dsa_profile_a100_128x128_c384_h6_g3_topk256.txt](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/dsa_profile_a100_128x128_c384_h6_g3_topk256.txt)
+
+Observed A100 bf16 results (`GPU 0`, `warmup=1`, `iters=1`):
+
+1. `128x128, C=384, heads=6, G=3, topk=256`
+   - dense MLA: `14.82 ms`
+   - DSA sparse: `88.38 ms`
+   - NSA: `10.68 ms`
+   - Flash MHA: `3.29 ms`
+2. `256x256, C=384, heads=6, G=3, topk=256`
+   - dense MLA: `oom`
+   - DSA sparse: `oom`
+   - NSA: `70.82 ms`
+   - Flash MHA: `38.74 ms`
+3. `128x128, C=512, heads=8, G=4, topk=256`
+   - dense MLA: `16.19 ms`
+   - DSA sparse: `85.43 ms`
+   - NSA: `11.23 ms`
+   - Flash MHA: `4.19 ms`
+4. `256x256, C=512, heads=8, G=4, topk=256`
+   - dense MLA: `oom`
+   - DSA sparse: `oom`
+   - NSA: `81.50 ms`
+   - Flash MHA: `52.14 ms`
+
+Profiler signal for current DSA at `128x128, C=384, heads=6, G=3, topk=256`:
+
+1. dominant work is not MLA math itself
+2. top CUDA consumers are:
+   - segmented `sort/topk`
+   - `gather`
+   - `bmm`
+3. current DSA implementation is therefore bottlenecked by selector/index movement and materialization, not by a tuned sparse MLA kernel
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_regression.py -k "benchmark_harness_smoke or marks_oom_result" -v`
+   - result: `2 passed`
+2. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_indexer.py -k "supports_bfloat16_module_dtype" -v`
+   - result: `1 passed`
+3. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_rope.py tests/test_dsa_2d_mla.py tests/test_dsa_2d_indexer.py tests/test_dsa_2d_sparse_attention.py tests/test_dsa_2d_training.py tests/test_dsa_2d_regression.py -v`
+   - result: `39 passed, 1 warning`
+
 ### 2026-03-10: Dense MLA reference gate
 
 Status:

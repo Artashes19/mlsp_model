@@ -244,7 +244,7 @@ class DSA2DMLAAttention(nn.Module):
         )
         q = fwht_last_dim(q)
         k = fwht_last_dim(k).expand(-1, self.index_n_heads, -1, -1)
-        w = self.index_weights_proj(tokens.to(dtype=torch.float32))
+        w = self.index_weights_proj(tokens).to(dtype=torch.float32)
         w = w * (self.index_n_heads ** -0.5) * self.index_softmax_scale
         return self.indexer(q, k, w)
 

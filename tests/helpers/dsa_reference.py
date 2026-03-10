@@ -257,7 +257,7 @@ def indexer_logits_reference(
     q = mod.index_wq_b(q_latent).view(batch, seq_len, mod.index_n_heads, mod.index_head_dim).permute(0, 2, 1, 3)
     k = mod.index_wk(tokens)
     k = mod.index_k_norm(k).view(batch, 1, seq_len, mod.index_head_dim)
-    w = mod.index_weights_proj(tokens.to(dtype=torch.float32)) * (mod.index_n_heads ** -0.5) * mod.index_softmax_scale
+    w = mod.index_weights_proj(tokens).to(dtype=torch.float32) * (mod.index_n_heads ** -0.5) * mod.index_softmax_scale
     q = naive_partial_rope_2d_non_interleaved(q, H=height, W=width, rope_dim=mod.index_rope_head_dim)
     k = naive_partial_rope_2d_non_interleaved(k, H=height, W=width, rope_dim=mod.index_rope_head_dim)
     q = naive_fwht(q)
