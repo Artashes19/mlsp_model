@@ -61,6 +61,52 @@ def test_indexer_topk_handles_ties_and_all_negative_cases():
     assert idx.tolist() == [[[0, 1]]]
 
 
+def test_streaming_weighted_relu_topk_matches_dense_small_case():
+    from src.ops import dsa_indexer
+
+    torch.manual_seed(0)
+    q = torch.randn(1, 2, 3, 8)
+    k = torch.randn(1, 2, 5, 8)
+    w = torch.randn(1, 3, 2)
+
+    dense_scores = dsa_indexer.weighted_relu_index_score(q, k, w)
+    dense_idx = dsa_indexer.stable_topk(dense_scores, k=2)
+    dense_top_scores = torch.gather(dense_scores, dim=-1, index=dense_idx)
+
+    stream_scores, stream_idx = dsa_indexer.streaming_weighted_relu_topk(q, k, w, topk=2, block_s=2)
+
+    torch.testing.assert_close(stream_scores, dense_top_scores)
+    torch.testing.assert_close(stream_idx, dense_idx)
+
+
+def test_streaming_weighted_relu_topk_breaks_ties_by_lower_index():
+    from src.ops import dsa_indexer
+
+    q = torch.ones(1, 1, 1, 4)
+    k = torch.tensor([[[[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0]]]])
+    w = torch.ones(1, 1, 1)
+
+    stream_scores, stream_idx = dsa_indexer.streaming_weighted_relu_topk(q, k, w, topk=2, block_s=1)
+
+    assert stream_scores.tolist() == [[[4.0, 4.0]]]
+    assert stream_idx.tolist() == [[[0, 1]]]
+
+
+def test_streaming_weighted_relu_topk_is_block_size_invariant():
+    from src.ops import dsa_indexer
+
+    torch.manual_seed(1)
+    q = torch.randn(1, 2, 4, 8)
+    k = torch.randn(1, 2, 6, 8)
+    w = torch.randn(1, 4, 2)
+
+    scores_block_1, idx_block_1 = dsa_indexer.streaming_weighted_relu_topk(q, k, w, topk=3, block_s=1)
+    scores_block_4, idx_block_4 = dsa_indexer.streaming_weighted_relu_topk(q, k, w, topk=3, block_s=4)
+
+    torch.testing.assert_close(scores_block_1, scores_block_4)
+    torch.testing.assert_close(idx_block_1, idx_block_4)
+
+
 def test_dsa2d_indexer_returns_logits_and_indices():
     from src.networks.dsa_2d import DSA2DIndexer, DSA2DMLAConfig
 
