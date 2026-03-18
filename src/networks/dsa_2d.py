@@ -149,7 +149,7 @@ class DSA2DMLAAttention(nn.Module):
         tokens = x.flatten(start_dim=2).transpose(1, 2)
         return tokens, height, width
 
-    def _dense_mla_qkv(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
+    def _dense_mla_runtime(self, x: torch.Tensor) -> dict[str, torch.Tensor | int | str]:
         tokens, height, width = self._flatten_tokens(x)
         batch, seq_len, _ = tokens.shape
 
@@ -183,7 +183,26 @@ class DSA2DMLAAttention(nn.Module):
         k_nope = kv[..., :self.qk_nope_head_dim]
         v = kv[..., self.qk_nope_head_dim:]
         k = torch.cat([k_nope, k_pe_shared.expand(-1, self.n_kv_heads, -1, -1)], dim=-1)
-        return q, k, v, height, width
+        return {
+            "q": q,
+            "kv": torch.cat([v, k], dim=-1),
+            "height": height,
+            "width": width,
+            "d_qk": self.qk_head_dim,
+            "d_v": self.v_head_dim,
+            "kv_layout": "v_then_k",
+        }
+
+    def _dense_mla_qkv(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
+        runtime = self._dense_mla_runtime(x)
+        q = runtime["q"]
+        kv = runtime["kv"]
+        height = runtime["height"]
+        width = runtime["width"]
+        d_v = int(runtime["d_v"])
+        k = kv[..., d_v:]
+        v = kv[..., :d_v]
+        return q, k, v, int(height), int(width)
 
     def forward_dense_reference(self, x: torch.Tensor) -> torch.Tensor:
         q, k, v, height, width = self._dense_mla_qkv(x)

@@ -74,6 +74,32 @@ def test_sparse_runtime_does_not_repeat_interleave_kv(monkeypatch):
     assert not calls
 
 
+def test_mla_runtime_builder_returns_packed_q_and_kv():
+    mod = DSA2DMLAAttention(make_small_cfg(index_topk=2, n_kv_heads=1)).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+
+    runtime = mod._dense_mla_runtime(x)
+
+    assert set(runtime.keys()) >= {"q", "kv", "height", "width", "d_qk", "d_v"}
+    assert runtime["height"] == 2
+    assert runtime["width"] == 2
+    assert runtime["d_qk"] == mod.qk_head_dim
+    assert runtime["d_v"] == mod.v_head_dim
+    assert runtime["q"].shape == (1, mod.n_heads, 4, mod.qk_head_dim)
+    assert runtime["kv"].shape[:3] == (1, mod.n_kv_heads, 4)
+    assert runtime["kv"].shape[-1] >= mod.v_head_dim
+
+
+def test_mla_runtime_builder_preserves_query_tensor_from_old_path():
+    mod = DSA2DMLAAttention(make_small_cfg(index_topk=2, n_kv_heads=1)).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+
+    q_old, _, _, _, _ = mod._dense_mla_qkv(x)
+    runtime = mod._dense_mla_runtime(x)
+
+    torch.testing.assert_close(runtime["q"], q_old)
+
+
 def test_flashmla_backend_falls_back_to_reference_on_cpu(monkeypatch):
     mod = DSA2DMLAAttention(
         make_small_cfg(index_topk=2, sparse_backend="flashmla", n_kv_heads=1)
