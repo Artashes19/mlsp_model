@@ -228,6 +228,43 @@ def test_flashmla_adapter_matches_reference_small_case():
     torch.testing.assert_close(out, ref)
 
 
+def test_flashmla_adapter_packs_runtime_for_kernel_call(monkeypatch):
+    from src.ops.dsa_flashmla import flashmla_sparse_mla_forward
+
+    runtime, idx, g = _make_small_flashmla_mqa_case()
+    called = {}
+
+    def _kernel(q, kv, indices, sm_scale, d_v, attn_sink=None, topk_length=None):
+        called["q_shape"] = tuple(q.shape)
+        called["kv_shape"] = tuple(kv.shape)
+        called["indices_shape"] = tuple(indices.shape)
+        called["indices_dtype"] = indices.dtype
+        called["sm_scale"] = sm_scale
+        called["d_v"] = d_v
+        out = torch.zeros(q.shape[0], q.shape[1], d_v, dtype=q.dtype)
+        max_logits = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32)
+        lse = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32)
+        return out, max_logits, lse
+
+    monkeypatch.setattr("src.ops.dsa_flashmla.flashmla_import_or_none", lambda: _kernel)
+
+    out = flashmla_sparse_mla_forward(
+        runtime,
+        idx,
+        gqa_group_size=g,
+        softmax_scale=runtime["d_qk"] ** -0.5,
+        force_reference_kernel=False,
+    )
+
+    assert called["q_shape"] == (runtime["q"].shape[2], runtime["q"].shape[1], runtime["d_qk"])
+    assert called["kv_shape"] == (runtime["kv"].shape[2], runtime["kv"].shape[1], runtime["kv"].shape[3])
+    assert called["indices_shape"] == (idx.shape[1], runtime["kv"].shape[1], idx.shape[2])
+    assert called["indices_dtype"] == torch.int32
+    assert called["sm_scale"] == runtime["d_qk"] ** -0.5
+    assert called["d_v"] == runtime["d_v"]
+    assert out.shape == (1, runtime["q"].shape[1], runtime["q"].shape[2], runtime["d_v"])
+
+
 def _make_small_sparse_case(*, gqa_group_size: int = 2):
     batch = 1
     h_kv = 2

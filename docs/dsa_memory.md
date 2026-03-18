@@ -979,7 +979,11 @@ What landed:
    - `unpack_mla_runtime_qkv(...)`
    - `streaming_sparse_mla_reference_from_runtime(...)`
 5. `forward_sparse_from_indices(...)` now uses the packed runtime on the reference backend
-6. the local `FlashMLA` adapter surface now also accepts the packed runtime contract, even though the real kernel call is still not wired locally
+6. the local `FlashMLA` adapter surface now also accepts the packed runtime contract
+7. the local `FlashMLA` adapter now packs the runtime into kernel-call shapes:
+   - `q: [s_q, h_q, d_qk]`
+   - `kv: [s_kv, h_kv, d_v + d_qk]`
+   - `indices: [s_q, h_kv, topk]`, `int32`
 
 Important findings:
 
@@ -994,9 +998,9 @@ Important findings:
 Verification:
 
 1. local DSA suite after the refactor:
-   - `75 passed`
+   - `76 passed`
 
 Next step:
 
-1. wire the real H100 `FlashMLA` forward call against this packed runtime
-2. validate forward parity against the packed pure-PyTorch reference on supported MQA shapes
+1. validate the real H100 `FlashMLA` forward call against this packed runtime
+2. compare forward outputs against the packed pure-PyTorch reference on supported MQA shapes

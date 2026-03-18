@@ -55,5 +55,40 @@ def flashmla_sparse_mla_forward(
     flash_kernel = flashmla_import_or_none()
     if flash_kernel is None:
         raise RuntimeError("FlashMLA is not installed")
-    unpack_mla_runtime_qkv(runtime)
-    raise NotImplementedError("Real FlashMLA sparse MLA forward call is not wired yet")
+    q, _, _ = unpack_mla_runtime_qkv(runtime)
+    kv = runtime["kv"]
+    d_v = int(runtime["d_v"])
+    attn_sink = kwargs.get("attn_sink")
+    topk_length = kwargs.get("topk_length")
+
+    if not isinstance(kv, torch.Tensor):
+        raise TypeError("runtime['kv'] must be a tensor")
+    if idx.ndim != 3:
+        raise ValueError(f"Expected idx as [B, Q, K], got shape={tuple(idx.shape)}")
+    if q.shape[0] != idx.shape[0] or q.shape[2] != idx.shape[1]:
+        raise ValueError("Packed runtime q and idx must agree on batch/query dimensions")
+    if kv.shape[1] != 1:
+        raise ValueError("Real FlashMLA sparse prefill is only wired for MQA (h_kv == 1)")
+
+    out_batches = []
+    for batch_idx in range(q.shape[0]):
+        q_batch = q[batch_idx].permute(1, 0, 2).contiguous()
+        kv_batch = kv[batch_idx].permute(1, 0, 2).contiguous()
+        indices_batch = idx[batch_idx].to(dtype=torch.int32)
+        indices_batch = indices_batch[:, None, :].expand(-1, kv.shape[1], -1).contiguous()
+        topk_length_batch = None
+        if topk_length is not None:
+            topk_length_batch = topk_length[batch_idx].to(dtype=torch.int32)
+
+        out, _, _ = flash_kernel(
+            q_batch,
+            kv_batch,
+            indices_batch,
+            softmax_scale,
+            d_v,
+            attn_sink=attn_sink,
+            topk_length=topk_length_batch,
+        )
+        out_batches.append(out.permute(1, 0, 2).contiguous())
+
+    return torch.stack(out_batches, dim=0)
