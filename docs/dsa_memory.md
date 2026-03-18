@@ -1040,3 +1040,54 @@ Next step:
 1. push this absorbed-runtime refactor to `xoren22`
 2. fast-forward the H100 cluster worktree
 3. run the first real `FlashMLA` forward parity/smoke on supported MQA shapes
+
+### 2026-03-18: First real H100 FlashMLA forward parity
+
+Status:
+
+1. real `FlashMLA` forward now matches the absorbed-MLA reference on the first supported H100 MQA case
+
+Configuration:
+
+1. device:
+   - `NVIDIA H100 80GB HBM3`
+2. DSA config:
+   - `dim=1152`
+   - `n_heads=64`
+   - `n_kv_heads=1`
+   - `q_lora_rank=1536`
+   - `kv_lora_rank=512`
+   - `qk_nope_head_dim=128`
+   - `qk_rope_head_dim=64`
+   - `v_head_dim=128`
+   - `index_n_heads=1`
+   - `index_head_dim=128`
+   - `index_topk=128`
+3. input:
+   - `B=1`
+   - `H=W=8`
+   - `dtype=bf16`
+   - supported MQA forward-only path
+
+Verification:
+
+1. output shape:
+   - `(1, 1152, 8, 8)`
+2. parity:
+   - `max_abs_diff = 0.0`
+   - `mean_abs_diff = 0.0`
+3. output sums:
+   - `sum_ref = -20.072839736938477`
+   - `sum_flash = -20.072839736938477`
+
+Interpretation:
+
+1. the absorbed runtime contract is correct for the real H100 `FlashMLA` sparse-prefill kernel
+2. the current H100 forward path is now validated on one exact MQA case
+3. the next work should expand from parity to supported-shape benchmarking and then dispatch policy
+
+Next step:
+
+1. add a reproducible local note or harness for the supported H100 parity shape
+2. benchmark `reference` vs `flashmla` on supported MQA forward shapes
+3. widen coverage carefully before touching training or selector kernels
