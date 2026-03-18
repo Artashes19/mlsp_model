@@ -18,7 +18,6 @@ from src.ops.dsa_flashmla import flashmla_is_supported, flashmla_sparse_mla_forw
 from src.ops.dsa_sparse_mla import (
     streaming_sparse_mla_reference,
     streaming_sparse_mla_reference_from_runtime,
-    unpack_mla_runtime_qkv,
 )
 
 
@@ -229,11 +228,8 @@ class DSA2DMLAAttention(nn.Module):
             device=x.device,
             n_kv_heads=self.n_kv_heads,
         ):
-            q, k, v = unpack_mla_runtime_qkv(runtime)
             out = flashmla_sparse_mla_forward(
-                q,
-                k,
-                v,
+                runtime,
                 idx,
                 gqa_group_size=self.gqa_group_size,
                 softmax_scale=self.softmax_scale,

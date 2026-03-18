@@ -4,7 +4,10 @@ from collections.abc import Callable
 
 import torch
 
-from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference
+from src.ops.dsa_sparse_mla import (
+    streaming_sparse_mla_reference_from_runtime,
+    unpack_mla_runtime_qkv,
+)
 
 
 def flashmla_import_or_none() -> Callable | None:
@@ -32,17 +35,18 @@ def flashmla_is_supported(
     return sm >= (9, 0)
 
 
-def flashmla_sparse_mla_forward(*args, **kwargs) -> torch.Tensor:
-    q, k, v, idx = args
+def flashmla_sparse_mla_forward(
+    runtime: dict[str, torch.Tensor | int | str],
+    idx: torch.Tensor,
+    **kwargs,
+) -> torch.Tensor:
     gqa_group_size = kwargs["gqa_group_size"]
     softmax_scale = kwargs["softmax_scale"]
     force_reference_kernel = kwargs.get("force_reference_kernel", False)
 
     if force_reference_kernel:
-        return streaming_sparse_mla_reference(
-            q,
-            k,
-            v,
+        return streaming_sparse_mla_reference_from_runtime(
+            runtime,
             idx,
             gqa_group_size=gqa_group_size,
             softmax_scale=softmax_scale,
@@ -51,4 +55,5 @@ def flashmla_sparse_mla_forward(*args, **kwargs) -> torch.Tensor:
     flash_kernel = flashmla_import_or_none()
     if flash_kernel is None:
         raise RuntimeError("FlashMLA is not installed")
+    unpack_mla_runtime_qkv(runtime)
     raise NotImplementedError("Real FlashMLA sparse MLA forward call is not wired yet")

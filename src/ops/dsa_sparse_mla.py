@@ -35,8 +35,8 @@ def unpack_mla_runtime_qkv(
         raise ValueError(f"Unsupported kv_layout={kv_layout!r}")
     if q.ndim != 4 or kv.ndim != 4:
         raise ValueError(f"Expected packed q/kv as rank-4 tensors, got {q.ndim}, {kv.ndim}")
-    if q.shape[:3] != (kv.shape[0], q.shape[1], kv.shape[2]):
-        raise ValueError("Packed runtime batch/token dimensions must align between q and kv")
+    if q.shape[0] != kv.shape[0]:
+        raise ValueError("Packed runtime batch dimensions must align between q and kv")
     if q.shape[-1] != d_qk:
         raise ValueError(f"Expected q last dim {d_qk}, got {q.shape[-1]}")
     if kv.shape[-1] != d_v + d_qk:

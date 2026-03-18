@@ -175,50 +175,53 @@ def _make_small_flashmla_mqa_case():
     q = torch.randn(batch, h_q, query_tokens, dim, dtype=torch.float32)
     k = torch.randn(batch, h_kv, source_tokens, dim, dtype=torch.float32)
     v = torch.randn(batch, h_kv, source_tokens, dim, dtype=torch.float32)
+    runtime = {
+        "q": q,
+        "kv": torch.cat([v, k], dim=-1),
+        "height": 2,
+        "width": 2,
+        "d_qk": dim,
+        "d_v": dim,
+        "kv_layout": "v_then_k",
+    }
     idx = torch.tensor(
         [[[0, 3, 1], [4, 1, 0], [2, 2, 1], [3, 0, 4]]],
         dtype=torch.int64,
     )
-    return q, k, v, idx, gqa_group_size
+    return runtime, idx, gqa_group_size
 
 
 def test_flashmla_adapter_preserves_output_shape_small_case():
     from src.ops.dsa_flashmla import flashmla_sparse_mla_forward
 
-    q, k, v, idx, g = _make_small_flashmla_mqa_case()
+    runtime, idx, g = _make_small_flashmla_mqa_case()
     out = flashmla_sparse_mla_forward(
-        q,
-        k,
-        v,
+        runtime,
         idx,
         gqa_group_size=g,
-        softmax_scale=q.shape[-1] ** -0.5,
+        softmax_scale=runtime["d_qk"] ** -0.5,
         force_reference_kernel=True,
     )
 
-    assert out.shape == (1, q.shape[1], q.shape[2], v.shape[-1])
+    assert out.shape == (1, runtime["q"].shape[1], runtime["q"].shape[2], runtime["d_v"])
 
 
 def test_flashmla_adapter_matches_reference_small_case():
     from src.ops.dsa_flashmla import flashmla_sparse_mla_forward
-    from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference
+    from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference_from_runtime
 
-    q, k, v, idx, g = _make_small_flashmla_mqa_case()
-    ref = streaming_sparse_mla_reference(
-        q,
-        k,
-        v,
+    runtime, idx, g = _make_small_flashmla_mqa_case()
+    ref = streaming_sparse_mla_reference_from_runtime(
+        runtime,
         idx,
         gqa_group_size=g,
-        softmax_scale=q.shape[-1] ** -0.5,
+        softmax_scale=runtime["d_qk"] ** -0.5,
     )
     out = flashmla_sparse_mla_forward(
-        q,
-        k,
-        v,
+        runtime,
         idx,
         gqa_group_size=g,
-        softmax_scale=q.shape[-1] ** -0.5,
+        softmax_scale=runtime["d_qk"] ** -0.5,
         force_reference_kernel=True,
     )
 
@@ -363,6 +366,30 @@ def test_forward_sparse_from_indices_uses_packed_runtime_helper(monkeypatch):
     )
     out = mod.forward_sparse_from_indices(x, idx)
     assert out.shape == x.shape
+
+
+def test_forward_sparse_from_indices_passes_packed_runtime_to_flashmla(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=3, sparse_backend="flashmla", n_kv_heads=1)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+    idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
+    sentinel = torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+    seen = {}
+
+    def _flash(runtime, idx_arg, **kwargs):
+        seen["runtime_keys"] = set(runtime.keys())
+        seen["idx_shape"] = tuple(idx_arg.shape)
+        return sentinel
+
+    monkeypatch.setattr("src.networks.dsa_2d.flashmla_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr("src.networks.dsa_2d.flashmla_sparse_mla_forward", _flash)
+
+    out = mod.forward_sparse_from_indices(x, idx)
+
+    assert out.shape == x.shape
+    assert seen["runtime_keys"] >= {"q", "kv", "height", "width", "d_qk", "d_v"}
+    assert seen["idx_shape"] == tuple(idx.shape)
 
 
 def test_forward_sparse_from_indices_matches_old_small_reference():

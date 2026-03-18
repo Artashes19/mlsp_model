@@ -956,3 +956,47 @@ Implication:
 1. `FlashMLA` is now usable on the H100 cluster for sparse prefill
 2. the cluster/environment layer is no longer the blocker
 3. the next real step is integrating a DeepSeek-compatible `q + kv` MLA contract in our DSA module so the H100 `FlashMLA` path can replace the current sparse MLA reference path honestly
+
+### 2026-03-18: Local DSA `q + kv` refactor checkpoint
+
+Status:
+
+1. local packed-runtime refactor is now the source of truth
+
+What landed:
+
+1. `DSA2DMLAAttention` now has `_dense_mla_runtime(x)` as the internal MLA runtime builder
+2. the runtime builder returns packed:
+   - `q`
+   - `kv`
+   - `height`
+   - `width`
+   - `d_qk`
+   - `d_v`
+   - `kv_layout="v_then_k"`
+3. `_dense_mla_qkv(x)` is now a compatibility wrapper over the packed runtime
+4. the pure PyTorch sparse reference path now has:
+   - `unpack_mla_runtime_qkv(...)`
+   - `streaming_sparse_mla_reference_from_runtime(...)`
+5. `forward_sparse_from_indices(...)` now uses the packed runtime on the reference backend
+6. the local `FlashMLA` adapter surface now also accepts the packed runtime contract, even though the real kernel call is still not wired locally
+
+Important findings:
+
+1. the first packed local contract that is stable enough for continued work is:
+   - `q: [B, h_q, T_q, d_qk]`
+   - `kv: [B, h_kv, T_kv, d_v + d_qk]`
+   - values are stored first in `kv`, then key features
+2. the packed runtime must allow `T_q != T_kv`
+   - this mattered immediately for the local `FlashMLA` adapter smoke tests
+3. local reference and adapter tests are now aligned to the packed runtime, not the old `q/k/v` adapter signature
+
+Verification:
+
+1. local DSA suite after the refactor:
+   - `75 passed`
+
+Next step:
+
+1. wire the real H100 `FlashMLA` forward call against this packed runtime
+2. validate forward parity against the packed pure-PyTorch reference on supported MQA shapes
