@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 import time
@@ -12,9 +13,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 from src.ops.dsa_deepgemm import deepgemm_weighted_relu_logits
 from src.ops.dsa_indexer import stable_topk
+
+
+def _load_dsa_symbols() -> tuple[type, type]:
+    module_path = REPO_ROOT / "src" / "networks" / "dsa_2d.py"
+    spec = importlib.util.spec_from_file_location("dsa_2d_bench_module", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load DSA module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.DSA2DMLAAttention, module.DSA2DMLAConfig
+
+
+DSA2DMLAAttention, DSA2DMLAConfig = _load_dsa_symbols()
 
 
 NATIVE_CFG = dict(
