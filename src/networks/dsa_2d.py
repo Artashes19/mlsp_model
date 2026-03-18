@@ -15,7 +15,11 @@ from src.ops.dsa_indexer import (
 )
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved, apply_partial_rope_2d_non_interleaved
 from src.ops.dsa_flashmla import flashmla_is_supported, flashmla_sparse_mla_forward
-from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference
+from src.ops.dsa_sparse_mla import (
+    streaming_sparse_mla_reference,
+    streaming_sparse_mla_reference_from_runtime,
+    unpack_mla_runtime_qkv,
+)
 
 
 @dataclass(frozen=True)
@@ -217,12 +221,15 @@ class DSA2DMLAAttention(nn.Module):
         return out.transpose(1, 2).reshape(x.shape[0], self.dim, height, width)
 
     def forward_sparse_from_indices(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
-        q, k, v, height, width = self._dense_mla_qkv(x)
+        runtime = self._dense_mla_runtime(x)
+        height = int(runtime["height"])
+        width = int(runtime["width"])
         batch = x.shape[0]
         if self.sparse_backend == "flashmla" and flashmla_is_supported(
             device=x.device,
             n_kv_heads=self.n_kv_heads,
         ):
+            q, k, v = unpack_mla_runtime_qkv(runtime)
             out = flashmla_sparse_mla_forward(
                 q,
                 k,
@@ -232,10 +239,8 @@ class DSA2DMLAAttention(nn.Module):
                 softmax_scale=self.softmax_scale,
             )
         else:
-            out = streaming_sparse_mla_reference(
-                q,
-                k,
-                v,
+            out = streaming_sparse_mla_reference_from_runtime(
+                runtime,
                 idx,
                 gqa_group_size=self.gqa_group_size,
                 softmax_scale=self.softmax_scale,

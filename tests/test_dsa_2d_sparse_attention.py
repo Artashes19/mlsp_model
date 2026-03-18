@@ -113,7 +113,7 @@ def test_flashmla_backend_falls_back_to_reference_on_cpu(monkeypatch):
         called["reference"] = True
         return torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
 
-    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference", _reference)
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime", _reference)
     mod.forward_sparse_from_indices(x, idx)
 
     assert called["reference"]
@@ -141,7 +141,7 @@ def test_flashmla_backend_rejects_non_mqa_kernel_path(monkeypatch):
         _flash,
         raising=False,
     )
-    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference", _reference)
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime", _reference)
     mod.forward_sparse_from_indices(x, idx)
 
     assert not called["flash"]
@@ -343,16 +343,24 @@ def test_streaming_sparse_mla_respects_gqa_head_mapping():
     torch.testing.assert_close(out, ref)
 
 
-def test_forward_sparse_from_indices_uses_streaming_sparse_helper(monkeypatch):
+def test_forward_sparse_from_indices_uses_packed_runtime_helper(monkeypatch):
     mod = DSA2DMLAAttention(make_small_cfg(index_topk=3)).float()
     x = torch.randn(1, mod.dim, 2, 2)
     idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
     sentinel = torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
 
-    def _streaming(*args, **kwargs):
+    def _packed_runtime(*args, **kwargs):
         return sentinel
 
-    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference", _streaming)
+    def _fail(*args, **kwargs):
+        raise AssertionError("old unpacked sparse helper must not be used")
+
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference", _fail)
+    monkeypatch.setattr(
+        "src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime",
+        _packed_runtime,
+        raising=False,
+    )
     out = mod.forward_sparse_from_indices(x, idx)
     assert out.shape == x.shape
 
