@@ -269,6 +269,29 @@ def test_deepgemm_support_check_rejects_pre_sm90():
     )
 
 
+def test_deepgemm_support_check_rejects_unsupported_index_head_count():
+    from src.ops.dsa_deepgemm import deepgemm_is_supported
+
+    assert not deepgemm_is_supported(
+        device=torch.device("cuda"),
+        n_kv_heads=1,
+        index_n_heads=1,
+        sm=(9, 0),
+    )
+
+
+def test_deepgemm_support_check_rejects_unsupported_index_head_dim():
+    from src.ops.dsa_deepgemm import deepgemm_is_supported
+
+    assert not deepgemm_is_supported(
+        device=torch.device("cuda"),
+        n_kv_heads=1,
+        index_n_heads=32,
+        index_head_dim=16,
+        sm=(9, 0),
+    )
+
+
 def _fake_deepgemm_mqa_kernel(q, kv, weights, cu_seq_len_k_start, cu_seq_len_k_end, clean_logits):
     kv_q, kv_scale = kv
     kv_deq = kv_q.to(dtype=torch.float32) * kv_scale.to(dtype=torch.float32).unsqueeze(-1)

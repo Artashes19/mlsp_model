@@ -40,7 +40,7 @@ NATIVE_CFG = dict(
     qk_nope_head_dim=128,
     qk_rope_head_dim=64,
     v_head_dim=128,
-    index_n_heads=1,
+    index_n_heads=64,
     index_head_dim=128,
 )
 
@@ -96,6 +96,8 @@ def logits_only_case(
     iters: int,
 ) -> dict[str, object]:
     device = x.device
+    if ref.index_n_heads != 1 and x.shape[-1] > 64:
+        return {"status": "skipped", "reason": "dense_reference_logits_not_practical_for_multihead_native_case"}
     with torch.inference_mode():
         q, k, w = ref._prepare_indexer_qkw(x)
         logits_ref = ref.indexer(q, k, w)[0]

@@ -364,6 +364,8 @@ class DSA2DMLAAttention(nn.Module):
         if should_try_deepgemm and deepgemm_is_supported(
             device=x.device,
             n_kv_heads=self.n_kv_heads,
+            index_n_heads=self.index_n_heads,
+            index_head_dim=self.index_head_dim,
         ):
             q, k, w = self._prepare_indexer_qkw(x, detach_inputs=detach_inputs)
             logits = deepgemm_weighted_relu_logits(q, k, w)

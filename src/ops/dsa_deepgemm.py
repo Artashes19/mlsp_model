@@ -25,11 +25,17 @@ def deepgemm_is_supported(
     *,
     device: torch.device,
     n_kv_heads: int,
+    index_n_heads: int | None = None,
+    index_head_dim: int | None = None,
     sm: tuple[int, int] | None = None,
 ) -> bool:
     if device.type != "cuda":
         return False
     if n_kv_heads != 1:
+        return False
+    if index_n_heads is not None and index_n_heads not in {32, 64, 128}:
+        return False
+    if index_head_dim is not None and index_head_dim not in {32, 64, 128}:
         return False
     if sm is None:
         if not torch.cuda.is_available():
