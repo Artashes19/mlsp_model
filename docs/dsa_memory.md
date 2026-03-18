@@ -1195,3 +1195,97 @@ Verification:
    - `auto` falls back to reference when grad is on
 2. local DSA suite after the dispatch change:
    - `80 passed`
+
+### 2026-03-18: DeepGEMM selector bring-up on H100
+
+Status:
+
+1. partial success
+
+What landed:
+
+1. DeepGEMM selector backend scaffold landed in [src/ops/dsa_deepgemm.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/ops/dsa_deepgemm.py)
+2. `DSA2DMLAAttention` now has `indexer_backend = "auto" | "reference" | "deepgemm"` in [src/networks/dsa_2d.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/src/networks/dsa_2d.py)
+3. local DeepGEMM wrapper parity tests landed in [tests/test_dsa_2d_indexer.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/tests/test_dsa_2d_indexer.py)
+4. H100 benchmark harness landed in [bench_dsa_deepgemm_selector.py](/auto/home/artashes/mlsp_model/dev-clean/.worktrees/nsa-triton-longseq-investigation/artifacts/dsa_diagnostics/bench_dsa_deepgemm_selector.py)
+
+Cluster facts that matter:
+
+1. official DeepGEMM builds and imports in `indoor` on `cluster.ysu.am`
+2. the repo `install.sh` failed only because it used the wrong `pip`; `/home/amkrtchyan/.conda/envs/indoor/bin/python -m pip install dist/*.whl` worked
+3. exported selector kernel is `deep_gemm.fp8_mqa_logits`
+4. DeepGEMM itself warns that `NVCC >= 12.9` is preferable; current cluster build used `12.8`
+
+Locked support gate:
+
+1. DeepGEMM is only a valid runtime selector backend when:
+   - CUDA `sm90+`
+   - grad is disabled
+   - `n_kv_heads == 1`
+   - `index_n_heads in {32, 64, 128}`
+   - `index_head_dim in {32, 64, 128}`
+2. the earlier assumption that `index_n_heads = 1` was a native slice for DeepGEMM was wrong
+3. official DeepSeek-style native selector benchmarking should use many index heads; the H100 harness now uses `index_n_heads = 64`
+
+Artifact:
+
+1. cluster JSON:
+   - `/home/amkrtchyan/codex-deepgemm-selector-bench.json`
+
+Native H100 results on `NVIDIA H100 80GB HBM3`:
+
+Measured with:
+
+1. absorbed MLA config:
+   - `dim=1152`
+   - `n_heads=64`
+   - `n_kv_heads=1`
+   - `q_lora_rank=1536`
+   - `kv_lora_rank=512`
+   - `qk_nope_head_dim=128`
+   - `qk_rope_head_dim=64`
+   - `v_head_dim=128`
+   - `index_n_heads=64`
+   - `index_head_dim=128`
+2. selector reference path kept exact streaming top-k semantics
+3. sparse forward backend stayed on `flashmla` auto-dispatch
+
+Results:
+
+1. `64x64, topk=128`
+   - logits only: `8.44 -> 1.06 ms` (`7.95x`)
+   - selector: `24.97 -> 5.39 ms` (`4.64x`)
+   - full forward: `27.85 -> 8.32 ms` (`3.35x`)
+2. `64x64, topk=256`
+   - logits only: `8.42 -> 1.05 ms` (`8.03x`)
+   - selector: `18.91 -> 5.20 ms` (`3.64x`)
+   - full forward: `21.90 -> 8.23 ms` (`2.66x`)
+3. `128x128, topk=128`
+   - selector: `299.03 -> 41.97 ms` (`7.12x`)
+   - full forward: `309.72 -> 52.75 ms` (`5.87x`)
+4. `128x128, topk=256`
+   - selector: `221.83 -> 42.11 ms` (`5.27x`)
+   - full forward: `232.98 -> 53.26 ms` (`4.37x`)
+5. `256x256, topk=128/256`
+   - current exact streaming-reference benchmark path OOMs on this native multi-head selector slice
+   - no trustworthy speedup ratio recorded yet against the exact reference path
+
+Parity outcome:
+
+1. this slice is not exact selector parity
+2. measured selector score drift at `64x64` and `128x128`:
+   - max abs diff about `0.060-0.064`
+   - mean abs diff about `0.007-0.008`
+3. selected `topk` indices did not match exactly in the measured cases
+4. despite selector drift, full-forward output drift stayed small:
+   - max abs diff about `0.011-0.022`
+   - mean abs diff about `1.4e-4` to `2.2e-4`
+
+Interpretation:
+
+1. DeepGEMM is already a real H100 speed win for the selector stage and full DSA forward on the supported native slice
+2. but the current wrapper should be treated as numerically close, not parity-exact
+3. do not silently broaden auto-dispatch yet if exact selector semantics are still required
+4. next selector work should quantify mismatch rate and decide whether:
+   - current DeepGEMM drift is acceptable for H100 inference use
+   - or the wrapper still needs additional contract/alignment work before wider rollout
