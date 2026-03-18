@@ -103,7 +103,7 @@ def test_dsa_indexer_mode_defaults_to_dense():
     assert mod.indexer_mode == "dense"
 
 
-def test_dsa_sparse_backend_defaults_to_reference():
+def test_dsa_sparse_backend_defaults_to_auto():
     from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 
     cfg = DSA2DMLAConfig(
@@ -122,7 +122,7 @@ def test_dsa_sparse_backend_defaults_to_reference():
 
     mod = DSA2DMLAAttention(cfg).float()
 
-    assert mod.sparse_backend == "reference"
+    assert mod.sparse_backend == "auto"
 
 
 def test_dsa_sparse_backend_rejects_unknown_value():

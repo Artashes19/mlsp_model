@@ -35,7 +35,7 @@ class DSA2DMLAConfig:
     index_head_dim: int = 128
     index_topk: int = 64
     indexer_mode: str = "dense"
-    sparse_backend: str = "reference"
+    sparse_backend: str = "auto"
 
     def __post_init__(self) -> None:
         positive_fields = {
@@ -72,7 +72,7 @@ class DSA2DMLAConfig:
 
         if self.indexer_mode not in {"dense", "streaming"}:
             raise ValueError(f"Unsupported indexer_mode={self.indexer_mode!r}")
-        if self.sparse_backend not in {"reference", "flashmla"}:
+        if self.sparse_backend not in {"auto", "reference", "flashmla"}:
             raise ValueError(f"Unsupported sparse_backend={self.sparse_backend!r}")
 
 
@@ -274,7 +274,8 @@ class DSA2DMLAAttention(nn.Module):
         height = int(runtime["height"])
         width = int(runtime["width"])
         batch = x.shape[0]
-        if self.sparse_backend == "flashmla" and flashmla_is_supported(
+        should_try_flashmla = self.sparse_backend in {"auto", "flashmla"} and not torch.is_grad_enabled()
+        if should_try_flashmla and flashmla_is_supported(
             device=x.device,
             n_kv_heads=self.n_kv_heads,
         ):

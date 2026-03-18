@@ -1165,3 +1165,33 @@ Next step:
 1. keep `flashmla` as the preferred forward backend for supported H100 MQA absorbed-runtime cases
 2. add an explicit local benchmark note or reproducible harness for these native cases
 3. then decide whether the next highest-value work is selector kernels or backward support
+
+### 2026-03-18: H100 FlashMLA forward auto-dispatch
+
+Status:
+
+1. DSA now defaults sparse backend selection to `auto`
+
+Dispatch rule:
+
+1. `flashmla` is used only when all are true:
+   - backend is `auto` or explicit `flashmla`
+   - grad is disabled
+   - runtime is on CUDA
+   - device capability is `sm90+`
+   - `n_kv_heads == 1`
+2. otherwise DSA falls back to the absorbed-MLA reference sparse backend
+
+Reason:
+
+1. H100 native benchmark showed strong forward speedups for the supported MQA absorbed-runtime slice
+2. backward and training paths are not yet kernel-backed
+3. keeping grad-enabled paths on the reference backend avoids silently routing unsupported training work into the forward-only kernel path
+
+Verification:
+
+1. new backend tests:
+   - `auto` uses `flashmla` when supported and grad is off
+   - `auto` falls back to reference when grad is on
+2. local DSA suite after the dispatch change:
+   - `80 passed`

@@ -149,6 +149,61 @@ def test_flashmla_backend_rejects_non_mqa_kernel_path(monkeypatch):
     assert called["reference"]
 
 
+def test_auto_backend_uses_flashmla_when_supported_and_grad_disabled(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=2, sparse_backend="auto", n_kv_heads=1)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+    idx = torch.tensor([[[0, 1]]], dtype=torch.int64).expand(1, 4, 2).clone()
+
+    called = {"flash": False, "reference": False}
+
+    def _flash(*args, **kwargs):
+        called["flash"] = True
+        return torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+
+    def _reference(*args, **kwargs):
+        called["reference"] = True
+        return torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+
+    monkeypatch.setattr("src.networks.dsa_2d.flashmla_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr("src.networks.dsa_2d.flashmla_sparse_mla_forward", _flash)
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime", _reference)
+
+    with torch.inference_mode():
+        mod.forward_sparse_from_indices(x, idx)
+
+    assert called["flash"]
+    assert not called["reference"]
+
+
+def test_auto_backend_falls_back_to_reference_when_grad_enabled(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=2, sparse_backend="auto", n_kv_heads=1)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+    idx = torch.tensor([[[0, 1]]], dtype=torch.int64).expand(1, 4, 2).clone()
+
+    called = {"flash": False, "reference": False}
+
+    def _flash(*args, **kwargs):
+        called["flash"] = True
+        return torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+
+    def _reference(*args, **kwargs):
+        called["reference"] = True
+        return torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+
+    monkeypatch.setattr("src.networks.dsa_2d.flashmla_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr("src.networks.dsa_2d.flashmla_sparse_mla_forward", _flash)
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime", _reference)
+
+    mod.forward_sparse_from_indices(x, idx)
+
+    assert not called["flash"]
+    assert called["reference"]
+
+
 def test_flashmla_support_check_rejects_cpu():
     from src.ops.dsa_flashmla import flashmla_is_supported
 
@@ -424,7 +479,8 @@ def test_forward_sparse_from_indices_passes_packed_runtime_to_flashmla(monkeypat
     monkeypatch.setattr("src.networks.dsa_2d.flashmla_is_supported", lambda **kwargs: True)
     monkeypatch.setattr("src.networks.dsa_2d.flashmla_sparse_mla_forward", _flash)
 
-    out = mod.forward_sparse_from_indices(x, idx)
+    with torch.inference_mode():
+        out = mod.forward_sparse_from_indices(x, idx)
 
     assert out.shape == x.shape
     assert seen["runtime_keys"] >= {"q", "kv", "height", "width", "d_qk", "d_v"}
