@@ -1091,3 +1091,77 @@ Next step:
 1. add a reproducible local note or harness for the supported H100 parity shape
 2. benchmark `reference` vs `flashmla` on supported MQA forward shapes
 3. widen coverage carefully before touching training or selector kernels
+
+### 2026-03-18: Native H100 FlashMLA forward benchmark
+
+Status:
+
+1. `flashmla` is materially faster than the absorbed-MLA PyTorch reference on every tested native MQA forward case
+
+Scope:
+
+1. device:
+   - `NVIDIA H100 80GB HBM3`
+2. runtime:
+   - absorbed MLA
+   - `n_kv_heads=1`
+   - forward-only
+   - precomputed indices
+3. native kernel-target dimensions:
+   - `dim=1152`
+   - `n_heads=64`
+   - `q_lora_rank=1536`
+   - `kv_lora_rank=512`
+   - `qk_nope_head_dim=128`
+   - `qk_rope_head_dim=64`
+   - runtime `d_qk=576`
+   - runtime `d_v=512`
+4. measured paths:
+   - backend-only sparse forward on packed runtime
+   - module sparse forward via `forward_sparse_from_indices(x, idx)`
+
+Results:
+
+1. `64x64, topk=128`
+   - backend: `19.65 -> 1.40 ms` (`14.06x`)
+   - module sparse forward: `22.47 -> 3.71 ms` (`6.06x`)
+2. `64x64, topk=256`
+   - backend: `29.19 -> 1.43 ms` (`20.41x`)
+   - module sparse forward: `24.40 -> 3.10 ms` (`7.88x`)
+3. `128x128, topk=128`
+   - backend: `86.32 -> 5.41 ms` (`15.97x`)
+   - module sparse forward: `91.58 -> 11.16 ms` (`8.21x`)
+4. `128x128, topk=256`
+   - backend: `91.50 -> 5.58 ms` (`16.39x`)
+   - module sparse forward: `110.54 -> 11.35 ms` (`9.74x`)
+5. `256x256, topk=128`
+   - backend: `219.03 -> 21.26 ms` (`10.30x`)
+   - module sparse forward: `239.08 -> 45.79 ms` (`5.22x`)
+6. `256x256, topk=256`
+   - backend: `568.86 -> 22.27 ms` (`25.55x`)
+   - module sparse forward: `611.70 -> 46.64 ms` (`13.12x`)
+
+Parity:
+
+1. all tested cases stayed numerically close
+2. backend max abs diff:
+   - `9.77e-04` to `1.95e-03`
+3. module max abs diff:
+   - `4.88e-04` to `9.77e-04`
+
+Interpretation:
+
+1. the H100 `FlashMLA` forward backend is worth using for the supported native MQA slice
+2. speedup remains strong even after including runtime construction and post-backend UV projection
+3. the current benchmark isolates sparse forward with precomputed indices; it does not include selector cost
+
+Artifact:
+
+1. cluster JSON:
+   - `/home/amkrtchyan/codex-flashmla-native-bench-4685.json`
+
+Next step:
+
+1. keep `flashmla` as the preferred forward backend for supported H100 MQA absorbed-runtime cases
+2. add an explicit local benchmark note or reproducible harness for these native cases
+3. then decide whether the next highest-value work is selector kernels or backward support
