@@ -23,6 +23,7 @@ def _load_dsa_symbols() -> tuple[type, type]:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load DSA module from {module_path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module.DSA2DMLAAttention, module.DSA2DMLAConfig
 
