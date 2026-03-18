@@ -876,3 +876,83 @@ After every meaningful DSA change, update this file with:
 3. parity outcomes
 4. benchmark outcomes
 5. any divergence from official DeepSeek behavior and the reason for it
+
+### 2026-03-18: H100 FlashMLA bring-up gate
+
+Status:
+
+1. partial success
+
+What landed:
+
+1. clean `FlashMLA` cluster reset on `cluster.ysu.am`
+2. new cluster env is `indoor`, not `indoorolo`
+3. `FlashMLA` now builds on `H100` with `torch 2.10.0+cu128` and `nvcc 12.8`
+4. minimal third-party patch set was required in `/home/amkrtchyan/src/FlashMLA`:
+   - `setup.py` must prefer `os.environ["CUDA_HOME"] or TORCH_CUDA_HOME`
+   - `FLASH_MLA_DISABLE_SM100=1` must filter `sm100` sources out of the source list
+   - source-level `#ifndef FLASH_MLA_DISABLE_SM100` guards are required in:
+     - `csrc/api/api.cpp`
+     - `csrc/api/dense_fwd.h`
+     - `csrc/api/sparse_fwd.h`
+     - `csrc/api/sparse_decode.h`
+   - `setup.py` must pass `-DFLASH_MLA_DISABLE_SM100` into compilation when the env var is set
+
+Important findings:
+
+1. the original upstream `setup.py` bug is real:
+   - `FLASH_MLA_DISABLE_SM100=1` disables the arch flag, but not the `sm100` source list
+2. patching `setup.py` alone is not enough:
+   - the extension still imports with unresolved `sm100` symbols unless the API layer is also guarded
+3. the first import failure after build was:
+   - undefined `sm100` sparse decode symbol
+4. after the source guards were added, build and import succeeded
+5. the first sparse-prefill smoke failure was only a runtime contract issue:
+   - `topk` must satisfy FlashMLA's internal alignment constraint
+   - `topk=8` failed
+   - `topk=128` worked
+
+Cluster commands/constraints that mattered:
+
+1. safe env activation on the cluster:
+   - `source /mnt/weka/shared-cache/miniforge3/etc/profile.d/conda.sh`
+   - `export NVCC_PREPEND_FLAGS=""`
+   - `conda activate indoor`
+2. for build/smoke:
+   - `export PYTHONNOUSERSITE=1`
+   - `export CUDA_HOME="$CONDA_PREFIX"`
+   - `export FLASH_MLA_DISABLE_SM100=1`
+   - `export MAX_JOBS=4`
+   - `export NVCC_THREADS=4`
+3. GPU jobs must use the `research` partition
+
+Artifacts and logs:
+
+1. build job with successful wheel build but bad in-repo smoke import:
+   - `/home/amkrtchyan/slurm-flashmla-build-4669.out`
+2. rebuild job with guarded `sm90` build and successful install:
+   - `/home/amkrtchyan/slurm-flashmla-build-v2-4672.out`
+3. successful pure runtime smoke:
+   - `/home/amkrtchyan/slurm-flashmla-smoke-4673.out`
+
+Locked working smoke shape on H100:
+
+1. device:
+   - `NVIDIA H100 80GB HBM3`
+2. call:
+   - `flash_mla.flash_mla_sparse_fwd`
+3. tensors:
+   - `q: [32, 64, 512]`, `bf16`, CUDA
+   - `kv: [256, 1, 512]`, `bf16`, CUDA
+   - `indices: [32, 1, 128]`, `int32`, CUDA
+4. outputs:
+   - `out: [32, 64, 512]`, `bf16`
+   - `max_logits: [32, 64]`, `float32`
+   - `lse: [32, 64]`, `float32`
+   - `out_sum: 529.7573852539062`
+
+Implication:
+
+1. `FlashMLA` is now usable on the H100 cluster for sparse prefill
+2. the cluster/environment layer is no longer the blocker
+3. the next real step is integrating a DeepSeek-compatible `q + kv` MLA contract in our DSA module so the H100 `FlashMLA` path can replace the current sparse MLA reference path honestly
