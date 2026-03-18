@@ -20,6 +20,33 @@ def gather_sparse_mla_tokens(tokens: torch.Tensor, idx: torch.Tensor) -> torch.T
     return torch.gather(expanded_tokens, dim=3, index=gather_idx)
 
 
+def unpack_mla_runtime_qkv(
+    runtime: dict[str, torch.Tensor | int | str],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    q = runtime["q"]
+    kv = runtime["kv"]
+    d_qk = int(runtime["d_qk"])
+    d_v = int(runtime["d_v"])
+    kv_layout = runtime.get("kv_layout", "v_then_k")
+
+    if not isinstance(q, torch.Tensor) or not isinstance(kv, torch.Tensor):
+        raise TypeError("runtime['q'] and runtime['kv'] must be tensors")
+    if kv_layout != "v_then_k":
+        raise ValueError(f"Unsupported kv_layout={kv_layout!r}")
+    if q.ndim != 4 or kv.ndim != 4:
+        raise ValueError(f"Expected packed q/kv as rank-4 tensors, got {q.ndim}, {kv.ndim}")
+    if q.shape[:3] != (kv.shape[0], q.shape[1], kv.shape[2]):
+        raise ValueError("Packed runtime batch/token dimensions must align between q and kv")
+    if q.shape[-1] != d_qk:
+        raise ValueError(f"Expected q last dim {d_qk}, got {q.shape[-1]}")
+    if kv.shape[-1] != d_v + d_qk:
+        raise ValueError(f"Expected kv last dim {d_v + d_qk}, got {kv.shape[-1]}")
+
+    v = kv[..., :d_v]
+    k = kv[..., d_v:]
+    return q, k, v
+
+
 def streaming_sparse_mla_reference(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -108,3 +135,25 @@ def streaming_sparse_mla_reference(
         batch_out.append(torch.cat(kv_group_out, dim=0))
 
     return torch.stack(batch_out, dim=0)
+
+
+def streaming_sparse_mla_reference_from_runtime(
+    runtime: dict[str, torch.Tensor | int | str],
+    idx: torch.Tensor,
+    *,
+    gqa_group_size: int,
+    softmax_scale: float,
+    query_block_size: int = 128,
+    selected_block_size: int = 64,
+) -> torch.Tensor:
+    q, k, v = unpack_mla_runtime_qkv(runtime)
+    return streaming_sparse_mla_reference(
+        q,
+        k,
+        v,
+        idx,
+        gqa_group_size=gqa_group_size,
+        softmax_scale=softmax_scale,
+        query_block_size=query_block_size,
+        selected_block_size=selected_block_size,
+    )

@@ -266,6 +266,35 @@ def test_streaming_sparse_mla_matches_gather_reference_small_case():
     torch.testing.assert_close(out, ref)
 
 
+def test_packed_sparse_mla_reference_matches_old_small_reference():
+    from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference_from_runtime
+
+    mod = DSA2DMLAAttention(make_small_cfg(index_topk=3, n_kv_heads=2)).float()
+    x = torch.randn(1, mod.dim, 2, 2)
+    idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
+
+    runtime = mod._dense_mla_runtime(x)
+    q, k, v, _, _ = mod._dense_mla_qkv(x)
+    ref = dsa_reference.gather_sparse_mla_reference(
+        q,
+        k,
+        v,
+        idx,
+        gqa_group_size=mod.gqa_group_size,
+        softmax_scale=mod.softmax_scale,
+    )
+    out = streaming_sparse_mla_reference_from_runtime(
+        runtime,
+        idx,
+        gqa_group_size=mod.gqa_group_size,
+        softmax_scale=mod.softmax_scale,
+        query_block_size=2,
+        selected_block_size=2,
+    )
+
+    torch.testing.assert_close(out, ref)
+
+
 def test_streaming_sparse_mla_matches_reference_with_explicit_block_sizes():
     from src.ops.dsa_sparse_mla import streaming_sparse_mla_reference
 
