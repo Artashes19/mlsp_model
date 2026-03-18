@@ -125,6 +125,28 @@ def test_dsa_sparse_backend_defaults_to_auto():
     assert mod.sparse_backend == "auto"
 
 
+def test_dsa_indexer_backend_defaults_to_auto():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+
+    mod = DSA2DMLAAttention(cfg).float()
+
+    assert mod.indexer_backend == "auto"
+
+
 def test_dsa_sparse_backend_rejects_unknown_value():
     with pytest.raises(ValueError, match="Unsupported sparse_backend"):
         DSA2DMLAConfig(
@@ -140,6 +162,24 @@ def test_dsa_sparse_backend_rejects_unknown_value():
             index_head_dim=16,
             index_topk=3,
             sparse_backend="unknown",
+        )
+
+
+def test_dsa_indexer_backend_rejects_unknown_value():
+    with pytest.raises(ValueError, match="Unsupported indexer_backend"):
+        DSA2DMLAConfig(
+            dim=32,
+            n_heads=4,
+            n_kv_heads=2,
+            q_lora_rank=16,
+            kv_lora_rank=12,
+            qk_nope_head_dim=8,
+            qk_rope_head_dim=8,
+            v_head_dim=8,
+            index_n_heads=2,
+            index_head_dim=16,
+            index_topk=3,
+            indexer_backend="unknown",
         )
 
 

@@ -1,4 +1,5 @@
 
+import pytest
 import torch
 
 
@@ -105,6 +106,246 @@ def test_streaming_weighted_relu_topk_is_block_size_invariant():
 
     torch.testing.assert_close(scores_block_1, scores_block_4)
     torch.testing.assert_close(idx_block_1, idx_block_4)
+
+
+def test_dsa_indexer_backend_defaults_to_auto():
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+
+    assert mod.indexer_backend == "auto"
+
+
+def test_dsa_indexer_backend_rejects_unknown_value():
+    from src.networks.dsa_2d import DSA2DMLAConfig
+
+    with pytest.raises(ValueError, match="Unsupported indexer_backend"):
+        DSA2DMLAConfig(
+            dim=32,
+            n_heads=4,
+            n_kv_heads=2,
+            q_lora_rank=16,
+            kv_lora_rank=12,
+            qk_nope_head_dim=8,
+            qk_rope_head_dim=8,
+            v_head_dim=8,
+            index_n_heads=2,
+            index_head_dim=16,
+            index_topk=3,
+            indexer_backend="unknown",
+        )
+
+
+def test_auto_indexer_backend_uses_deepgemm_when_supported_and_grad_disabled(monkeypatch):
+    import src.networks.dsa_2d as dsa_2d_module
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=1,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_backend="auto",
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+    sentinel_logits = torch.full((1, 4, 4), 3.0, dtype=torch.float32)
+    sentinel_idx = torch.tensor([[[0, 2, 1]]], dtype=torch.int64).expand(1, 4, 3).clone()
+
+    monkeypatch.setattr(dsa_2d_module, "deepgemm_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr(
+        dsa_2d_module,
+        "deepgemm_weighted_relu_logits",
+        lambda *args, **kwargs: sentinel_logits,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        mod.indexer,
+        "forward",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reference indexer path should not run")),
+    )
+    monkeypatch.setattr(
+        dsa_2d_module,
+        "stable_topk",
+        lambda scores, k: sentinel_idx,
+    )
+
+    with torch.inference_mode():
+        scores, idx = mod.build_indexer_selection(x)
+
+    torch.testing.assert_close(scores, torch.gather(sentinel_logits, dim=-1, index=sentinel_idx))
+    torch.testing.assert_close(idx, sentinel_idx)
+
+
+def test_auto_indexer_backend_falls_back_to_reference_when_grad_enabled(monkeypatch):
+    import src.networks.dsa_2d as dsa_2d_module
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=1,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_backend="auto",
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+    sentinel_logits = torch.full((1, 4, 4), 5.0, dtype=torch.float32)
+    sentinel_idx = torch.tensor([[[3, 1, 0]]], dtype=torch.int64).expand(1, 4, 3).clone()
+
+    monkeypatch.setattr(dsa_2d_module, "deepgemm_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr(
+        dsa_2d_module,
+        "deepgemm_weighted_relu_logits",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("deepgemm path should not run with grad enabled")),
+        raising=False,
+    )
+    monkeypatch.setattr(mod.indexer, "forward", lambda *args, **kwargs: (sentinel_logits, sentinel_idx))
+
+    scores, idx = mod.build_indexer_selection(x)
+
+    torch.testing.assert_close(scores, torch.gather(sentinel_logits, dim=-1, index=sentinel_idx))
+    torch.testing.assert_close(idx, sentinel_idx)
+
+
+def test_deepgemm_import_or_none_is_safe():
+    from src.ops.dsa_deepgemm import deepgemm_import_or_none
+
+    result = deepgemm_import_or_none()
+
+    assert result is None or callable(result)
+
+
+def test_deepgemm_support_check_rejects_cpu():
+    from src.ops.dsa_deepgemm import deepgemm_is_supported
+
+    assert not deepgemm_is_supported(device=torch.device("cpu"), n_kv_heads=1)
+
+
+def test_deepgemm_support_check_rejects_non_mqa():
+    from src.ops.dsa_deepgemm import deepgemm_is_supported
+
+    assert not deepgemm_is_supported(
+        device=torch.device("cuda"),
+        n_kv_heads=2,
+        sm=(9, 0),
+    )
+
+
+def test_deepgemm_support_check_rejects_pre_sm90():
+    from src.ops.dsa_deepgemm import deepgemm_is_supported
+
+    assert not deepgemm_is_supported(
+        device=torch.device("cuda"),
+        n_kv_heads=1,
+        sm=(8, 0),
+    )
+
+
+def _fake_deepgemm_mqa_kernel(q, kv, weights, cu_seq_len_k_start, cu_seq_len_k_end, clean_logits):
+    kv_q, kv_scale = kv
+    kv_deq = kv_q.to(dtype=torch.float32) * kv_scale.to(dtype=torch.float32).unsqueeze(-1)
+    out = torch.full(
+        (q.shape[0], kv_deq.shape[0]),
+        float("-inf") if clean_logits else 0.0,
+        device=q.device,
+        dtype=torch.float32,
+    )
+    for i in range(q.shape[0]):
+        start = int(cu_seq_len_k_start[i].item())
+        end = int(cu_seq_len_k_end[i].item())
+        dots = torch.einsum("hd,sd->hs", q[i].to(dtype=torch.float32), kv_deq[start:end])
+        logits = torch.relu(dots) * weights[i].to(dtype=torch.float32).unsqueeze(-1)
+        out[i, start:end] = logits.sum(dim=0)
+    return out
+
+
+def test_deepgemm_logits_wrapper_matches_quantized_reference_with_fake_kernel(monkeypatch):
+    from src.ops import dsa_deepgemm, dsa_indexer
+
+    torch.manual_seed(0)
+    q = torch.randn(2, 2, 3, 16, dtype=torch.float32)
+    k_base = torch.randn(2, 1, 4, 16, dtype=torch.float32)
+    k = k_base.expand(-1, 2, -1, -1).contiguous()
+    w = torch.randn(2, 3, 2, dtype=torch.float32)
+
+    monkeypatch.setattr(dsa_deepgemm, "deepgemm_import_or_none", lambda: _fake_deepgemm_mqa_kernel)
+
+    q_q, q_scale = dsa_indexer.act_quant_reference_safe(q)
+    k_q, k_scale = dsa_indexer.act_quant_reference_safe(k)
+    ref = dsa_indexer.weighted_relu_index_score(
+        q_q.to(dtype=torch.float32) * q_scale,
+        k_q.to(dtype=torch.float32) * k_scale,
+        w,
+    )
+    out = dsa_deepgemm.deepgemm_weighted_relu_logits(q, k, w)
+
+    torch.testing.assert_close(out, ref)
+
+
+def test_deepgemm_selection_matches_reference_with_fake_kernel(monkeypatch):
+    import src.networks.dsa_2d as dsa_2d_module
+    from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
+    from src.ops import dsa_deepgemm
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=1,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=3,
+        indexer_backend="deepgemm",
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+
+    monkeypatch.setattr(dsa_2d_module, "deepgemm_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr(dsa_deepgemm, "deepgemm_import_or_none", lambda: _fake_deepgemm_mqa_kernel)
+    monkeypatch.setattr(
+        dsa_2d_module,
+        "deepgemm_weighted_relu_logits",
+        dsa_deepgemm.deepgemm_weighted_relu_logits,
+    )
+
+    logits_ref, idx_ref = mod.build_indexer_logits(x)
+    with torch.inference_mode():
+        scores, idx = mod.build_indexer_selection(x)
+
+    torch.testing.assert_close(idx, idx_ref)
+    torch.testing.assert_close(scores, torch.gather(logits_ref, dim=-1, index=idx_ref))
 
 
 def test_dsa2d_indexer_returns_logits_and_indices():

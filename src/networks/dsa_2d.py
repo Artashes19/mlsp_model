@@ -13,6 +13,7 @@ from src.ops.dsa_indexer import (
     streaming_weighted_relu_topk,
     weighted_relu_index_score,
 )
+from src.ops.dsa_deepgemm import deepgemm_is_supported, deepgemm_weighted_relu_logits
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved, apply_partial_rope_2d_non_interleaved
 from src.ops.dsa_flashmla import flashmla_is_supported, flashmla_sparse_mla_forward
 from src.ops.dsa_sparse_mla import (
@@ -35,6 +36,7 @@ class DSA2DMLAConfig:
     index_head_dim: int = 128
     index_topk: int = 64
     indexer_mode: str = "dense"
+    indexer_backend: str = "auto"
     sparse_backend: str = "auto"
 
     def __post_init__(self) -> None:
@@ -72,6 +74,8 @@ class DSA2DMLAConfig:
 
         if self.indexer_mode not in {"dense", "streaming"}:
             raise ValueError(f"Unsupported indexer_mode={self.indexer_mode!r}")
+        if self.indexer_backend not in {"auto", "reference", "deepgemm"}:
+            raise ValueError(f"Unsupported indexer_backend={self.indexer_backend!r}")
         if self.sparse_backend not in {"auto", "reference", "flashmla"}:
             raise ValueError(f"Unsupported sparse_backend={self.sparse_backend!r}")
 
@@ -121,6 +125,7 @@ class DSA2DMLAAttention(nn.Module):
         self.index_nope_head_dim = self.index_head_dim - self.index_rope_head_dim
         self.index_topk = cfg.index_topk
         self.indexer_mode = cfg.indexer_mode
+        self.indexer_backend = cfg.indexer_backend
         self.sparse_backend = cfg.sparse_backend
         self.index_softmax_scale = self.index_head_dim ** -0.5
         self.indexer = DSA2DIndexer(cfg)
@@ -355,6 +360,17 @@ class DSA2DMLAAttention(nn.Module):
         return self.indexer(q, k, w)
 
     def build_indexer_selection(self, x: torch.Tensor, *, detach_inputs: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+        should_try_deepgemm = self.indexer_backend in {"auto", "deepgemm"} and not torch.is_grad_enabled()
+        if should_try_deepgemm and deepgemm_is_supported(
+            device=x.device,
+            n_kv_heads=self.n_kv_heads,
+        ):
+            q, k, w = self._prepare_indexer_qkw(x, detach_inputs=detach_inputs)
+            logits = deepgemm_weighted_relu_logits(q, k, w)
+            idx = stable_topk(logits, k=min(self.index_topk, logits.shape[-1]))
+            scores = torch.gather(logits, dim=-1, index=idx)
+            return scores, idx
+
         if self.indexer_mode == "dense":
             logits, idx = self.build_indexer_logits(x, detach_inputs=detach_inputs)
             scores = torch.gather(logits, dim=-1, index=idx)
