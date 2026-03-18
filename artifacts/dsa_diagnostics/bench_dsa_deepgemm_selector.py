@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
 import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 from src.ops.dsa_deepgemm import deepgemm_weighted_relu_logits
