@@ -130,3 +130,26 @@ def test_dsa_sparse_and_dense_paths_share_projection_contract():
     assert dense.shape == x.shape
     assert sparse.shape == x.shape
     assert mod.proj.weight.shape == (cfg.dim, mod.attn_out_dim)
+
+
+def test_absorbed_mla_runtime_uses_kv_lora_rank_plus_rope_dim():
+    cfg = make_small_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+
+    runtime = mod._dense_mla_runtime(x)
+
+    assert runtime["d_qk"] == cfg.kv_lora_rank + cfg.qk_rope_head_dim
+    assert runtime["d_v"] == cfg.kv_lora_rank
+    assert runtime["q"].shape[-1] == runtime["d_qk"]
+    assert runtime["kv"].shape[-1] == runtime["d_qk"]
+
+
+def test_uv_projection_maps_kernel_latent_output_to_value_head_dim():
+    cfg = make_small_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    latent = torch.randn(1, mod.n_heads, 4, cfg.kv_lora_rank, dtype=torch.float32)
+
+    out = mod._apply_uv_output_projection(latent)
+
+    assert out.shape == (1, mod.n_heads, 4, cfg.v_head_dim)

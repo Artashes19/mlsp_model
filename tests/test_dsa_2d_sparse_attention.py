@@ -83,21 +83,22 @@ def test_mla_runtime_builder_returns_packed_q_and_kv():
     assert set(runtime.keys()) >= {"q", "kv", "height", "width", "d_qk", "d_v"}
     assert runtime["height"] == 2
     assert runtime["width"] == 2
-    assert runtime["d_qk"] == mod.qk_head_dim
-    assert runtime["d_v"] == mod.v_head_dim
-    assert runtime["q"].shape == (1, mod.n_heads, 4, mod.qk_head_dim)
+    assert runtime["d_qk"] == mod.kv_lora_rank + mod.qk_rope_head_dim
+    assert runtime["d_v"] == mod.kv_lora_rank
+    assert runtime["q"].shape == (1, mod.n_heads, 4, runtime["d_qk"])
     assert runtime["kv"].shape[:3] == (1, mod.n_kv_heads, 4)
-    assert runtime["kv"].shape[-1] >= mod.v_head_dim
+    assert runtime["kv"].shape[-1] == runtime["d_qk"]
 
 
-def test_mla_runtime_builder_preserves_query_tensor_from_old_path():
+def test_mla_runtime_builder_uses_absorbed_query_contract():
     mod = DSA2DMLAAttention(make_small_cfg(index_topk=2, n_kv_heads=1)).float()
     x = torch.randn(1, mod.dim, 2, 2)
 
     q_old, _, _, _, _ = mod._dense_mla_qkv(x)
     runtime = mod._dense_mla_runtime(x)
 
-    torch.testing.assert_close(runtime["q"], q_old)
+    assert runtime["q"].shape[-1] != q_old.shape[-1]
+    assert runtime["q"].shape[-1] == mod.kv_lora_rank + mod.qk_rope_head_dim
 
 
 def test_flashmla_backend_falls_back_to_reference_on_cpu(monkeypatch):
@@ -111,7 +112,7 @@ def test_flashmla_backend_falls_back_to_reference_on_cpu(monkeypatch):
 
     def _reference(*args, **kwargs):
         called["reference"] = True
-        return torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+        return torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
 
     monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime", _reference)
     mod.forward_sparse_from_indices(x, idx)
@@ -130,11 +131,11 @@ def test_flashmla_backend_rejects_non_mqa_kernel_path(monkeypatch):
 
     def _flash(*args, **kwargs):
         called["flash"] = True
-        return torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+        return torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
 
     def _reference(*args, **kwargs):
         called["reference"] = True
-        return torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+        return torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
 
     monkeypatch.setattr(
         "src.networks.dsa_2d.flashmla_sparse_mla_forward",
@@ -171,18 +172,18 @@ def _make_small_flashmla_mqa_case():
     h_q = h_kv * gqa_group_size
     query_tokens = 4
     source_tokens = 5
-    dim = 8
-    q = torch.randn(batch, h_q, query_tokens, dim, dtype=torch.float32)
-    k = torch.randn(batch, h_kv, source_tokens, dim, dtype=torch.float32)
-    v = torch.randn(batch, h_kv, source_tokens, dim, dtype=torch.float32)
+    d_qk = 8
+    d_v = 4
+    q = torch.randn(batch, h_q, query_tokens, d_qk, dtype=torch.float32)
+    kv = torch.randn(batch, h_kv, source_tokens, d_qk, dtype=torch.float32)
     runtime = {
         "q": q,
-        "kv": torch.cat([v, k], dim=-1),
+        "kv": kv,
         "height": 2,
         "width": 2,
-        "d_qk": dim,
-        "d_v": dim,
-        "kv_layout": "v_then_k",
+        "d_qk": d_qk,
+        "d_v": d_v,
+        "kv_layout": "latent_then_rope",
     }
     idx = torch.tensor(
         [[[0, 3, 1], [4, 1, 0], [2, 2, 1], [3, 0, 4]]],
@@ -323,7 +324,7 @@ def test_packed_sparse_mla_reference_matches_old_small_reference():
         gqa_group_size=mod.gqa_group_size,
         softmax_scale=mod.softmax_scale,
     )
-    out = streaming_sparse_mla_reference_from_runtime(
+    latent = streaming_sparse_mla_reference_from_runtime(
         runtime,
         idx,
         gqa_group_size=mod.gqa_group_size,
@@ -331,6 +332,7 @@ def test_packed_sparse_mla_reference_matches_old_small_reference():
         query_block_size=2,
         selected_block_size=2,
     )
+    out = mod._apply_uv_output_projection(latent)
 
     torch.testing.assert_close(out, ref)
 
@@ -387,7 +389,7 @@ def test_forward_sparse_from_indices_uses_packed_runtime_helper(monkeypatch):
     mod = DSA2DMLAAttention(make_small_cfg(index_topk=3)).float()
     x = torch.randn(1, mod.dim, 2, 2)
     idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
-    sentinel = torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+    sentinel = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
 
     def _packed_runtime(*args, **kwargs):
         return sentinel
@@ -411,7 +413,7 @@ def test_forward_sparse_from_indices_passes_packed_runtime_to_flashmla(monkeypat
     ).float()
     x = torch.randn(1, mod.dim, 2, 2)
     idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
-    sentinel = torch.randn(1, mod.n_heads, 4, mod.v_head_dim)
+    sentinel = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
     seen = {}
 
     def _flash(runtime, idx_arg, **kwargs):

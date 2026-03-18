@@ -6,7 +6,7 @@ import torch
 
 from src.ops.dsa_sparse_mla import (
     streaming_sparse_mla_reference_from_runtime,
-    unpack_mla_runtime_qkv,
+    validate_packed_mla_runtime,
 )
 
 
@@ -55,14 +55,10 @@ def flashmla_sparse_mla_forward(
     flash_kernel = flashmla_import_or_none()
     if flash_kernel is None:
         raise RuntimeError("FlashMLA is not installed")
-    q, _, _ = unpack_mla_runtime_qkv(runtime)
-    kv = runtime["kv"]
-    d_v = int(runtime["d_v"])
+    q, kv, d_v = validate_packed_mla_runtime(runtime)
     attn_sink = kwargs.get("attn_sink")
     topk_length = kwargs.get("topk_length")
 
-    if not isinstance(kv, torch.Tensor):
-        raise TypeError("runtime['kv'] must be a tensor")
     if idx.ndim != 3:
         raise ValueError(f"Expected idx as [B, Q, K], got shape={tuple(idx.shape)}")
     if q.shape[0] != idx.shape[0] or q.shape[2] != idx.shape[1]:

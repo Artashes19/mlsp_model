@@ -1004,3 +1004,39 @@ Next step:
 
 1. validate the real H100 `FlashMLA` forward call against this packed runtime
 2. compare forward outputs against the packed pure-PyTorch reference on supported MQA shapes
+
+### 2026-03-18: Absorbed MLA runtime correction
+
+Status:
+
+1. local runtime now matches the actual `FlashMLA` value-prefix contract
+
+What changed:
+
+1. previous local packed contract `kv = [v || k]` was wrong for the real kernel
+2. runtime is now absorbed MLA:
+   - `q = [q_absorbed_nope, q_pe]`
+   - `kv = [kv_latent, k_pe]`
+3. runtime dimensions are now:
+   - `d_qk = kv_lora_rank + qk_rope_head_dim`
+   - `d_v = kv_lora_rank`
+4. sparse backend output is now latent rank `kv_lora_rank`
+5. DSA applies `W_UV` after the sparse backend to recover per-head value dimension before the final output projection
+
+Source-backed reason:
+
+1. official `FlashMLA` reference uses:
+   - attention scores against full gathered `kv`
+   - output against `gathered_kv[..., :d_v]`
+2. that means `q` and `kv` must share the same last-dimension contract, and the first `d_v` dims of `kv` are the value payload
+
+Verification:
+
+1. local DSA suite after absorbed-runtime correction:
+   - `78 passed`
+
+Next step:
+
+1. push this absorbed-runtime refactor to `xoren22`
+2. fast-forward the H100 cluster worktree
+3. run the first real `FlashMLA` forward parity/smoke on supported MQA shapes

@@ -112,6 +112,8 @@ class DSA2DMLAAttention(nn.Module):
         self.qk_rope_head_dim = cfg.qk_rope_head_dim
         self.qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
         self.v_head_dim = cfg.v_head_dim
+        self.runtime_qk_dim = self.kv_lora_rank + self.qk_rope_head_dim
+        self.runtime_v_dim = self.kv_lora_rank
 
         self.index_n_heads = cfg.index_n_heads
         self.index_head_dim = cfg.index_head_dim
@@ -152,7 +154,20 @@ class DSA2DMLAAttention(nn.Module):
         tokens = x.flatten(start_dim=2).transpose(1, 2)
         return tokens, height, width
 
-    def _dense_mla_runtime(self, x: torch.Tensor) -> dict[str, torch.Tensor | int | str]:
+    def _kv_projection_weights(self) -> tuple[torch.Tensor, torch.Tensor]:
+        weights = self.wkv_b.weight.view(
+            self.n_kv_heads,
+            self.qk_nope_head_dim + self.v_head_dim,
+            self.kv_lora_rank,
+        )
+        return (
+            weights[:, :self.qk_nope_head_dim, :],
+            weights[:, self.qk_nope_head_dim:, :],
+        )
+
+    def _mla_components(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
         tokens, height, width = self._flatten_tokens(x)
         batch, seq_len, _ = tokens.shape
 
@@ -165,7 +180,6 @@ class DSA2DMLAAttention(nn.Module):
             W=width,
             rope_dim=self.qk_rope_head_dim,
         )
-        q = torch.cat([q_nope, q_pe], dim=-1)
 
         kv_latent_and_pe = self.wkv_a(tokens)
         kv_latent = self.kv_norm(kv_latent_and_pe[..., :self.kv_lora_rank])
@@ -183,29 +197,65 @@ class DSA2DMLAAttention(nn.Module):
             self.n_kv_heads,
             self.qk_nope_head_dim + self.v_head_dim,
         ).permute(0, 2, 1, 3)
-        k_nope = kv[..., :self.qk_nope_head_dim]
-        v = kv[..., self.qk_nope_head_dim:]
-        k = torch.cat([k_nope, k_pe_shared.expand(-1, self.n_kv_heads, -1, -1)], dim=-1)
+        return q_nope, q_pe, kv_latent, k_pe_shared, kv, height, width
+
+    def _dense_mla_runtime(self, x: torch.Tensor) -> dict[str, torch.Tensor | int | str]:
+        q_nope, q_pe, kv_latent, k_pe_shared, _, height, width = self._mla_components(x)
+        batch, _, seq_len, _ = q_nope.shape
+        w_uk, _ = self._kv_projection_weights()
+
+        q_nope_grouped = q_nope.view(
+            batch,
+            self.n_kv_heads,
+            self.gqa_group_size,
+            seq_len,
+            self.qk_nope_head_dim,
+        )
+        q_absorbed = torch.einsum("bngtd,ndr->bngtr", q_nope_grouped, w_uk)
+        q_absorbed = q_absorbed.reshape(batch, self.n_heads, seq_len, self.kv_lora_rank)
+        q_runtime = torch.cat([q_absorbed, q_pe], dim=-1)
+
+        kv_latent_runtime = kv_latent[:, None, :, :].expand(-1, self.n_kv_heads, -1, -1)
+        k_pe_runtime = k_pe_shared.expand(-1, self.n_kv_heads, -1, -1)
+        kv_runtime = torch.cat([kv_latent_runtime, k_pe_runtime], dim=-1)
+
         return {
-            "q": q,
-            "kv": torch.cat([v, k], dim=-1),
+            "q": q_runtime,
+            "kv": kv_runtime,
             "height": height,
             "width": width,
-            "d_qk": self.qk_head_dim,
-            "d_v": self.v_head_dim,
-            "kv_layout": "v_then_k",
+            "d_qk": self.runtime_qk_dim,
+            "d_v": self.runtime_v_dim,
+            "kv_layout": "latent_then_rope",
         }
 
+    def _apply_uv_output_projection(self, latent_out: torch.Tensor) -> torch.Tensor:
+        if latent_out.ndim != 4:
+            raise ValueError(f"Expected latent_out as [B, h_q, T, r], got shape={tuple(latent_out.shape)}")
+        if latent_out.shape[1] != self.n_heads:
+            raise ValueError(f"Expected {self.n_heads} query heads, got {latent_out.shape[1]}")
+        if latent_out.shape[-1] != self.kv_lora_rank:
+            raise ValueError(f"Expected latent rank {self.kv_lora_rank}, got {latent_out.shape[-1]}")
+
+        _, w_uv = self._kv_projection_weights()
+        batch, _, seq_len, _ = latent_out.shape
+        latent_grouped = latent_out.view(
+            batch,
+            self.n_kv_heads,
+            self.gqa_group_size,
+            seq_len,
+            self.kv_lora_rank,
+        )
+        projected = torch.einsum("bngtr,nvr->bngtv", latent_grouped, w_uv)
+        return projected.reshape(batch, self.n_heads, seq_len, self.v_head_dim)
+
     def _dense_mla_qkv(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int]:
-        runtime = self._dense_mla_runtime(x)
-        q = runtime["q"]
-        kv = runtime["kv"]
-        height = runtime["height"]
-        width = runtime["width"]
-        d_v = int(runtime["d_v"])
-        k = kv[..., d_v:]
-        v = kv[..., :d_v]
-        return q, k, v, int(height), int(width)
+        q_nope, q_pe, _, k_pe_shared, kv_proj, height, width = self._mla_components(x)
+        q = torch.cat([q_nope, q_pe], dim=-1)
+        k_nope = kv_proj[..., :self.qk_nope_head_dim]
+        v = kv_proj[..., self.qk_nope_head_dim:]
+        k = torch.cat([k_nope, k_pe_shared.expand(-1, self.n_kv_heads, -1, -1)], dim=-1)
+        return q, k, v, height, width
 
     def forward_dense_reference(self, x: torch.Tensor) -> torch.Tensor:
         q, k, v, height, width = self._dense_mla_qkv(x)
@@ -241,6 +291,7 @@ class DSA2DMLAAttention(nn.Module):
                 gqa_group_size=self.gqa_group_size,
                 softmax_scale=self.softmax_scale,
             )
+        out = self._apply_uv_output_projection(out)
         out = out.permute(0, 2, 1, 3).reshape(batch, height * width, self.attn_out_dim)
         out = self.proj(out)
         return out.transpose(1, 2).reshape(batch, self.dim, height, width)
