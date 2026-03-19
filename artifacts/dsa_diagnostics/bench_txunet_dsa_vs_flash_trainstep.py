@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import gc
 import importlib.util
 import json
 import sys
@@ -117,9 +118,9 @@ def _swap_transformer_attention_with_dsa(module: nn.Module, *, topk: int) -> int
     return replaced
 
 
-def _build_native_head_model_pair(*, topk: int) -> tuple[TxUNetModel, TxUNetModel]:
+def _build_native_head_dense_model() -> TxUNetModel:
     torch.manual_seed(0)
-    dense = TxUNetModel(
+    return TxUNetModel(
         in_ch=4,
         out_ch=1,
         base_ch=NATIVE_TXUNET_BASE_CH,
@@ -127,11 +128,15 @@ def _build_native_head_model_pair(*, topk: int) -> tuple[TxUNetModel, TxUNetMode
         heads=NATIVE_TXUNET_HEADS,
         use_checkpoint=False,
     )
+
+
+def _build_native_head_dsa_model(*, topk: int) -> TxUNetModel:
+    dense = _build_native_head_dense_model()
     dsa = copy.deepcopy(dense)
     replaced = _swap_transformer_attention_with_dsa(dsa, topk=topk)
     if replaced == 0:
         raise RuntimeError("Expected to replace at least one TransformerBlock attention module")
-    return dense, dsa
+    return dsa
 
 
 def _make_input(
@@ -231,7 +236,34 @@ def _benchmark_case(
     warmup: int,
     iters: int,
 ) -> dict[str, Any]:
-    dense_model, dsa_model = _build_native_head_model_pair(topk=topk)
+    dense_model = _build_native_head_dense_model()
+    dense_result = _benchmark_model_train_step(
+        dense_model,
+        shape=shape,
+        device=device,
+        amp_dtype=amp_dtype,
+        warmup=warmup,
+        iters=iters,
+    )
+    del dense_model
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    dsa_model = _build_native_head_dsa_model(topk=topk)
+    dsa_result = _benchmark_model_train_step(
+        dsa_model,
+        shape=shape,
+        device=device,
+        amp_dtype=amp_dtype,
+        warmup=warmup,
+        iters=iters,
+    )
+    del dsa_model
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     return {
         "name": name,
         "shape": list(shape),
@@ -239,22 +271,8 @@ def _benchmark_case(
         "depths": list(NATIVE_TXUNET_DEPTHS),
         "heads": list(NATIVE_TXUNET_HEADS),
         "topk": topk,
-        "dense_flash_attention": _benchmark_model_train_step(
-            dense_model,
-            shape=shape,
-            device=device,
-            amp_dtype=amp_dtype,
-            warmup=warmup,
-            iters=iters,
-        ),
-        "dsa_frozen_selector": _benchmark_model_train_step(
-            dsa_model,
-            shape=shape,
-            device=device,
-            amp_dtype=amp_dtype,
-            warmup=warmup,
-            iters=iters,
-        ),
+        "dense_flash_attention": dense_result,
+        "dsa_frozen_selector": dsa_result,
     }
 
 
@@ -271,7 +289,8 @@ def run_benchmark_smoke(
     device = torch.device(device)
     dtype = _resolve_dtype(device, dtype)
 
-    dense_model, dsa_model = _build_native_head_model_pair(topk=NATIVE_DSA_TOPK)
+    dense_model = _build_native_head_dense_model()
+    dsa_model = _build_native_head_dsa_model(topk=NATIVE_DSA_TOPK)
     del dense_model
     del dsa_model
 

@@ -1,7 +1,8 @@
-
 import pytest
 import torch
 import runpy
+import gc
+import weakref
 from pathlib import Path
 
 from src.networks.dsa_2d import DSA2DMLAConfig
@@ -269,6 +270,59 @@ def test_txunet_dsa_vs_flash_trainstep_bench_schema(tmp_path):
     assert dsa["status"] == "ok"
     assert dense["train_step_ms"] is not None
     assert dsa["train_step_ms"] is not None
+
+
+def test_txunet_trainstep_benchmark_releases_dense_model_before_dsa_benchmark():
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "artifacts"
+        / "dsa_diagnostics"
+        / "bench_txunet_dsa_vs_flash_trainstep.py"
+    )
+    namespace = runpy.run_path(str(script))
+    benchmark_case = namespace["_benchmark_case"]
+
+    dense_ref: dict[str, weakref.ReferenceType | None] = {"ref": None}
+
+    class _DummyModel(torch.nn.Module):
+        def forward(self, x):
+            return x
+
+    def _build_dense_model():
+        model = _DummyModel()
+        dense_ref["ref"] = weakref.ref(model)
+        return model
+
+    def _build_dsa_model(*, topk: int):
+        gc.collect()
+        assert dense_ref["ref"] is not None
+        assert dense_ref["ref"]() is None
+        return _DummyModel()
+
+    def _bench_model(model, **kwargs):
+        return {
+            "status": "ok",
+            "train_step_ms": 1.0,
+            "peak_memory_mb": 0.0,
+            "error": None,
+        }
+
+    benchmark_case.__globals__["_build_native_head_dense_model"] = _build_dense_model
+    benchmark_case.__globals__["_build_native_head_dsa_model"] = _build_dsa_model
+    benchmark_case.__globals__["_benchmark_model_train_step"] = _bench_model
+
+    case = benchmark_case(
+        name="native_head_txunet_trainstep_smoke",
+        shape=(1, 4, 32, 32),
+        topk=128,
+        device=torch.device("cpu"),
+        amp_dtype=torch.float32,
+        warmup=0,
+        iters=1,
+    )
+
+    assert case["dense_flash_attention"]["status"] == "ok"
+    assert case["dsa_frozen_selector"]["status"] == "ok"
 
 
 def test_frozen_selector_helper_marks_selector_parameters_frozen():
