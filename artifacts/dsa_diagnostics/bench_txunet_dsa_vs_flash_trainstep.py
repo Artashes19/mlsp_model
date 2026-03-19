@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import importlib.util
 import json
 import sys
 import time
@@ -16,8 +17,30 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
-from src.networks.txunet import TransformerBlock, TxUNetModel
+
+def _load_module(module_name: str, module_path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load module {module_name} from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_dsa_module = _load_module(
+    "dsa_2d_txunet_bench_module",
+    REPO_ROOT / "src" / "networks" / "dsa_2d.py",
+)
+_txunet_module = _load_module(
+    "txunet_txunet_bench_module",
+    REPO_ROOT / "src" / "networks" / "txunet.py",
+)
+
+DSA2DMLAAttention = _dsa_module.DSA2DMLAAttention
+DSA2DMLAConfig = _dsa_module.DSA2DMLAConfig
+TransformerBlock = _txunet_module.TransformerBlock
+TxUNetModel = _txunet_module.TxUNetModel
 
 
 NATIVE_TXUNET_BASE_CH = 128
