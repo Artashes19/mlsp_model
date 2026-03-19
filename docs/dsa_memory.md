@@ -1314,3 +1314,86 @@ Interpretation:
 4. next selector work should quantify mismatch rate and decide whether:
    - current DeepGEMM drift is acceptable for H100 inference use
    - or the wrapper still needs additional contract/alignment work before wider rollout
+
+2026-03-20: native-head TXUNet frozen-selector training-step benchmark
+
+Goal:
+
+1. benchmark a full TXUNet-shaped training step at `256x256` against dense FlashAttention
+2. use the shortest-path DSA training slice:
+   - frozen selector
+   - `deepgemm` selector forward where supported
+   - `flashmla` sparse forward
+   - explicit packed sparse MLA backward
+
+Harness:
+
+1. script:
+   - `artifacts/dsa_diagnostics/bench_txunet_dsa_vs_flash_trainstep.py`
+2. shell:
+   - `base_ch=128`
+   - `depths=(1, 1, 1, 1)`
+   - `heads=(64, 64, 64, 64)`
+   - `use_checkpoint=False`
+   - batch `1`, input shape `1 x 4 x 256 x 256`
+3. dense baseline:
+   - `TxUNetModel` with current `EfficientGlobalAttention`
+4. DSA candidate:
+   - same outer shell
+   - `TransformerBlock.attn` swapped to `DSA2DMLAAttention`
+   - selector frozen
+   - `n_kv_heads=1`
+   - native absorbed runtime:
+     - `kv_lora_rank=512`
+     - `qk_rope_head_dim=64`
+     - `index_head_dim=128`
+     - `index_n_heads=64`
+     - `topk=128`
+
+Important benchmark fix:
+
+1. the first cluster run was invalid because the harness held the dense model on GPU while benchmarking the DSA model
+2. the harness now benchmarks models sequentially:
+   - build dense, benchmark, delete, empty cache
+   - build DSA, benchmark, delete, empty cache
+3. regression:
+   - `tests/test_dsa_2d_regression.py::test_txunet_trainstep_benchmark_releases_dense_model_before_dsa_benchmark`
+
+Corrected H100 result:
+
+1. artifact:
+   - `/home/amkrtchyan/codex-txunet-dsa-trainstep-28af184/txunet_dsa_vs_flash_trainstep_cuda_bfloat16.json`
+2. dense FlashAttention baseline:
+   - `status=ok`
+   - `train_step_ms=1980.43`
+   - `peak_memory_mb=5267.61`
+3. DSA frozen-selector candidate:
+   - `status=oom`
+   - attempted extra allocation: `16.00 GiB`
+   - process memory at failure: about `65.60 GiB` allocated by PyTorch
+
+Why this shell fails:
+
+1. the native H100 sparse runtime is too wide for this TXUNet shell
+2. full-resolution DSA runtime at level 0 uses:
+   - `h_q=64`
+   - `T=65536`
+   - `d_qk=576`
+   - `d_v=512`
+3. one saved full-resolution `q_runtime` tensor is about `4.5 GiB`
+4. one full-resolution latent output tensor is about `4.0 GiB`
+5. the shell has multiple full-resolution attention blocks (`enc0`, `dec0`, `dec0_extra`), so the packed-runtime training activations dominate memory long before sparse selection helps
+6. by contrast, dense level-0 baseline features at this shell are tiny:
+   - `C=128`
+   - one `[1, 128, 256, 256]` bf16 tensor is only about `16 MiB`
+   - `q/k/v` activations are only about `48 MiB` total before SDPA
+
+Interpretation:
+
+1. this native-head TXUNet shell does not prove a training win path
+2. on a small-width U-Net shell, the current native DSA runtime contract is fundamentally mismatched to the model scale
+3. `flashmla + deepgemm + explicit sparse backward` is not enough by itself to beat dense FlashAttention here because the absorbed runtime width (`576/512`) overwhelms the outer shell width (`128` channels at full resolution)
+4. if the target remains a real `256x256` training-step win on this family of models, the next work cannot just be more harness tuning; it must change the model/kernel compatibility story:
+   - either narrower sparse MLA kernels for this model scale
+   - or a different shell where native DSA widths are proportionate
+   - or a hybrid policy that keeps dense attention at shallow high-resolution stages
