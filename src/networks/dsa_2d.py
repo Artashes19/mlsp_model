@@ -340,6 +340,8 @@ class DSA2DMLAAttention(nn.Module):
     def forward_sparse_with_frozen_selector(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             _, idx = self.build_indexer_selection(x, detach_inputs=True)
+        if self.sparse_backend == "reference":
+            return self.forward_sparse_from_indices(x, idx)
         runtime = self._dense_mla_runtime(x)
         out = dsa_sparse_mla_autograd.packed_sparse_mla_autograd_forward(
             runtime,

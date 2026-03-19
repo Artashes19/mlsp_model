@@ -554,7 +554,7 @@ def test_forward_sparse_from_indices_matches_old_small_reference():
 
 def test_frozen_selector_sparse_path_uses_custom_autograd_op(monkeypatch):
     mod = DSA2DMLAAttention(
-        make_small_cfg(index_topk=3, sparse_backend="reference", n_kv_heads=2)
+        make_small_cfg(index_topk=3, sparse_backend="flashmla", n_kv_heads=1)
     ).float()
     x = torch.randn(1, mod.dim, 2, 2, requires_grad=True)
     sentinel = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
@@ -578,6 +578,67 @@ def test_frozen_selector_sparse_path_uses_custom_autograd_op(monkeypatch):
     assert seen["idx_shape"] == (1, 4, 3)
     assert seen["gqa_group_size"] == mod.gqa_group_size
     assert seen["softmax_scale"] == mod.softmax_scale
+
+
+def test_frozen_selector_reference_backend_stays_on_reference_path(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=3, sparse_backend="reference", n_kv_heads=2)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2, requires_grad=True)
+    sentinel = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+    seen = {"reference": False}
+
+    def _reference(*args, **kwargs):
+        seen["reference"] = True
+        return sentinel
+
+    def _autograd(*args, **kwargs):
+        raise AssertionError("custom autograd op must not be used for sparse_backend='reference'")
+
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime", _reference)
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.packed_sparse_mla_autograd_forward", _autograd)
+
+    mod.freeze_selector_parameters()
+    out = mod.forward_sparse_with_frozen_selector(x)
+
+    assert out.shape == x.shape
+    assert seen["reference"]
+
+
+def test_frozen_selector_flashmla_backend_uses_flashmla_when_supported(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=3, sparse_backend="flashmla", n_kv_heads=1)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2, requires_grad=True)
+    sentinel = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+    seen = {}
+
+    def _kernel(q, kv, indices, sm_scale, d_v, attn_sink=None, topk_length=None):
+        seen["q_shape"] = tuple(q.shape)
+        seen["kv_shape"] = tuple(kv.shape)
+        seen["indices_shape"] = tuple(indices.shape)
+        seen["sm_scale"] = sm_scale
+        seen["d_v"] = d_v
+        max_logits = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32)
+        lse = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32)
+        return sentinel[0].permute(1, 0, 2).contiguous(), max_logits, lse
+
+    def _reference(*args, **kwargs):
+        raise AssertionError("reference path must not be used when FlashMLA is supported")
+
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.flashmla_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.flashmla_import_or_none", lambda: _kernel)
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.packed_sparse_mla_reference", _reference)
+
+    mod.freeze_selector_parameters()
+    out = mod.forward_sparse_with_frozen_selector(x)
+
+    assert out.shape == x.shape
+    assert seen["q_shape"] == (4, mod.n_heads, mod.kv_lora_rank + mod.qk_rope_head_dim)
+    assert seen["kv_shape"] == (4, mod.n_kv_heads, mod.kv_lora_rank + mod.qk_rope_head_dim)
+    assert seen["indices_shape"] == (4, mod.n_kv_heads, 3)
+    assert seen["sm_scale"] == mod.softmax_scale
+    assert seen["d_v"] == mod.kv_lora_rank
 
 
 def test_packed_sparse_mla_autograd_op_backward_matches_reference_small_case():
