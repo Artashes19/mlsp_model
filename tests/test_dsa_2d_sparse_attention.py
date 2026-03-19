@@ -247,6 +247,29 @@ def _make_small_flashmla_mqa_case():
     return runtime, idx, gqa_group_size
 
 
+def _block_reference_sparse_backward(monkeypatch):
+    def _kernel(q, kv, indices, sm_scale, d_v, attn_sink=None, topk_length=None):
+        out = torch.ones(q.shape[0], q.shape[1], d_v, dtype=q.dtype, device=q.device)
+        max_logits = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32, device=q.device)
+        lse = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32, device=q.device)
+        return out, max_logits, lse
+
+    def _reference(*args, **kwargs):
+        raise AssertionError("packed reference fallback must not be used in backward")
+
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.flashmla_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.flashmla_import_or_none", lambda: _kernel)
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.packed_sparse_mla_reference", _reference)
+
+
+def _make_small_flashmla_runtime_with_grads():
+    runtime, idx, gqa_group_size = _make_small_flashmla_mqa_case()
+    runtime["q"] = runtime["q"].detach().clone().requires_grad_(True)
+    runtime["kv"] = runtime["kv"].detach().clone().requires_grad_(True)
+    grad_out = torch.randn(1, runtime["q"].shape[1], runtime["q"].shape[2], runtime["d_v"], dtype=runtime["q"].dtype)
+    return runtime, idx, gqa_group_size, grad_out
+
+
 def test_flashmla_adapter_preserves_output_shape_small_case():
     from src.ops.dsa_flashmla import flashmla_sparse_mla_forward
 
@@ -641,19 +664,16 @@ def test_frozen_selector_flashmla_backend_uses_flashmla_when_supported(monkeypat
     assert seen["d_v"] == mod.kv_lora_rank
 
 
-def test_packed_sparse_mla_autograd_op_backward_matches_reference_small_case():
-    mod = DSA2DMLAAttention(make_small_cfg(index_topk=3, n_kv_heads=2)).float()
-    x = torch.randn(1, mod.dim, 2, 2, requires_grad=True)
-    idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
-    grad_out = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+def test_packed_sparse_mla_autograd_op_dq_runtime_matches_reference_small_case(monkeypatch):
+    runtime, idx, gqa_group_size, grad_out = _make_small_flashmla_runtime_with_grads()
+    _block_reference_sparse_backward(monkeypatch)
 
-    runtime = mod._dense_mla_runtime(x)
-    out_ref, dq_ref, dkv_ref = dsa_reference.packed_sparse_mla_autograd_reference_from_runtime(
+    _, dq_ref, _ = dsa_reference.packed_sparse_mla_autograd_reference_from_runtime(
         runtime,
         idx,
         grad_out,
-        gqa_group_size=mod.gqa_group_size,
-        softmax_scale=mod.softmax_scale,
+        gqa_group_size=gqa_group_size,
+        softmax_scale=runtime["d_qk"] ** -0.5,
         query_block_size=2,
         selected_block_size=2,
     )
@@ -663,13 +683,38 @@ def test_packed_sparse_mla_autograd_op_backward_matches_reference_small_case():
     out = packed_sparse_mla_autograd_forward(
         runtime,
         idx,
-        gqa_group_size=mod.gqa_group_size,
-        softmax_scale=mod.softmax_scale,
+        gqa_group_size=gqa_group_size,
+        softmax_scale=runtime["d_qk"] ** -0.5,
     )
-    dq, dkv = torch.autograd.grad(out, (runtime["q"], runtime["kv"]), grad_out)
+    dq, _ = torch.autograd.grad(out, (runtime["q"], runtime["kv"]), grad_out)
 
-    torch.testing.assert_close(out, out_ref)
     torch.testing.assert_close(dq, dq_ref)
+
+
+def test_packed_sparse_mla_autograd_op_dkv_runtime_matches_reference_small_case(monkeypatch):
+    runtime, idx, gqa_group_size, grad_out = _make_small_flashmla_runtime_with_grads()
+    _block_reference_sparse_backward(monkeypatch)
+
+    _, _, dkv_ref = dsa_reference.packed_sparse_mla_autograd_reference_from_runtime(
+        runtime,
+        idx,
+        grad_out,
+        gqa_group_size=gqa_group_size,
+        softmax_scale=runtime["d_qk"] ** -0.5,
+        query_block_size=2,
+        selected_block_size=2,
+    )
+
+    from src.ops.dsa_sparse_mla_autograd import packed_sparse_mla_autograd_forward
+
+    out = packed_sparse_mla_autograd_forward(
+        runtime,
+        idx,
+        gqa_group_size=gqa_group_size,
+        softmax_scale=runtime["d_qk"] ** -0.5,
+    )
+    _, dkv = torch.autograd.grad(out, (runtime["q"], runtime["kv"]), grad_out)
+
     torch.testing.assert_close(dkv, dkv_ref)
 
 

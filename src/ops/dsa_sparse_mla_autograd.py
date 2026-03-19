@@ -163,6 +163,56 @@ def _flashmla_sparse_mla_forward_with_stats(
     )
 
 
+def _packed_sparse_mla_runtime_backward_mqa(
+    q_runtime: torch.Tensor,
+    kv_runtime: torch.Tensor,
+    idx: torch.Tensor,
+    grad_out: torch.Tensor,
+    *,
+    d_v: int,
+    gqa_group_size: int,
+    softmax_scale: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if q_runtime.shape[1] != gqa_group_size:
+        raise NotImplementedError("Explicit sparse MLA backward currently supports native MQA shapes only")
+    if kv_runtime.shape[1] != 1:
+        raise NotImplementedError("Explicit sparse MLA backward currently supports MQA only")
+    if grad_out.shape[:3] != q_runtime.shape[:3]:
+        raise ValueError(
+            f"Expected grad_out batch/head/token dims {tuple(q_runtime.shape[:3])}, got {tuple(grad_out.shape[:3])}"
+        )
+    if grad_out.shape[-1] != d_v:
+        raise ValueError(f"Expected grad_out last dim {d_v}, got {grad_out.shape[-1]}")
+
+    q = q_runtime.to(dtype=torch.float32)
+    kv = kv_runtime.to(dtype=torch.float32)
+    grad = grad_out.to(dtype=torch.float32)
+    dq = torch.zeros_like(q)
+    dkv = torch.zeros_like(kv)
+    kv_tokens = kv[:, 0]
+    dkv_tokens = dkv[:, 0]
+
+    for batch_idx in range(q.shape[0]):
+        for head_idx in range(q.shape[1]):
+            for query_idx in range(q.shape[2]):
+                selected_idx = idx[batch_idx, query_idx]
+                kv_sel = kv_tokens[batch_idx].index_select(0, selected_idx)
+                q_vec = q[batch_idx, head_idx, query_idx]
+                logits = torch.matmul(kv_sel, q_vec) * softmax_scale
+                probs = torch.softmax(logits, dim=-1)
+                v_sel = kv_sel[:, :d_v]
+                out = torch.matmul(probs, v_sel)
+                grad_out_vec = grad[batch_idx, head_idx, query_idx]
+                grad_v = probs.unsqueeze(-1) * grad_out_vec.unsqueeze(0)
+                grad_logits = probs * torch.sum((v_sel - out.unsqueeze(0)) * grad_out_vec.unsqueeze(0), dim=-1)
+                dq[batch_idx, head_idx, query_idx] = torch.matmul(grad_logits, kv_sel) * softmax_scale
+                dkv_sel = grad_logits.unsqueeze(-1) * q_vec.unsqueeze(0) * softmax_scale
+                dkv_sel[:, :d_v] += grad_v
+                dkv_tokens[batch_idx].index_add_(0, selected_idx, dkv_sel)
+
+    return dq.to(dtype=q_runtime.dtype), dkv.to(dtype=kv_runtime.dtype)
+
+
 class PackedSparseMLAAutograd(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -215,23 +265,15 @@ class PackedSparseMLAAutograd(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_out: torch.Tensor):
         q_runtime, kv_runtime, idx, _, _ = ctx.saved_tensors
-
-        q = q_runtime.detach().clone().requires_grad_(True)
-        kv = kv_runtime.detach().clone().requires_grad_(True)
-
-        with torch.enable_grad():
-            out = packed_sparse_mla_reference(
-                q,
-                kv,
-                idx,
-                d_v=ctx.d_v,
-                gqa_group_size=ctx.gqa_group_size,
-                softmax_scale=ctx.softmax_scale,
-                query_block_size=ctx.query_block_size,
-                selected_block_size=ctx.selected_block_size,
-            )
-
-        dq, dkv = torch.autograd.grad(out, (q, kv), grad_out, retain_graph=False, create_graph=False)
+        dq, dkv = _packed_sparse_mla_runtime_backward_mqa(
+            q_runtime,
+            kv_runtime,
+            idx,
+            grad_out,
+            d_v=ctx.d_v,
+            gqa_group_size=ctx.gqa_group_size,
+            softmax_scale=ctx.softmax_scale,
+        )
         return dq, dkv, None, None, None, None
 
 

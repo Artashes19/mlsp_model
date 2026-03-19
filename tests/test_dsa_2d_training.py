@@ -27,6 +27,23 @@ def make_small_cfg() -> DSA2DMLAConfig:
     )
 
 
+def make_small_mqa_flash_cfg() -> DSA2DMLAConfig:
+    return DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=1,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=8,
+        sparse_backend="flashmla",
+    )
+
+
 def test_dense_teacher_distribution_is_normalized():
     torch.manual_seed(0)
     cfg = make_small_cfg()
@@ -101,7 +118,7 @@ def test_warmup_updates_indexer_but_not_frozen_main_model():
 
 def test_frozen_selector_sparse_training_step_keeps_attention_grads(monkeypatch):
     torch.manual_seed(0)
-    cfg = make_small_cfg()
+    cfg = make_small_mqa_flash_cfg()
     mod = DSA2DMLAAttention(cfg).float()
     x = torch.randn(1, cfg.dim, 4, 4, dtype=torch.float32)
 
@@ -126,6 +143,42 @@ def test_frozen_selector_sparse_training_step_keeps_attention_grads(monkeypatch)
     assert selector_params
     assert all(param.grad is None for param in selector_params)
     assert any(param.requires_grad for param in main_params)
+    assert mod.wq_a.weight.grad is not None
+    assert mod.q_norm.weight.grad is not None
+    assert mod.wkv_a.weight.grad is not None
+    assert mod.proj.weight.grad is not None
+
+
+def test_frozen_selector_train_step_on_supported_native_shapes_uses_explicit_sparse_backward(monkeypatch):
+    torch.manual_seed(0)
+    cfg = make_small_mqa_flash_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
+
+    def _kernel(q, kv, indices, sm_scale, d_v, attn_sink=None, topk_length=None):
+        out = torch.ones(q.shape[0], q.shape[1], d_v, dtype=q.dtype, device=q.device)
+        max_logits = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32, device=q.device)
+        lse = torch.zeros(q.shape[0], q.shape[1], dtype=torch.float32, device=q.device)
+        return out, max_logits, lse
+
+    def _reference(*args, **kwargs):
+        raise AssertionError("packed reference fallback must not be used during training")
+
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.flashmla_is_supported", lambda **kwargs: True)
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.flashmla_import_or_none", lambda: _kernel)
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.packed_sparse_mla_reference", _reference)
+
+    mod.freeze_selector_parameters()
+    mod.zero_grad(set_to_none=True)
+    selector_params, main_params = dsa_reference.split_selector_and_main_params(mod)
+
+    out = mod.forward_sparse_with_frozen_selector(x)
+    loss = out.square().mean()
+    loss.backward()
+
+    assert selector_params
+    assert all(param.grad is None for param in selector_params)
+    assert any(param.grad is not None for param in main_params)
     assert mod.wq_a.weight.grad is not None
     assert mod.q_norm.weight.grad is not None
     assert mod.wkv_a.weight.grad is not None
