@@ -236,6 +236,41 @@ def test_sparse_training_bench_schema(tmp_path):
     assert fast["forward_backward_ms"] is not None
 
 
+def test_txunet_dsa_vs_flash_trainstep_bench_schema(tmp_path):
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "artifacts"
+        / "dsa_diagnostics"
+        / "bench_txunet_dsa_vs_flash_trainstep.py"
+    )
+    namespace = runpy.run_path(str(script))
+
+    assert callable(namespace["run_benchmark_smoke"])
+
+    result = namespace["run_benchmark_smoke"](output_dir=tmp_path)
+
+    assert "cases" in result
+    assert len(result["cases"]) == 1
+    assert "artifact" in result
+
+    case = result["cases"][0]
+    assert case["name"] == "native_head_txunet_trainstep_smoke"
+    assert case["shape"] == [1, 4, 32, 32]
+    assert case["base_ch"] == 128
+    assert case["depths"] == [1, 1, 1, 1]
+    assert case["heads"] == [64, 64, 64, 64]
+    assert case["topk"] == 128
+
+    dense = case["dense_flash_attention"]
+    dsa = case["dsa_frozen_selector"]
+    assert set(dense) == {"status", "train_step_ms", "peak_memory_mb", "error"}
+    assert set(dsa) == {"status", "train_step_ms", "peak_memory_mb", "error"}
+    assert dense["status"] == "ok"
+    assert dsa["status"] == "ok"
+    assert dense["train_step_ms"] is not None
+    assert dsa["train_step_ms"] is not None
+
+
 def test_frozen_selector_helper_marks_selector_parameters_frozen():
     from src.networks.dsa_2d import DSA2DMLAAttention
 
