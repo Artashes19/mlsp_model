@@ -47,6 +47,99 @@ def validate_packed_mla_runtime(
     return q, kv, d_v
 
 
+def packed_sparse_mla_reference(
+    q_runtime: torch.Tensor,
+    kv_runtime: torch.Tensor,
+    idx: torch.Tensor,
+    *,
+    d_v: int,
+    gqa_group_size: int,
+    softmax_scale: float,
+    query_block_size: int = 128,
+    selected_block_size: int = 64,
+) -> torch.Tensor:
+    d_v = int(d_v)
+    if q_runtime.ndim != 4 or kv_runtime.ndim != 4:
+        raise ValueError(
+            f"Expected packed q/kv as rank-4 tensors, got {q_runtime.ndim}, {kv_runtime.ndim}"
+        )
+    if idx.ndim != 3:
+        raise ValueError(f"Expected idx as [B, Q, K], got shape={tuple(idx.shape)}")
+    if q_runtime.shape[0] != kv_runtime.shape[0] or q_runtime.shape[0] != idx.shape[0]:
+        raise ValueError("Batch dims must match")
+    if q_runtime.shape[-1] != kv_runtime.shape[-1]:
+        raise ValueError("Packed q and kv last dims must match")
+    if q_runtime.shape[2] != idx.shape[1]:
+        raise ValueError("Query-token dim of q must match idx")
+    if q_runtime.shape[1] % gqa_group_size != 0:
+        raise ValueError("q head count must be divisible by gqa_group_size")
+    if d_v <= 0 or d_v > kv_runtime.shape[-1]:
+        raise ValueError(f"Expected 0 < d_v <= {kv_runtime.shape[-1]}, got d_v={d_v}")
+    if idx.numel() and (idx.min() < 0 or idx.max() >= kv_runtime.shape[2]):
+        raise ValueError("Sparse indices are out of range for the token axis")
+    if query_block_size <= 0:
+        raise ValueError(f"Expected query_block_size > 0, got {query_block_size}")
+    if selected_block_size <= 0:
+        raise ValueError(f"Expected selected_block_size > 0, got {selected_block_size}")
+
+    batch, h_q, query_tokens, _ = q_runtime.shape
+    h_kv = kv_runtime.shape[1]
+    if h_q != h_kv * gqa_group_size:
+        raise ValueError("q head count must equal h_kv * gqa_group_size")
+
+    batch_out = []
+    for b in range(batch):
+        kv_group_out = []
+        for kv_head in range(h_kv):
+            head_start = kv_head * gqa_group_size
+            head_stop = head_start + gqa_group_size
+            q_group = q_runtime[b, head_start:head_stop]
+            kv_tokens = kv_runtime[b, kv_head]
+            query_blocks = []
+
+            for q_start in range(0, query_tokens, query_block_size):
+                q_stop = min(q_start + query_block_size, query_tokens)
+                q_block = q_group[:, q_start:q_stop].to(dtype=torch.float32)
+                idx_block = idx[b, q_start:q_stop]
+                block_q = q_block.shape[1]
+                block_max = torch.full(
+                    (gqa_group_size, block_q),
+                    float("-inf"),
+                    dtype=torch.float32,
+                    device=q_runtime.device,
+                )
+                block_lse = torch.zeros((gqa_group_size, block_q), dtype=torch.float32, device=q_runtime.device)
+                block_acc = torch.zeros(
+                    (gqa_group_size, block_q, d_v),
+                    dtype=torch.float32,
+                    device=q_runtime.device,
+                )
+
+                for k_start in range(0, idx_block.shape[1], selected_block_size):
+                    k_stop = min(k_start + selected_block_size, idx_block.shape[1])
+                    idx_slice = idx_block[:, k_start:k_stop]
+                    kv_sel = kv_tokens[idx_slice].to(dtype=torch.float32)
+                    logits = torch.einsum("gqd,qkd->gqk", q_block, kv_sel) * softmax_scale
+                    candidate_max = logits.max(dim=-1).values
+                    new_max = torch.maximum(block_max, candidate_max)
+                    rescale_old = torch.exp(block_max - new_max)
+                    exp_logits = torch.exp(logits - new_max.unsqueeze(-1))
+                    block_acc = block_acc * rescale_old.unsqueeze(-1) + torch.einsum(
+                        "gqk,qkd->gqd",
+                        exp_logits,
+                        kv_sel[..., :d_v],
+                    )
+                    block_lse = block_lse * rescale_old + exp_logits.sum(dim=-1)
+                    block_max = new_max
+
+                query_blocks.append((block_acc / block_lse.clamp_min(1e-12).unsqueeze(-1)).to(dtype=kv_runtime.dtype))
+
+            kv_group_out.append(torch.cat(query_blocks, dim=1))
+        batch_out.append(torch.cat(kv_group_out, dim=0))
+
+    return torch.stack(batch_out, dim=0)
+
+
 def streaming_sparse_mla_reference(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -147,74 +240,13 @@ def streaming_sparse_mla_reference_from_runtime(
     selected_block_size: int = 64,
 ) -> torch.Tensor:
     q, kv, d_v = validate_packed_mla_runtime(runtime)
-    if idx.ndim != 3:
-        raise ValueError(f"Expected idx as [B, Q, K], got shape={tuple(idx.shape)}")
-    if q.shape[0] != kv.shape[0] or q.shape[0] != idx.shape[0]:
-        raise ValueError("Batch dims must match")
-    if q.shape[2] != idx.shape[1]:
-        raise ValueError("Query-token dim of q must match idx")
-    if q.shape[1] % gqa_group_size != 0:
-        raise ValueError("q head count must be divisible by gqa_group_size")
-    if idx.numel() and (idx.min() < 0 or idx.max() >= kv.shape[2]):
-        raise ValueError("Sparse indices are out of range for the token axis")
-    if query_block_size <= 0:
-        raise ValueError(f"Expected query_block_size > 0, got {query_block_size}")
-    if selected_block_size <= 0:
-        raise ValueError(f"Expected selected_block_size > 0, got {selected_block_size}")
-
-    batch, h_q, query_tokens, _ = q.shape
-    h_kv = kv.shape[1]
-    if h_q != h_kv * gqa_group_size:
-        raise ValueError("q head count must equal h_kv * gqa_group_size")
-
-    batch_out = []
-    for b in range(batch):
-        kv_group_out = []
-        for kv_head in range(h_kv):
-            head_start = kv_head * gqa_group_size
-            head_stop = head_start + gqa_group_size
-            q_group = q[b, head_start:head_stop]
-            kv_tokens = kv[b, kv_head]
-            query_blocks = []
-
-            for q_start in range(0, query_tokens, query_block_size):
-                q_stop = min(q_start + query_block_size, query_tokens)
-                q_block = q_group[:, q_start:q_stop].to(dtype=torch.float32)
-                idx_block = idx[b, q_start:q_stop]
-                block_q = q_block.shape[1]
-                block_max = torch.full(
-                    (gqa_group_size, block_q),
-                    float("-inf"),
-                    dtype=torch.float32,
-                    device=q.device,
-                )
-                block_lse = torch.zeros((gqa_group_size, block_q), dtype=torch.float32, device=q.device)
-                block_acc = torch.zeros(
-                    (gqa_group_size, block_q, d_v),
-                    dtype=torch.float32,
-                    device=q.device,
-                )
-
-                for k_start in range(0, idx_block.shape[1], selected_block_size):
-                    k_stop = min(k_start + selected_block_size, idx_block.shape[1])
-                    idx_slice = idx_block[:, k_start:k_stop]
-                    kv_sel = kv_tokens[idx_slice].to(dtype=torch.float32)
-                    logits = torch.einsum("gqd,qkd->gqk", q_block, kv_sel) * softmax_scale
-                    candidate_max = logits.max(dim=-1).values
-                    new_max = torch.maximum(block_max, candidate_max)
-                    rescale_old = torch.exp(block_max - new_max)
-                    exp_logits = torch.exp(logits - new_max.unsqueeze(-1))
-                    block_acc = block_acc * rescale_old.unsqueeze(-1) + torch.einsum(
-                        "gqk,qkd->gqd",
-                        exp_logits,
-                        kv_sel[..., :d_v],
-                    )
-                    block_lse = block_lse * rescale_old + exp_logits.sum(dim=-1)
-                    block_max = new_max
-
-                query_blocks.append((block_acc / block_lse.clamp_min(1e-12).unsqueeze(-1)).to(dtype=kv.dtype))
-
-            kv_group_out.append(torch.cat(query_blocks, dim=1))
-        batch_out.append(torch.cat(kv_group_out, dim=0))
-
-    return torch.stack(batch_out, dim=0)
+    return packed_sparse_mla_reference(
+        q,
+        kv,
+        idx,
+        d_v=d_v,
+        gqa_group_size=gqa_group_size,
+        softmax_scale=softmax_scale,
+        query_block_size=query_block_size,
+        selected_block_size=selected_block_size,
+    )

@@ -7,6 +7,7 @@ import math
 import torch
 
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved
+from src.ops.dsa_sparse_mla import packed_sparse_mla_reference
 from src.networks.dsa_2d import DSA2DMLAAttention, DSA2DMLAConfig
 from tests.helpers.fp8_reference import naive_fwht, naive_weighted_relu_index, reference_fp8_quant
 
@@ -262,6 +263,27 @@ def gather_sparse_mla_reference(
     attn_scores = torch.einsum("bhtd,bhtkd->bhtk", q * softmax_scale, k_selected)
     attn = torch.softmax(attn_scores, dim=-1)
     return torch.einsum("bhtk,bhtkd->bhtd", attn, v_selected)
+
+
+def packed_sparse_mla_reference_from_runtime(
+    runtime: dict[str, torch.Tensor | int | str],
+    idx: torch.Tensor,
+    *,
+    gqa_group_size: int,
+    softmax_scale: float,
+    query_block_size: int = 128,
+    selected_block_size: int = 64,
+) -> torch.Tensor:
+    return packed_sparse_mla_reference(
+        runtime["q"],
+        runtime["kv"],
+        idx,
+        d_v=int(runtime["d_v"]),
+        gqa_group_size=gqa_group_size,
+        softmax_scale=softmax_scale,
+        query_block_size=query_block_size,
+        selected_block_size=selected_block_size,
+    )
 
 
 def slow_per_head_kv_mapping_reference(
