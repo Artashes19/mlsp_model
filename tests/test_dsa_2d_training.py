@@ -99,7 +99,7 @@ def test_warmup_updates_indexer_but_not_frozen_main_model():
     assert grads["main_model"] is False
 
 
-def test_frozen_selector_sparse_training_step_keeps_attention_grads():
+def test_frozen_selector_sparse_training_step_keeps_attention_grads(monkeypatch):
     torch.manual_seed(0)
     cfg = make_small_cfg()
     mod = DSA2DMLAAttention(cfg).float()
@@ -108,10 +108,20 @@ def test_frozen_selector_sparse_training_step_keeps_attention_grads():
     mod.freeze_selector_parameters()
     mod.zero_grad(set_to_none=True)
 
-    out = mod.forward_sparse_with_frozen_selector(x)
+    called = []
+    original = mod.forward_sparse_with_frozen_selector
+
+    def wrapped_forward_sparse_with_frozen_selector(x_):
+        called.append(True)
+        return original(x_)
+
+    monkeypatch.setattr(mod, "forward_sparse_with_frozen_selector", wrapped_forward_sparse_with_frozen_selector)
+
+    out = mod(x)
     loss = out.square().mean()
     loss.backward()
 
+    assert called
     frozen_selector_grads = {
         name: param.grad
         for name, param in mod.named_parameters()

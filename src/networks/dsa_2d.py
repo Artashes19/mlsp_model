@@ -133,6 +133,7 @@ class DSA2DMLAAttention(nn.Module):
         self.index_wk = nn.Linear(self.dim, self.index_head_dim, bias=False)
         self.index_k_norm = nn.RMSNorm(self.index_head_dim, eps=1e-5)
         self.index_weights_proj = nn.Linear(self.dim, self.index_n_heads, bias=False)
+        self._selector_frozen = False
 
         self.q_proj_out_dim = self.n_heads * self.qk_head_dim
         self.kv_a_out_dim = self.kv_lora_rank + self.qk_rope_head_dim
@@ -234,6 +235,19 @@ class DSA2DMLAAttention(nn.Module):
             "kv_layout": "latent_then_rope",
         }
 
+    def selector_modules(self) -> tuple[nn.Module, ...]:
+        return (
+            self.indexer,
+            self.index_wq_b,
+            self.index_wk,
+            self.index_k_norm,
+            self.index_weights_proj,
+        )
+
+    def selector_parameters(self):
+        for module in self.selector_modules():
+            yield from module.parameters()
+
     def _apply_uv_output_projection(self, latent_out: torch.Tensor) -> torch.Tensor:
         if latent_out.ndim != 4:
             raise ValueError(f"Expected latent_out as [B, h_q, T, r], got shape={tuple(latent_out.shape)}")
@@ -313,9 +327,14 @@ class DSA2DMLAAttention(nn.Module):
         return self.forward_sparse_from_indices(x, full_idx)
 
     def freeze_selector_parameters(self) -> None:
-        for name, param in self.named_parameters():
-            if name.startswith("index_"):
-                param.requires_grad_(False)
+        self._selector_frozen = True
+        for param in self.selector_parameters():
+            param.requires_grad_(False)
+
+    def unfreeze_selector_parameters(self) -> None:
+        self._selector_frozen = False
+        for param in self.selector_parameters():
+            param.requires_grad_(True)
 
     def forward_sparse_with_frozen_selector(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -435,5 +454,7 @@ class DSA2DMLAAttention(nn.Module):
         return per_token_kl.sum(dim=-1).mean()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self._selector_frozen:
+            return self.forward_sparse_with_frozen_selector(x)
         _, idx = self.build_indexer_selection(x, detach_inputs=True)
         return self.forward_sparse_from_indices(x, idx)

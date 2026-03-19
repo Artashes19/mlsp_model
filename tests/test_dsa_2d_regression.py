@@ -224,12 +224,47 @@ def test_frozen_selector_helper_marks_selector_parameters_frozen():
 
     mod.freeze_selector_parameters()
 
-    selector_requires_grad = {
-        name: param.requires_grad
-        for name, param in mod.named_parameters()
-        if name.startswith("index_")
-    }
-    assert selector_requires_grad
-    assert all(flag is False for flag in selector_requires_grad.values())
-    assert mod.wq_a.weight.requires_grad is True
-    assert mod.wkv_a.weight.requires_grad is True
+    selector_params = list(mod.selector_parameters())
+    assert selector_params
+
+    selector_param_ids = {id(param) for param in selector_params}
+    for param in mod.parameters():
+        if id(param) in selector_param_ids:
+            assert param.requires_grad is False
+        else:
+            assert param.requires_grad is True
+
+
+def test_frozen_selector_mode_keeps_forward_on_frozen_path(monkeypatch):
+    from src.networks.dsa_2d import DSA2DMLAAttention
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=4,
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 4, 4, dtype=torch.float32)
+
+    mod.freeze_selector_parameters()
+
+    called = []
+    original = mod.forward_sparse_with_frozen_selector
+
+    def wrapped_forward_sparse_with_frozen_selector(x_):
+        called.append(True)
+        return original(x_)
+
+    monkeypatch.setattr(mod, "forward_sparse_with_frozen_selector", wrapped_forward_sparse_with_frozen_selector)
+
+    mod(x)
+
+    assert called
