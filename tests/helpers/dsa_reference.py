@@ -451,15 +451,19 @@ def _make_training_cfg():
     )
 
 
-def _split_indexer_and_main_params(mod):
-    indexer_params = []
+def split_selector_and_main_params(mod):
+    selector_params = list(mod.selector_parameters())
+    selector_param_ids = {id(param) for param in selector_params}
     main_params = []
-    for name, param in mod.named_parameters():
-        if name.startswith("index_"):
-            indexer_params.append(param)
-        else:
+    for _, param in mod.named_parameters():
+        if id(param) not in selector_param_ids:
             main_params.append(param)
-    return indexer_params, main_params
+    return selector_params, main_params
+
+
+def _split_indexer_and_main_params(mod):
+    selector_params, main_params = split_selector_and_main_params(mod)
+    return selector_params, main_params
 
 
 def run_tiny_indexer_warmup_steps(num_steps: int) -> list[float]:

@@ -107,6 +107,7 @@ def test_frozen_selector_sparse_training_step_keeps_attention_grads(monkeypatch)
 
     mod.freeze_selector_parameters()
     mod.zero_grad(set_to_none=True)
+    selector_params, main_params = dsa_reference.split_selector_and_main_params(mod)
 
     called = []
     original = mod.forward_sparse_with_frozen_selector
@@ -122,13 +123,9 @@ def test_frozen_selector_sparse_training_step_keeps_attention_grads(monkeypatch)
     loss.backward()
 
     assert called
-    frozen_selector_grads = {
-        name: param.grad
-        for name, param in mod.named_parameters()
-        if name.startswith("index_")
-    }
-    assert frozen_selector_grads
-    assert all(grad is None for grad in frozen_selector_grads.values())
+    assert selector_params
+    assert all(param.grad is None for param in selector_params)
+    assert any(param.requires_grad for param in main_params)
     assert mod.wq_a.weight.grad is not None
     assert mod.q_norm.weight.grad is not None
     assert mod.wkv_a.weight.grad is not None

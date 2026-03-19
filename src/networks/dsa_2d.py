@@ -442,7 +442,7 @@ class DSA2DMLAAttention(nn.Module):
             raise AssertionError("Warm-up indexer inputs must be detached from the main model graph")
         if self.wq_a.weight.grad is not None or self.q_norm.weight.grad is not None:
             raise AssertionError("Warm-up should not backpropagate through the shared MLA query path")
-        if not any(param.grad is not None for name, param in self.named_parameters() if name.startswith("index_")):
+        if not any(param.grad is not None for param in self.selector_parameters()):
             raise AssertionError("Warm-up step should still produce gradients for indexer parameters")
 
     def indexer_alignment_kl_loss(self, logits: torch.Tensor, teacher_probs: torch.Tensor) -> torch.Tensor:
