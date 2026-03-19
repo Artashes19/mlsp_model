@@ -16,6 +16,7 @@ from src.ops.dsa_indexer import (
 from src.ops.dsa_deepgemm import deepgemm_is_supported, deepgemm_weighted_relu_logits
 from src.ops.dsa_rope import apply_partial_rope_2d_interleaved, apply_partial_rope_2d_non_interleaved
 from src.ops.dsa_flashmla import flashmla_is_supported, flashmla_sparse_mla_forward
+import src.ops.dsa_sparse_mla_autograd as dsa_sparse_mla_autograd
 from src.ops.dsa_sparse_mla import (
     streaming_sparse_mla_reference,
     streaming_sparse_mla_reference_from_runtime,
@@ -339,7 +340,20 @@ class DSA2DMLAAttention(nn.Module):
     def forward_sparse_with_frozen_selector(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             _, idx = self.build_indexer_selection(x, detach_inputs=True)
-        return self.forward_sparse_from_indices(x, idx)
+        runtime = self._dense_mla_runtime(x)
+        out = dsa_sparse_mla_autograd.packed_sparse_mla_autograd_forward(
+            runtime,
+            idx,
+            gqa_group_size=self.gqa_group_size,
+            softmax_scale=self.softmax_scale,
+        )
+        out = self._apply_uv_output_projection(out)
+        batch = x.shape[0]
+        height = int(runtime["height"])
+        width = int(runtime["width"])
+        out = out.permute(0, 2, 1, 3).reshape(batch, height * width, self.attn_out_dim)
+        out = self.proj(out)
+        return out.transpose(1, 2).reshape(batch, self.dim, height, width)
 
     def build_dense_teacher_distribution(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():

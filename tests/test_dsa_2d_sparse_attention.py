@@ -552,6 +552,66 @@ def test_forward_sparse_from_indices_matches_old_small_reference():
     torch.testing.assert_close(out, ref)
 
 
+def test_frozen_selector_sparse_path_uses_custom_autograd_op(monkeypatch):
+    mod = DSA2DMLAAttention(
+        make_small_cfg(index_topk=3, sparse_backend="reference", n_kv_heads=2)
+    ).float()
+    x = torch.randn(1, mod.dim, 2, 2, requires_grad=True)
+    sentinel = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+    seen = {}
+
+    def _autograd(runtime, idx, *, gqa_group_size, softmax_scale):
+        seen["runtime_keys"] = set(runtime.keys())
+        seen["idx_shape"] = tuple(idx.shape)
+        seen["gqa_group_size"] = gqa_group_size
+        seen["softmax_scale"] = softmax_scale
+        return sentinel
+
+    monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.packed_sparse_mla_autograd_forward", _autograd)
+    monkeypatch.setattr("src.networks.dsa_2d.streaming_sparse_mla_reference_from_runtime", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reference path should not be used")))
+
+    mod.freeze_selector_parameters()
+    out = mod.forward_sparse_with_frozen_selector(x)
+
+    assert out.shape == x.shape
+    assert seen["runtime_keys"] >= {"q", "kv", "height", "width", "d_qk", "d_v"}
+    assert seen["idx_shape"] == (1, 4, 3)
+    assert seen["gqa_group_size"] == mod.gqa_group_size
+    assert seen["softmax_scale"] == mod.softmax_scale
+
+
+def test_packed_sparse_mla_autograd_op_backward_matches_reference_small_case():
+    mod = DSA2DMLAAttention(make_small_cfg(index_topk=3, n_kv_heads=2)).float()
+    x = torch.randn(1, mod.dim, 2, 2, requires_grad=True)
+    idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
+    grad_out = torch.randn(1, mod.n_heads, 4, mod.kv_lora_rank)
+
+    runtime = mod._dense_mla_runtime(x)
+    out_ref, dq_ref, dkv_ref = dsa_reference.packed_sparse_mla_autograd_reference_from_runtime(
+        runtime,
+        idx,
+        grad_out,
+        gqa_group_size=mod.gqa_group_size,
+        softmax_scale=mod.softmax_scale,
+        query_block_size=2,
+        selected_block_size=2,
+    )
+
+    from src.ops.dsa_sparse_mla_autograd import packed_sparse_mla_autograd_forward
+
+    out = packed_sparse_mla_autograd_forward(
+        runtime,
+        idx,
+        gqa_group_size=mod.gqa_group_size,
+        softmax_scale=mod.softmax_scale,
+    )
+    dq, dkv = torch.autograd.grad(out, (runtime["q"], runtime["kv"]), grad_out)
+
+    torch.testing.assert_close(out, out_ref)
+    torch.testing.assert_close(dq, dq_ref)
+    torch.testing.assert_close(dkv, dkv_ref)
+
+
 def test_sparse_mla_matches_dense_when_topk_equals_t():
     torch.manual_seed(0)
     cfg = make_small_cfg(index_topk=16)
