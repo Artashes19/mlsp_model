@@ -247,6 +247,33 @@ def _make_small_flashmla_mqa_case():
     return runtime, idx, gqa_group_size
 
 
+def _make_native_flashmla_mqa_case():
+    batch = 1
+    h_kv = 1
+    gqa_group_size = 64
+    h_q = h_kv * gqa_group_size
+    query_tokens = 4
+    source_tokens = 5
+    d_qk = 576
+    d_v = 512
+    q = torch.randn(batch, h_q, query_tokens, d_qk, dtype=torch.float32)
+    kv = torch.randn(batch, h_kv, source_tokens, d_qk, dtype=torch.float32)
+    runtime = {
+        "q": q,
+        "kv": kv,
+        "height": 2,
+        "width": 2,
+        "d_qk": d_qk,
+        "d_v": d_v,
+        "kv_layout": "latent_then_rope",
+    }
+    idx = torch.tensor(
+        [[[0, 3, 1], [4, 1, 0], [2, 2, 1], [3, 0, 4]]],
+        dtype=torch.int64,
+    )
+    return runtime, idx, gqa_group_size
+
+
 def _block_reference_sparse_backward(monkeypatch):
     def _kernel(q, kv, indices, sm_scale, d_v, attn_sink=None, topk_length=None):
         out = torch.ones(q.shape[0], q.shape[1], d_v, dtype=q.dtype, device=q.device)
@@ -262,8 +289,8 @@ def _block_reference_sparse_backward(monkeypatch):
     monkeypatch.setattr("src.ops.dsa_sparse_mla_autograd.packed_sparse_mla_reference", _reference)
 
 
-def _make_small_flashmla_runtime_with_grads():
-    runtime, idx, gqa_group_size = _make_small_flashmla_mqa_case()
+def _make_native_flashmla_runtime_with_grads():
+    runtime, idx, gqa_group_size = _make_native_flashmla_mqa_case()
     runtime["q"] = runtime["q"].detach().clone().requires_grad_(True)
     runtime["kv"] = runtime["kv"].detach().clone().requires_grad_(True)
     grad_out = torch.randn(1, runtime["q"].shape[1], runtime["q"].shape[2], runtime["d_v"], dtype=runtime["q"].dtype)
@@ -664,8 +691,8 @@ def test_frozen_selector_flashmla_backend_uses_flashmla_when_supported(monkeypat
     assert seen["d_v"] == mod.kv_lora_rank
 
 
-def test_packed_sparse_mla_autograd_op_dq_runtime_matches_reference_small_case(monkeypatch):
-    runtime, idx, gqa_group_size, grad_out = _make_small_flashmla_runtime_with_grads()
+def test_packed_sparse_mla_autograd_op_dq_runtime_matches_reference_native_case(monkeypatch):
+    runtime, idx, gqa_group_size, grad_out = _make_native_flashmla_runtime_with_grads()
     _block_reference_sparse_backward(monkeypatch)
 
     _, dq_ref, _ = dsa_reference.packed_sparse_mla_autograd_reference_from_runtime(
@@ -691,8 +718,8 @@ def test_packed_sparse_mla_autograd_op_dq_runtime_matches_reference_small_case(m
     torch.testing.assert_close(dq, dq_ref)
 
 
-def test_packed_sparse_mla_autograd_op_dkv_runtime_matches_reference_small_case(monkeypatch):
-    runtime, idx, gqa_group_size, grad_out = _make_small_flashmla_runtime_with_grads()
+def test_packed_sparse_mla_autograd_op_dkv_runtime_matches_reference_native_case(monkeypatch):
+    runtime, idx, gqa_group_size, grad_out = _make_native_flashmla_runtime_with_grads()
     _block_reference_sparse_backward(monkeypatch)
 
     _, _, dkv_ref = dsa_reference.packed_sparse_mla_autograd_reference_from_runtime(

@@ -11,11 +11,16 @@ def test_dsa_test_scaffold_exists():
     assert hasattr(dsa_reference, "__file__")
 
 
-def make_small_cfg() -> DSA2DMLAConfig:
+def make_small_cfg(
+    index_topk: int = 8,
+    *,
+    sparse_backend: str = "reference",
+    n_kv_heads: int = 2,
+) -> DSA2DMLAConfig:
     return DSA2DMLAConfig(
         dim=32,
         n_heads=4,
-        n_kv_heads=2,
+        n_kv_heads=n_kv_heads,
         q_lora_rank=16,
         kv_lora_rank=12,
         qk_nope_head_dim=8,
@@ -23,7 +28,8 @@ def make_small_cfg() -> DSA2DMLAConfig:
         v_head_dim=8,
         index_n_heads=2,
         index_head_dim=16,
-        index_topk=8,
+        index_topk=index_topk,
+        sparse_backend=sparse_backend,
     )
 
 
@@ -39,6 +45,23 @@ def make_small_mqa_flash_cfg() -> DSA2DMLAConfig:
         v_head_dim=8,
         index_n_heads=2,
         index_head_dim=16,
+        index_topk=8,
+        sparse_backend="flashmla",
+    )
+
+
+def make_native_mqa_flash_cfg() -> DSA2DMLAConfig:
+    return DSA2DMLAConfig(
+        dim=512,
+        n_heads=64,
+        n_kv_heads=1,
+        q_lora_rank=512,
+        kv_lora_rank=512,
+        qk_nope_head_dim=128,
+        qk_rope_head_dim=64,
+        v_head_dim=512,
+        index_n_heads=4,
+        index_head_dim=128,
         index_topk=8,
         sparse_backend="flashmla",
     )
@@ -118,7 +141,7 @@ def test_warmup_updates_indexer_but_not_frozen_main_model():
 
 def test_frozen_selector_sparse_training_step_keeps_attention_grads(monkeypatch):
     torch.manual_seed(0)
-    cfg = make_small_mqa_flash_cfg()
+    cfg = make_small_cfg(n_kv_heads=1, sparse_backend="reference")
     mod = DSA2DMLAAttention(cfg).float()
     x = torch.randn(1, cfg.dim, 4, 4, dtype=torch.float32)
 
@@ -151,7 +174,7 @@ def test_frozen_selector_sparse_training_step_keeps_attention_grads(monkeypatch)
 
 def test_frozen_selector_train_step_on_supported_native_shapes_uses_explicit_sparse_backward(monkeypatch):
     torch.manual_seed(0)
-    cfg = make_small_mqa_flash_cfg()
+    cfg = make_native_mqa_flash_cfg()
     mod = DSA2DMLAAttention(cfg).float()
     x = torch.randn(1, cfg.dim, 2, 2, dtype=torch.float32)
 

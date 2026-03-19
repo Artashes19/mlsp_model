@@ -173,10 +173,17 @@ def _packed_sparse_mla_runtime_backward_mqa(
     gqa_group_size: int,
     softmax_scale: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if q_runtime.shape[1] != gqa_group_size:
-        raise NotImplementedError("Explicit sparse MLA backward currently supports native MQA shapes only")
-    if kv_runtime.shape[1] != 1:
-        raise NotImplementedError("Explicit sparse MLA backward currently supports MQA only")
+    native_absorbed_runtime = (
+        kv_runtime.shape[1] == 1
+        and q_runtime.shape[1] in {64, 128}
+        and q_runtime.shape[-1] in {512, 576}
+        and d_v == 512
+        and q_runtime.shape[1] == gqa_group_size
+    )
+    if not native_absorbed_runtime:
+        raise NotImplementedError(
+            "Explicit sparse MLA backward currently supports only the native absorbed runtime slice"
+        )
     if grad_out.shape[:3] != q_runtime.shape[:3]:
         raise ValueError(
             f"Expected grad_out batch/head/token dims {tuple(q_runtime.shape[:3])}, got {tuple(grad_out.shape[:3])}"
