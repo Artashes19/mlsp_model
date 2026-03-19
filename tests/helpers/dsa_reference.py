@@ -286,6 +286,34 @@ def packed_sparse_mla_reference_from_runtime(
     )
 
 
+def packed_sparse_mla_autograd_reference_from_runtime(
+    runtime: dict[str, torch.Tensor | int | str],
+    idx: torch.Tensor,
+    grad_out: torch.Tensor,
+    *,
+    gqa_group_size: int,
+    softmax_scale: float,
+    query_block_size: int = 128,
+    selected_block_size: int = 64,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    q = runtime["q"].detach().clone().requires_grad_(True)
+    kv = runtime["kv"].detach().clone().requires_grad_(True)
+    out = packed_sparse_mla_reference(
+        q,
+        kv,
+        idx,
+        d_v=int(runtime["d_v"]),
+        gqa_group_size=gqa_group_size,
+        softmax_scale=softmax_scale,
+        query_block_size=query_block_size,
+        selected_block_size=selected_block_size,
+    )
+    if grad_out.shape != out.shape:
+        raise ValueError(f"Expected grad_out shape {tuple(out.shape)}, got {tuple(grad_out.shape)}")
+    dq_runtime, dkv_runtime = torch.autograd.grad(out, (q, kv), grad_out, retain_graph=False, create_graph=False)
+    return out, dq_runtime, dkv_runtime
+
+
 def slow_per_head_kv_mapping_reference(
     q: torch.Tensor,
     k: torch.Tensor,

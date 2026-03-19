@@ -393,14 +393,14 @@ def test_packed_sparse_mla_reference_matches_old_small_reference():
 
 
 def test_packed_runtime_sparse_mla_reference_matches_current_packed_sparse_math():
-    from src.ops.dsa_sparse_mla import packed_sparse_mla_reference, streaming_sparse_mla_reference_from_runtime
+    from src.ops.dsa_sparse_mla import packed_sparse_mla_reference
 
     mod = DSA2DMLAAttention(make_small_cfg(index_topk=3, n_kv_heads=2)).float()
     x = torch.randn(1, mod.dim, 2, 2)
     idx = torch.tensor([[[0, 1, 2]]], dtype=torch.int64).expand(1, 4, 3).clone()
 
     runtime = mod._dense_mla_runtime(x)
-    out = packed_sparse_mla_reference(
+    latent = packed_sparse_mla_reference(
         runtime["q"],
         runtime["kv"],
         idx,
@@ -410,14 +410,14 @@ def test_packed_runtime_sparse_mla_reference_matches_current_packed_sparse_math(
         query_block_size=2,
         selected_block_size=2,
     )
-    ref = streaming_sparse_mla_reference_from_runtime(
-        runtime,
-        idx,
-        gqa_group_size=mod.gqa_group_size,
-        softmax_scale=mod.softmax_scale,
-        query_block_size=2,
-        selected_block_size=2,
-    )
+    out = mod._apply_uv_output_projection(latent)
+    batch = x.shape[0]
+    height = int(runtime["height"])
+    width = int(runtime["width"])
+    out = out.permute(0, 2, 1, 3).reshape(batch, height * width, mod.attn_out_dim)
+    out = mod.proj(out)
+    out = out.transpose(1, 2).reshape(batch, mod.dim, height, width)
+    ref = dsa_reference.sparse_mla_reference_from_indices(mod, x, idx)
 
     torch.testing.assert_close(out, ref)
 
@@ -430,19 +430,21 @@ def test_packed_runtime_sparse_mla_reference_exposes_autograd_for_q_and_kv():
     runtime = mod._dense_mla_runtime(x)
     runtime["q"] = runtime["q"].detach().clone().requires_grad_(True)
     runtime["kv"] = runtime["kv"].detach().clone().requires_grad_(True)
+    grad_out = torch.randn(1, mod.n_heads, 4, runtime["d_v"], dtype=runtime["q"].dtype)
 
-    out = dsa_reference.packed_sparse_mla_reference_from_runtime(
+    out, dq_runtime, dkv_runtime = dsa_reference.packed_sparse_mla_autograd_reference_from_runtime(
         runtime,
         idx,
+        grad_out,
         gqa_group_size=mod.gqa_group_size,
         softmax_scale=mod.softmax_scale,
         query_block_size=2,
         selected_block_size=2,
     )
-    out.sum().backward()
 
-    assert runtime["q"].grad is not None
-    assert runtime["kv"].grad is not None
+    assert out.shape == (1, mod.n_heads, 4, runtime["d_v"])
+    assert dq_runtime is not None
+    assert dkv_runtime is not None
 
 
 def test_streaming_sparse_mla_matches_reference_with_explicit_block_sizes():
