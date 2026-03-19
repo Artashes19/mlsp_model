@@ -97,3 +97,29 @@ def test_warmup_updates_indexer_but_not_frozen_main_model():
 
     assert grads["indexer"] is True
     assert grads["main_model"] is False
+
+
+def test_frozen_selector_sparse_training_step_keeps_attention_grads():
+    torch.manual_seed(0)
+    cfg = make_small_cfg()
+    mod = DSA2DMLAAttention(cfg).float()
+    x = torch.randn(1, cfg.dim, 4, 4, dtype=torch.float32)
+
+    mod.freeze_selector_parameters()
+    mod.zero_grad(set_to_none=True)
+
+    out = mod.forward_sparse_with_frozen_selector(x)
+    loss = out.square().mean()
+    loss.backward()
+
+    frozen_selector_grads = {
+        name: param.grad
+        for name, param in mod.named_parameters()
+        if name.startswith("index_")
+    }
+    assert frozen_selector_grads
+    assert all(grad is None for grad in frozen_selector_grads.values())
+    assert mod.wq_a.weight.grad is not None
+    assert mod.q_norm.weight.grad is not None
+    assert mod.wkv_a.weight.grad is not None
+    assert mod.proj.weight.grad is not None

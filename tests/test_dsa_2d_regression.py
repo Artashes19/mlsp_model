@@ -202,3 +202,34 @@ def test_dsa_benchmark_harness_records_sparse_backend(tmp_path):
 
     case = result["cases"][0]
     assert case["sparse_backend"] == "flashmla"
+
+
+def test_frozen_selector_helper_marks_selector_parameters_frozen():
+    from src.networks.dsa_2d import DSA2DMLAAttention
+
+    cfg = DSA2DMLAConfig(
+        dim=32,
+        n_heads=4,
+        n_kv_heads=2,
+        q_lora_rank=16,
+        kv_lora_rank=12,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=8,
+        index_n_heads=2,
+        index_head_dim=16,
+        index_topk=4,
+    )
+    mod = DSA2DMLAAttention(cfg).float()
+
+    mod.freeze_selector_parameters()
+
+    selector_requires_grad = {
+        name: param.requires_grad
+        for name, param in mod.named_parameters()
+        if name.startswith("index_")
+    }
+    assert selector_requires_grad
+    assert all(flag is False for flag in selector_requires_grad.values())
+    assert mod.wq_a.weight.requires_grad is True
+    assert mod.wkv_a.weight.requires_grad is True

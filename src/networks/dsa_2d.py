@@ -312,6 +312,16 @@ class DSA2DMLAAttention(nn.Module):
         full_idx = full_idx.expand(batch, seq_len, seq_len)
         return self.forward_sparse_from_indices(x, full_idx)
 
+    def freeze_selector_parameters(self) -> None:
+        for name, param in self.named_parameters():
+            if name.startswith("index_"):
+                param.requires_grad_(False)
+
+    def forward_sparse_with_frozen_selector(self, x: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            _, idx = self.build_indexer_selection(x, detach_inputs=True)
+        return self.forward_sparse_from_indices(x, idx)
+
     def build_dense_teacher_distribution(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             q, k, _, _, _ = self._dense_mla_qkv(x)
