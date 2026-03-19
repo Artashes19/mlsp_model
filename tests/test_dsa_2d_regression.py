@@ -204,6 +204,38 @@ def test_dsa_benchmark_harness_records_sparse_backend(tmp_path):
     assert case["sparse_backend"] == "flashmla"
 
 
+def test_sparse_training_bench_schema(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "artifacts" / "dsa_diagnostics" / "bench_dsa_sparse_training_step.py"
+    namespace = runpy.run_path(str(script))
+
+    assert "DSA2DMLAAttention" in namespace
+    assert "DSA2DMLAConfig" in namespace
+    assert callable(namespace["run_benchmark_smoke"])
+
+    result = namespace["run_benchmark_smoke"](output_dir=tmp_path)
+
+    assert "cases" in result
+    assert len(result["cases"]) == 1
+
+    case = result["cases"][0]
+    assert case["name"] == "native_h64_dqk512_training_smoke"
+    assert case["h_q"] == 64
+    assert case["h_kv"] == 1
+    assert case["d_qk"] == 512
+    assert case["d_v"] == 512
+    assert case["query_tokens"] == 4
+    assert case["source_tokens"] == 16
+
+    reference = case["reference_sparse_operator"]
+    fast = case["fast_sparse_operator"]
+    assert set(reference) == {"status", "forward_backward_ms", "error"}
+    assert set(fast) == {"status", "forward_backward_ms", "error"}
+    assert reference["status"] == "ok"
+    assert fast["status"] == "ok"
+    assert reference["forward_backward_ms"] is not None
+    assert fast["forward_backward_ms"] is not None
+
+
 def test_frozen_selector_helper_marks_selector_parameters_frozen():
     from src.networks.dsa_2d import DSA2DMLAAttention
 

@@ -238,6 +238,31 @@ Locked behavior:
    - weighted-ReLU score
    - stable top-k
 
+### 2026-03-19: Sparse training operator benchmark harness
+
+Status:
+
+1. complete
+
+What landed:
+
+1. `artifacts/dsa_diagnostics/bench_dsa_sparse_training_step.py` now imports `src/networks/dsa_2d.py` by file path so the benchmark stays runnable from the artifact harness entrypoint.
+2. The benchmark targets sparse operator forward+backward only, not the full model.
+3. The supported native MQA training slice is locked to:
+   - `h_q in {64, 128}`
+   - `h_kv = 1`
+   - `d_qk in {512, 576}`
+   - `d_v = 512`
+4. The stable case payload now exposes separate `reference_sparse_operator` and `fast_sparse_operator` subrecords with:
+   - `status`
+   - `forward_backward_ms`
+   - `error`
+
+Verification:
+
+1. `/auto/home/artashes/miniconda3/envs/dev/bin/python -m pytest tests/test_dsa_2d_regression.py -k "sparse_training_bench_schema" -v`
+   - result: `1 passed`
+
 ### 2026-03-10: Warm-up isolation and benchmark trustworthiness gate
 
 Status:
